@@ -109,3 +109,10 @@ FROM user_roles ur
 JOIN roles r ON r.id = ur.role_id
 WHERE ur.user_id = ANY(@user_ids::bigint[])
 ORDER BY r.id;
+
+-- name: ListUserOptions :many
+-- 下拉選單用:只回傳啟用中使用者的最少欄位
+SELECT u.id, u.username, u.name, u.department_id
+FROM users u
+WHERE u.company_id = @company_id AND u.is_active
+ORDER BY u.name;

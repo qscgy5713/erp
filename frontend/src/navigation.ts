@@ -9,7 +9,22 @@ export interface NavItem {
 
 export const navigation: NavItem[] = [
   { title: '首頁', path: '/' },
-  { title: '基本資料', path: '/masterdata', disabled: true },
+  {
+    title: '基本資料',
+    children: [
+      { title: '料品', path: '/masterdata/items', perm: ['masterdata.item.read'] },
+      { title: '料品分類', path: '/masterdata/item-categories', perm: ['masterdata.item.read'] },
+      { title: '單位', path: '/masterdata/units', perm: ['masterdata.item.read'] },
+      { title: '倉庫', path: '/masterdata/warehouses', perm: ['masterdata.warehouse.read'] },
+      { title: '客戶', path: '/masterdata/customers', perm: ['masterdata.customer.read'] },
+      { title: '供應商', path: '/masterdata/suppliers', perm: ['masterdata.supplier.read'] },
+      {
+        title: '財務設定',
+        path: '/masterdata/finance',
+        perm: ['masterdata.finance.read', 'masterdata.finance.write'],
+      },
+    ],
+  },
   { title: '採購', path: '/purchase', disabled: true },
   { title: '銷售', path: '/sales', disabled: true },
   { title: '庫存', path: '/inventory', disabled: true },

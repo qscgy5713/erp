@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS suppliers;
+DROP TABLE IF EXISTS customers;
+DROP TABLE IF EXISTS item_units;
+DROP TABLE IF EXISTS items;
+DROP TABLE IF EXISTS warehouses;
+DROP TABLE IF EXISTS item_categories;
+DROP TABLE IF EXISTS units;
+DROP TABLE IF EXISTS payment_terms;
+DROP TABLE IF EXISTS tax_types;
+DROP TABLE IF EXISTS exchange_rates;
+DROP TABLE IF EXISTS currencies;

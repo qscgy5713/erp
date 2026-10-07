@@ -35,6 +35,43 @@ const router = createRouter({
       meta: { title: '首頁' },
     },
     {
+      path: '/masterdata/items',
+      component: () => import('@/views/masterdata/ItemsView.vue'),
+      meta: { title: '料品', perm: ['masterdata.item.read'] },
+    },
+    {
+      path: '/masterdata/item-categories',
+      component: () => import('@/views/masterdata/CategoriesView.vue'),
+      meta: { title: '料品分類', perm: ['masterdata.item.read'] },
+    },
+    {
+      path: '/masterdata/units',
+      component: () => import('@/views/masterdata/UnitsView.vue'),
+      meta: { title: '單位', perm: ['masterdata.item.read'] },
+    },
+    {
+      path: '/masterdata/warehouses',
+      component: () => import('@/views/masterdata/WarehousesView.vue'),
+      meta: { title: '倉庫', perm: ['masterdata.warehouse.read'] },
+    },
+    {
+      path: '/masterdata/customers',
+      component: () => import('@/views/masterdata/PartnersView.vue'),
+      props: { kind: 'customer' },
+      meta: { title: '客戶', perm: ['masterdata.customer.read'] },
+    },
+    {
+      path: '/masterdata/suppliers',
+      component: () => import('@/views/masterdata/PartnersView.vue'),
+      props: { kind: 'supplier' },
+      meta: { title: '供應商', perm: ['masterdata.supplier.read'] },
+    },
+    {
+      path: '/masterdata/finance',
+      component: () => import('@/views/masterdata/FinanceSettingsView.vue'),
+      meta: { title: '財務設定', perm: ['masterdata.finance.read', 'masterdata.finance.write'] },
+    },
+    {
       path: '/system/departments',
       component: () => import('@/views/system/DepartmentsView.vue'),
       meta: { title: '部門', perm: ['system.department.read'] },

@@ -13,6 +13,19 @@ const (
 	AuditRead       = "system.audit.read"
 	DocNumberRead   = "system.docno.read"
 	DocNumberWrite  = "system.docno.write"
+
+	// 基本資料
+	ItemRead       = "masterdata.item.read" // 料品、分類、單位
+	ItemWrite      = "masterdata.item.write"
+	WarehouseRead  = "masterdata.warehouse.read"
+	WarehouseWrite = "masterdata.warehouse.write"
+	CustomerRead   = "masterdata.customer.read"
+	CustomerWrite  = "masterdata.customer.write"
+	CustomerCredit = "masterdata.customer.credit" // 設定信用額度(風險控管,與一般維護分開)
+	SupplierRead   = "masterdata.supplier.read"
+	SupplierWrite  = "masterdata.supplier.write"
+	FinanceRead    = "masterdata.finance.read" // 幣別、匯率、稅別、付款條件
+	FinanceWrite   = "masterdata.finance.write"
 )
 
 type Permission struct {
@@ -33,6 +46,11 @@ var Groups = []Group{
 	{"系統管理", "角色權限", []Permission{{RoleRead, "檢視"}, {RoleWrite, "新增/修改/刪除"}}},
 	{"系統管理", "稽核日誌", []Permission{{AuditRead, "檢視"}}},
 	{"系統管理", "單號規則", []Permission{{DocNumberRead, "檢視"}, {DocNumberWrite, "修改"}}},
+	{"基本資料", "料品(含分類、單位)", []Permission{{ItemRead, "檢視"}, {ItemWrite, "新增/修改"}}},
+	{"基本資料", "倉庫", []Permission{{WarehouseRead, "檢視"}, {WarehouseWrite, "新增/修改"}}},
+	{"基本資料", "客戶", []Permission{{CustomerRead, "檢視"}, {CustomerWrite, "新增/修改"}, {CustomerCredit, "設定信用額度"}}},
+	{"基本資料", "供應商", []Permission{{SupplierRead, "檢視"}, {SupplierWrite, "新增/修改"}}},
+	{"基本資料", "財務設定(幣別、匯率、稅別、付款條件)", []Permission{{FinanceRead, "檢視"}, {FinanceWrite, "新增/修改"}}},
 }
 
 var known = func() map[string]struct{} {

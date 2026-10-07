@@ -34,6 +34,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/departments", auth.Require(permission.DepartmentWrite), m.createDepartment)
 	g.PUT("/departments/:id", auth.Require(permission.DepartmentWrite), m.updateDepartment)
 
+	// 下拉選單(例如客戶的負責業務)只需登入,不需使用者管理權限
+	g.GET("/user-options", m.listUserOptions)
 	g.GET("/users", auth.Require(permission.UserRead), m.listUsers)
 	g.GET("/users/:id", auth.Require(permission.UserRead), m.getUser)
 	g.POST("/users", auth.Require(permission.UserWrite), m.createUser)

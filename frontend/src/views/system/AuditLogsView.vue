@@ -25,6 +25,16 @@ const entityLabels: Record<string, string> = {
   role: '角色',
   department: '部門',
   doc_number_rule: '單號規則',
+  item: '料品',
+  item_category: '料品分類',
+  unit: '單位',
+  warehouse: '倉庫',
+  customer: '客戶',
+  supplier: '供應商',
+  currency: '幣別',
+  exchange_rate: '匯率',
+  tax_type: '稅別',
+  payment_term: '付款條件',
 }
 
 const query = reactive({

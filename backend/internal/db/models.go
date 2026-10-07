@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type AuditLog struct {
@@ -36,6 +37,41 @@ type Company struct {
 	Version   int32
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type Currency struct {
+	Code      string
+	Name      string
+	Symbol    string
+	Decimals  int16
+	IsActive  bool
+	SortOrder int32
+}
+
+type Customer struct {
+	ID            int64
+	CompanyID     int64
+	Code          string
+	Name          string
+	ShortName     string
+	TaxID         *string
+	InvoiceTitle  string
+	Phone         string
+	Email         string
+	Contacts      []byte
+	Addresses     []byte
+	Currency      string
+	TaxTypeID     *int64
+	PaymentTermID *int64
+	CreditLimit   decimal.Decimal
+	SalesUserID   *int64
+	Note          string
+	IsActive      bool
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Department struct {
@@ -73,6 +109,79 @@ type DocNumberRule struct {
 	UpdatedAt  time.Time
 }
 
+type ExchangeRate struct {
+	ID        int64
+	CompanyID int64
+	Currency  string
+	RateDate  time.Time
+	Rate      decimal.Decimal
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type Item struct {
+	ID                 int64
+	CompanyID          int64
+	Code               string
+	Name               string
+	Spec               string
+	CategoryID         *int64
+	ItemType           string
+	BaseUnitID         int64
+	Barcode            *string
+	TaxTypeID          *int64
+	DefaultWarehouseID *int64
+	SafetyStock        decimal.Decimal
+	ListPrice          decimal.Decimal
+	Note               string
+	IsActive           bool
+	CreatedBy          *int64
+	UpdatedBy          *int64
+	Version            int32
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type ItemCategory struct {
+	ID        int64
+	CompanyID int64
+	ParentID  *int64
+	Code      string
+	Name      string
+	SortOrder int32
+	IsActive  bool
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ItemUnit struct {
+	ItemID  int64
+	UnitID  int64
+	Factor  decimal.Decimal
+	Barcode *string
+}
+
+type PaymentTerm struct {
+	ID         int64
+	CompanyID  int64
+	Code       string
+	Name       string
+	IsMonthEnd bool
+	NetDays    int32
+	IsActive   bool
+	CreatedBy  *int64
+	UpdatedBy  *int64
+	Version    int32
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type RefreshToken struct {
 	ID        int64
 	UserID    int64
@@ -105,6 +214,59 @@ type RolePermission struct {
 	Permission string
 }
 
+type Supplier struct {
+	ID            int64
+	CompanyID     int64
+	Code          string
+	Name          string
+	ShortName     string
+	TaxID         *string
+	Phone         string
+	Email         string
+	Contacts      []byte
+	Addresses     []byte
+	Currency      string
+	TaxTypeID     *int64
+	PaymentTermID *int64
+	BankName      string
+	BankAccount   string
+	Note          string
+	IsActive      bool
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type TaxType struct {
+	ID        int64
+	CompanyID int64
+	Code      string
+	Name      string
+	Kind      string
+	Rate      decimal.Decimal
+	IsActive  bool
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type Unit struct {
+	ID        int64
+	CompanyID int64
+	Code      string
+	Name      string
+	IsActive  bool
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type User struct {
 	ID                 int64
 	CompanyID          int64
@@ -131,4 +293,19 @@ type User struct {
 type UserRole struct {
 	UserID int64
 	RoleID int64
+}
+
+type Warehouse struct {
+	ID            int64
+	CompanyID     int64
+	Code          string
+	Name          string
+	Address       string
+	AllowNegative bool
+	IsActive      bool
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

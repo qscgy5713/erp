@@ -457,3 +457,23 @@ func trimOptional(s *string) *string {
 	}
 	return &v
 }
+
+type userOptionDTO struct {
+	ID           int64  `json:"id"`
+	Username     string `json:"username"`
+	Name         string `json:"name"`
+	DepartmentID *int64 `json:"department_id"`
+}
+
+func (m *Module) listUserOptions(c *gin.Context) {
+	rows, err := m.store.ListUserOptions(c.Request.Context(), actor(c).CompanyID)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	out := make([]userOptionDTO, len(rows))
+	for i, r := range rows {
+		out[i] = userOptionDTO{ID: r.ID, Username: r.Username, Name: r.Name, DepartmentID: r.DepartmentID}
+	}
+	response.OK(c, out)
+}

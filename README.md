@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M0 基礎建設完成**(登入、權限、稽核、單號、系統管理)。下一步 M1 基本資料。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M1 基本資料完成**。下一步 M2 庫存核心。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -15,8 +15,15 @@
 - **系統管理頁面**:部門(樹狀)、使用者、角色權限、單號規則、稽核日誌
 - **共用元件**:單據狀態機(草稿→待審→已核准→已過帳→已結案/作廢)、金額捨入與稅額計算
 
+### 已完成(M1 基本資料)
+- **料品**:料號、品名規格、分類(樹狀,篩選含下層)、商品/服務、基本單位與**單位換算**(1 箱 = 12 個)、條碼、稅別、預設倉、安全庫存、建議售價
+- **倉庫**:可依倉庫設定是否允許負庫存
+- **客戶 / 供應商**:統一編號(含檢查碼驗證)、多聯絡人、多地址、幣別、稅別、付款條件;客戶有信用額度(需另外權限)與負責業務,**客戶依負責業務套用資料範圍**
+- **財務設定**:幣別、匯率(依日期,取當天或之前最近一筆)、稅別(應稅/零稅率/免稅)、付款條件(月結/天數,自動算到期日)
+- 預載常用單位、稅別、付款條件、幣別
+
 ### 規劃中(第一期)
-基本資料 → 庫存 → 採購 → 銷售 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+庫存 → 採購 → 銷售 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -113,6 +120,10 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `GET /system/permissions` | 權限點清單(定義在 `backend/internal/system/permission`) |
 | `GET /system/audit-logs` | 稽核日誌 |
 | `/system/doc-number-rules` | 單號規則 |
+| `GET /system/user-options` | 使用者下拉選單(只需登入) |
+| `/masterdata/items`、`/masterdata/customers`、`/masterdata/suppliers` | 料品、客戶、供應商(分頁、篩選) |
+| `/masterdata/units`、`/item-categories`、`/warehouses`、`/tax-types`、`/payment-terms`、`/currencies` | 下拉選單會用到的清單,讀取只需登入;修改需對應權限 |
+| `/masterdata/exchange-rates`、`GET /masterdata/exchange-rates/lookup?currency=USD&date=…` | 匯率維護與查詢某日適用匯率 |
 
 ## 目錄結構
 ```
@@ -131,9 +142,10 @@ erp/
 │   │   ├── app/             # 組裝路由與模組(api 與整合測試共用)
 │   │   ├── auth/            # 登入、token、驗證中介層
 │   │   ├── system/          # 系統管理 API;permission/ 權限點、audit/ 稽核、docno/ 單號
+│   │   ├── masterdata/      # 基本資料 API(料品、客戶、供應商、倉庫、財務設定)
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
-│   │   ├── shared/          # apperr、authctx、docstate、money、page、response
+│   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid
 │   │   └── testutil/dbtest/ # 整合測試用暫存資料庫
 │   ├── queries/             # sqlc 的 SQL
 │   ├── migrations/          # golang-migrate SQL
@@ -145,7 +157,7 @@ erp/
     │   ├── stores/          # Pinia(auth)
     │   ├── router/          # 路由與權限守衛
     │   ├── layouts/
-    │   ├── views/           # 頁面(system/ 系統管理)
+    │   ├── views/           # 頁面(system/ 系統管理、masterdata/ 基本資料)
     │   ├── components/
     │   ├── composables/
     │   ├── utils/

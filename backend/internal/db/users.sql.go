@@ -291,6 +291,46 @@ func (q *Queries) ListUserAccess(ctx context.Context, userID int64) ([]ListUserA
 	return items, nil
 }
 
+const listUserOptions = `-- name: ListUserOptions :many
+SELECT u.id, u.username, u.name, u.department_id
+FROM users u
+WHERE u.company_id = $1 AND u.is_active
+ORDER BY u.name
+`
+
+type ListUserOptionsRow struct {
+	ID           int64
+	Username     string
+	Name         string
+	DepartmentID *int64
+}
+
+// 下拉選單用:只回傳啟用中使用者的最少欄位
+func (q *Queries) ListUserOptions(ctx context.Context, companyID int64) ([]ListUserOptionsRow, error) {
+	rows, err := q.db.Query(ctx, listUserOptions, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserOptionsRow{}
+	for rows.Next() {
+		var i ListUserOptionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Name,
+			&i.DepartmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserRoleIDs = `-- name: ListUserRoleIDs :many
 SELECT role_id FROM user_roles WHERE user_id = $1 ORDER BY role_id
 `
