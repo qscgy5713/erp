@@ -1,0 +1,14 @@
+# 開發用熱重載(docker compose 的 api 服務使用)
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/api ./cmd/api"
+entrypoint = ["./tmp/api"]
+include_ext = ["go"]
+exclude_dir = ["tmp", "migrations"]
+exclude_regex = ["_test\\.go$"]
+delay = 500
+
+[log]
+time = false

@@ -1,0 +1,8 @@
+.env
+.DS_Store
+.idea/
+
+# backend
+backend/tmp/
+*.test
+coverage.out
