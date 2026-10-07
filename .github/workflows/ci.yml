@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erp -d erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # 整合測試以此連線建立各自的暫存資料庫
+      DATABASE_URL: postgres://erp:erp@localhost:5432/erp?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go mod tidy 不應產生變動
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+          working-directory: backend
+      - name: sqlc 產生的程式碼須為最新
+        run: docker run --rm -v "$PWD":/src -w /src sqlc/sqlc:1.30.0 diff
+      - name: 測試(含資料庫整合測試)
+        run: go test -race ./...
+      - name: migration 可完整回滾
+        run: |
+          docker run --rm --network host -v "$PWD/migrations":/migrations migrate/migrate:v4.19.0 \
+            -path=/migrations -database "$DATABASE_URL" up
+          docker run --rm --network host -v "$PWD/migrations":/migrations migrate/migrate:v4.19.0 \
+            -path=/migrations -database "$DATABASE_URL" down -all
+          docker run --rm --network host -v "$PWD/migrations":/migrations migrate/migrate:v4.19.0 \
+            -path=/migrations -database "$DATABASE_URL" up
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: 型別檢查
+        run: npm run type-check
+      - name: lint(只檢查不修改)
+        run: npx oxlint . && npx eslint . && npx prettier --check src/
+      - name: 單元測試
+        run: npx vitest run
+      - name: 建置
+        run: npm run build-only
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: 建置正式環境映像檔
+        run: |
+          docker build --target prod -t erp-api backend
+          docker build --target prod -t erp-web frontend

@@ -48,6 +48,12 @@ services:
       DATABASE_URL: *database-url
       # 可信任的反向代理(IP/CIDR,逗號分隔);空白表示不採用 X-Forwarded-For
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      JWT_SECRET: ${JWT_SECRET}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+      LOGIN_RATE_LIMIT_PER_MINUTE: ${LOGIN_RATE_LIMIT_PER_MINUTE:-60}
+      REFRESH_RATE_LIMIT_PER_MINUTE: ${REFRESH_RATE_LIMIT_PER_MINUTE:-300}
     ports:
       - "127.0.0.1:${API_PORT}:8080"
     volumes:
@@ -74,7 +80,32 @@ services:
       - api
     restart: unless-stopped
 
+  # 工具:由 SQL 產生型別安全的 Go 程式碼(make sqlc),不隨 up 啟動
+  sqlc:
+    image: sqlc/sqlc:1.30.0
+    profiles: ["tools"]
+    working_dir: /src
+    volumes:
+      - ./backend:/src
+    command: ["generate"]
+
+  golangci-lint:
+    image: golangci/golangci-lint:v2.14.0
+    profiles: ["tools"]
+    working_dir: /app
+    environment:
+      # Docker 記憶體小(例如 Docker Desktop 預設 2GB)時,平行編譯會被 OOM 終止;
+      # 降低平行度以時間換記憶體
+      GOFLAGS: -p=1
+      GOMAXPROCS: "2"
+    volumes:
+      - ./backend:/app
+      - gomod:/go/pkg/mod
+      - golangci-cache:/root/.cache
+    command: ["golangci-lint", "run", "--concurrency=1", "./..."]
+
 volumes:
   pgdata:
   gocache:
   gomod:
+  golangci-cache:

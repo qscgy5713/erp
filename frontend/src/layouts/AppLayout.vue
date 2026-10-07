@@ -1,19 +1,32 @@
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { navigation, type NavItem } from '@/navigation'
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
 
-// 選單依 doc/plan.md 的模組規劃;尚未實作的模組先停用
-const menus = [
-  { index: '/', title: '首頁', enabled: true },
-  { index: '/masterdata', title: '基本資料', enabled: false },
-  { index: '/purchase', title: '採購', enabled: false },
-  { index: '/sales', title: '銷售', enabled: false },
-  { index: '/inventory', title: '庫存', enabled: false },
-  { index: '/finance', title: '應收應付', enabled: false },
-  { index: '/accounting', title: '會計', enabled: false },
-  { index: '/system', title: '系統管理', enabled: false },
-]
+// 只顯示有權限的選單;群組內全部沒權限則整組隱藏
+const menus = computed(() =>
+  navigation
+    .map((item): NavItem | null => {
+      if (!item.children) return auth.can(item.perm) ? item : null
+      const children = item.children.filter((c) => auth.can(c.perm))
+      return children.length ? { ...item, children } : null
+    })
+    .filter((m): m is NavItem => m !== null),
+)
+
+async function onCommand(cmd: string) {
+  if (cmd === 'password') {
+    router.push({ name: 'change-password' })
+  } else if (cmd === 'logout') {
+    await auth.logout()
+    router.replace({ name: 'login' })
+  }
+}
 </script>
 
 <template>
@@ -21,14 +34,31 @@ const menus = [
     <el-aside width="200px" class="aside">
       <div class="brand">ERP</div>
       <el-menu :default-active="route.path" router>
-        <el-menu-item v-for="m in menus" :key="m.index" :index="m.index" :disabled="!m.enabled">
-          {{ m.title }}
-        </el-menu-item>
+        <template v-for="m in menus" :key="m.title">
+          <el-sub-menu v-if="m.children" :index="m.title">
+            <template #title>{{ m.title }}</template>
+            <el-menu-item v-for="c in m.children" :key="c.path" :index="c.path!">
+              {{ c.title }}
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="m.path!" :disabled="m.disabled">
+            {{ m.title }}
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-aside>
     <el-container>
       <el-header class="header">
-        <span>{{ route.meta.title }}</span>
+        <span class="title">{{ route.meta.title }}</span>
+        <el-dropdown v-if="auth.user" trigger="click" @command="onCommand">
+          <el-button text> {{ auth.user.name }}({{ auth.user.username }}) </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="password">變更密碼</el-dropdown-item>
+              <el-dropdown-item command="logout" divided>登出</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </el-header>
       <el-main>
         <RouterView />
@@ -44,6 +74,9 @@ const menus = [
 .aside {
   border-right: 1px solid var(--el-border-color);
 }
+.aside :deep(.el-menu) {
+  border-right: none;
+}
 .brand {
   height: 60px;
   line-height: 60px;
@@ -54,6 +87,10 @@ const menus = [
 .header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid var(--el-border-color);
+}
+.title {
+  font-weight: 600;
 }
 </style>

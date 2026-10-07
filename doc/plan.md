@@ -1,7 +1,7 @@
 # ERP 系統規劃
 
 > 最後更新:2026-10-07
-> 狀態:決策已定案(第 2 節),M0 進行中。
+> 狀態:決策已定案(第 2 節),M0 完成,下一步 M1。
 
 ---
 
@@ -45,6 +45,14 @@ D1 由使用者指定;D2–D7 使用者授權由我決定,採原建議。D8–D1
 | D8 | 非同步工作 | **River**(以 PostgreSQL 為佇列),不用 RabbitMQ | 可與業務資料**同一交易**寫入工作(過帳成功才一定會拋傳票),少一個服務 |
 | D9 | 資料存取 | **pgx/v5 + sqlc**(手寫 SQL 產生型別安全的 Go 程式碼),不用 ORM | ERP 報表與過帳 SQL 複雜,需精準控制鎖與交易 |
 | D10 | Redis | 第一期**不用** | 單號用 DB 列鎖、Refresh Token 存 DB 即可;真有快取需求再加 |
+| D11 | 登入憑證 | access token(JWT,15 分)只放前端記憶體;refresh token 放 HttpOnly + SameSite=Strict cookie(7 天),每次刷新輪替;已撤銷的 token 超過 30 秒寬限仍被使用即視為竊用,撤銷整串 | 防 XSS 竊取 token、防 CSRF;30 秒寬限避免多分頁同時刷新被誤判 |
+| D12 | access token 失效 | `users.token_version`(改密碼/停用/重設密碼時 +1)寫進 JWT,每個請求查 DB 比對 | 停用或改密碼立即生效;不用 `iat` 比對是因為 JWT 時間只到秒,會誤殺剛發的新 token |
+| D13 | 權限點定義 | 權限點寫在程式碼(`internal/system/permission`),DB 只存角色擁有的代碼 | 權限點跟著功能程式一起版本控制,不會出現 DB 有、程式沒有的權限 |
+| D14 | 防止提權 | 非超級管理員只能授予/移除自己擁有的權限,不能設定比自己大的資料範圍,不能修改超級管理員 | 只有「使用者管理」權限的人不能把自己升級成管理員 |
+| D15 | 稽核寫入方式 | 在 service 層、同一交易內呼叫 `audit.Record`(不是 HTTP 中介層) | 需要修改前後的完整資料;業務回滾時稽核一併回滾 |
+| D16 | 整合測試資料庫 | 每個測試建立暫存資料庫 `erp_test_<隨機>`、套用 migration、結束即刪 | 稽核日誌不可刪,無法在共用的開發庫清測試資料 |
+| D18 | 限流 | 中介層 `platform/ratelimit`:已登入以使用者 ID 計算(預設 600 次/分);登入、刷新以 IP 計算(IPv6 以 /64),額度分開(預設 60、300 次/分);超過回 429 + `Retry-After`;前端刷新遇 429 不登出;記憶體內 token bucket,key 上限 10 萬 | 以使用者計算可避免同一 NAT 後的多人互相影響;刷新在每次整頁載入都會發生,不可與登入共用額度;單一 api 實例足夠,多實例時再改共享儲存 |
+| D17 | API 型別 | 第一期前端型別先手寫(`src/api/*.ts`),OpenAPI 產生延後 | 目前 API 數量少,導入產生器的成本大於效益;API 穩定後再評估 |
 
 ---
 
@@ -217,11 +225,14 @@ erp/
 │   ├── cmd/
 │   │   ├── api/             # HTTP 服務進入點
 │   │   ├── worker/          # River worker(M6 加入)
-│   │   └── cli/             # 建管理員、跑 migration、重算成本
+│   │   └── cli/             # 建管理員、清 token、(之後)重算成本
 │   ├── internal/
-│   │   ├── platform/        # config、database、httpserver、auth、middleware
-│   │   ├── shared/          # decimal、單號、狀態機、分頁、錯誤碼
-│   │   ├── system/          # 使用者、角色權限、組織、參數、稽核
+│   │   ├── app/             # 組裝路由與模組
+│   │   ├── auth/            # 登入、token、驗證中介層
+│   │   ├── db/              # sqlc 產生
+│   │   ├── platform/        # config、database、httpserver、httpx
+│   │   ├── shared/          # apperr、authctx、docstate、money、page、response
+│   │   ├── system/          # 部門、使用者、角色權限、稽核、單號規則
 │   │   ├── masterdata/      # 料品、客戶、供應商、倉庫、幣別、稅別
 │   │   ├── purchase/
 │   │   ├── sales/

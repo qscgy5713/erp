@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS doc_number_counters;
+DROP TABLE IF EXISTS doc_number_rules;
+DROP TABLE IF EXISTS audit_logs;
+DROP FUNCTION IF EXISTS audit_logs_immutable();
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS role_permissions;
+DROP TABLE IF EXISTS roles;
+ALTER TABLE IF EXISTS departments
+    DROP CONSTRAINT IF EXISTS departments_created_by_fkey,
+    DROP CONSTRAINT IF EXISTS departments_updated_by_fkey;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS departments;

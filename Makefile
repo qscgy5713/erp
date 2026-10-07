@@ -2,7 +2,7 @@
 DC := docker compose
 MIGRATE := $(DC) run --rm migrate
 
-.PHONY: help up down restart logs ps migrate-up migrate-down migrate-new psql test test-api test-web lint reset-db
+.PHONY: help sqlc sqlc-check admin up down restart logs ps migrate-up migrate-down migrate-new psql test test-api test-web lint reset-db
 
 help: ## 列出可用指令
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -36,6 +36,17 @@ migrate-new: ## 新增 migration,例:make migrate-new name=create_users
 	@test -n "$(name)" || (echo "請指定 name=..." && exit 1)
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(name)
 
+sqlc: ## 由 backend/queries/*.sql 產生 Go 程式碼(internal/db)
+	$(DC) run --rm sqlc generate
+
+sqlc-check: ## 檢查產生的程式碼是否為最新
+	$(DC) run --rm sqlc diff
+
+admin: .env ## 建立超級管理員,例:ADMIN_PASSWORD='...' make admin u=admin
+	@test -n "$(u)" || (echo "請指定 u=帳號" && exit 1)
+	@test -n "$$ADMIN_PASSWORD" || (echo "請設定環境變數 ADMIN_PASSWORD" && exit 1)
+	$(DC) run --rm -e ADMIN_PASSWORD api go run ./cmd/cli create-admin -username "$(u)"
+
 psql: ## 進入資料庫
 	$(DC) exec postgres sh -c 'psql -U $$POSTGRES_USER -d $$POSTGRES_DB'
 
@@ -51,6 +62,8 @@ test-web: .env ## 前端測試
 # 只檢查不修改(npm run lint 會 --fix,這裡不用)
 lint: .env ## 程式檢查
 	$(DC) run --rm --no-deps api sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }; go vet ./...'
+	$(DC) run --rm golangci-lint
+	$(DC) run --rm sqlc diff
 	$(DC) run --rm --no-deps web sh -c 'npm run type-check && npx oxlint . && npx eslint . && npx prettier --check src/'
 
 reset-db: ## 清空資料庫並重跑 migration(會刪資料!)

@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"erp/internal/app"
 	"erp/internal/platform/config"
 	"erp/internal/platform/database"
-	"erp/internal/platform/httpserver"
 )
 
 func main() {
@@ -41,11 +41,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	router, err := httpserver.NewRouter(httpserver.Deps{
-		DB:             pool,
-		Production:     cfg.IsProduction(),
-		TrustedProxies: cfg.TrustedProxies,
-	})
+	router, err := app.NewRouter(cfg, pool)
 	if err != nil {
 		return err
 	}

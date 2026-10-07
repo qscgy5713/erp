@@ -13,20 +13,26 @@
 - [x] Dockerfile 的 prod target(api: alpine binary;web: nginx)
 - [x] Makefile、.gitignore、.env.example
 - [x] golang-migrate 與第一支 migration(companies + set_updated_at trigger)
-- [ ] sqlc 設定(第一批查詢出現時加入)
-- [ ] CI:gofmt、go vet、golangci-lint、測試、前端 vue-tsc + build(待設定 git remote)
+- [x] sqlc 設定(`make sqlc`、`make sqlc-check`)
+- [x] CI:gofmt、go mod tidy、go vet、golangci-lint、sqlc diff、測試(-race)、migration 回滾、前端 type-check/lint/test/build、prod image
 - [x] 統一回應格式 `{data, meta, error}`、健康檢查 `/api/v1/health`
-- [ ] 共用套件:decimal 金額、錯誤碼、分頁
-- [ ] 登入、JWT / Refresh Token、登入失敗鎖定
-- [ ] 組織(公司、部門、員工)
-- [ ] RBAC 與資料範圍權限、權限中介層
-- [ ] 稽核日誌中介層
-- [ ] 單號規則產生器(不重號)
-- [ ] 單據狀態機共用元件
+- [x] 共用套件:decimal 金額與稅額、錯誤碼(apperr)、分頁、request id、欄位驗證中文訊息
+- [x] 登入、JWT / Refresh Token 輪替與重放偵測、登入失敗鎖定、IP 速率限制、強制改密碼
+- [x] 組織:部門(樹狀、防循環);員工即使用者(第一期不另建員工表)
+- [x] RBAC 與資料範圍權限、權限中介層、防提權規則
+- [x] 稽核日誌(service 層同交易寫入、DB 禁止修改刪除)
+- [x] 單號規則產生器(併發不重號、回滾不跳號)+ 設定頁
+- [x] 單據狀態機共用元件(`internal/shared/docstate`)
 - [x] 前端:版型、側邊選單、API client、首頁系統狀態
-- [ ] 前端:登入、選單權限、共用單據頁(表頭/單身/狀態列)
+- [x] 前端:登入、自動刷新 token、選單權限、路由守衛、系統管理頁面
+- [ ] 前端:共用單據頁元件(表頭/單身/狀態列)→ 移到 M2 第一張單據時一起做
 - [ ] 前端:Element Plus 改為按需載入(目前整包 >500KB)
 - [x] M0 骨架 code review、補單元與資料庫整合測試、瀏覽器實測
+- [x] M0 系統基礎 code review、整合測試、瀏覽器實測
+- [x] 限流中介層:已登入以使用者、未登入以 IP 計算(可用環境變數調整)
+- [ ] 限流改用共享儲存(api 多實例部署時才需要)
+- [ ] 定期清理過期 refresh token(目前有 CLI,M6 加入 worker 後改排程)
+- [ ] 系統參數(負庫存開關等)→ M2 需要時加入
 
 ## M1 基本資料
 - [ ] 料品、分類、單位與單位換算

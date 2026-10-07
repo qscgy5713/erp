@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"erp/internal/platform/httpx"
 	"erp/internal/shared/response"
 )
 
@@ -22,6 +23,13 @@ type Deps struct {
 	DB             Pinger
 	Production     bool
 	TrustedProxies []string // nil 表示不信任任何 proxy,ClientIP 取連線來源位址
+
+	// Modules 註冊業務路由:public 不需登入,protected 已驗證登入
+	Modules func(public, protected *gin.RouterGroup)
+	// Authenticate 驗證登入的中介層;為 nil 時不掛 protected 路由(單元測試用)
+	Authenticate gin.HandlerFunc
+	// RateLimit 掛在 Authenticate 之後,因此以登入者計算;可為 nil
+	RateLimit gin.HandlerFunc
 }
 
 func NewRouter(d Deps) (*gin.Engine, error) {
@@ -33,13 +41,20 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	if err := r.SetTrustedProxies(d.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("TRUSTED_PROXIES 格式錯誤: %w", err)
 	}
-	r.Use(gin.Recovery(), requestLogger())
+	r.Use(gin.Recovery(), httpx.RequestMeta(), requestLogger())
 	r.NoRoute(func(c *gin.Context) {
 		response.Fail(c, http.StatusNotFound, "SYS-404", "找不到資源")
 	})
 
 	v1 := r.Group("/api/v1")
 	v1.GET("/health", healthHandler(d.DB))
+	if d.Modules != nil && d.Authenticate != nil {
+		protected := v1.Group("", d.Authenticate)
+		if d.RateLimit != nil {
+			protected.Use(d.RateLimit)
+		}
+		d.Modules(v1, protected)
+	}
 
 	return r, nil
 }
@@ -66,6 +81,7 @@ func requestLogger() gin.HandlerFunc {
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),
 			"duration_ms", time.Since(start).Milliseconds(),
+			"request_id", c.GetString(response.RequestIDKey),
 		)
 	}
 }

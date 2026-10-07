@@ -2,8 +2,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,7 +18,21 @@ type Config struct {
 	// TrustedProxies 為可信任的反向代理 IP/CIDR;只有來自這些位址的
 	// X-Forwarded-For 才會被採用,避免使用者偽造來源 IP。
 	TrustedProxies []string
+
+	JWTSecret       []byte
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+
+	// RateLimitPerMinute 已登入 API 每位使用者每分鐘次數
+	RateLimitPerMinute int
+	// LoginRateLimitPerMinute 登入每個 IP 每分鐘次數(單一帳號的暴力破解另由帳號鎖定處理)
+	LoginRateLimitPerMinute int
+	// RefreshRateLimitPerMinute 刷新 token 每個 IP 每分鐘次數
+	RefreshRateLimitPerMinute int
 }
+
+// devSecretMarker 出現在 .env.example 的開發用密鑰中;正式環境禁止使用。
+const devSecretMarker = "dev-only"
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -25,9 +41,38 @@ func Load() (Config, error) {
 		DatabaseURL:     os.Getenv("DATABASE_URL"),
 		ShutdownTimeout: 10 * time.Second,
 		TrustedProxies:  splitList(os.Getenv("TRUSTED_PROXIES")),
+		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
 	}
+
+	var errs []error
 	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL 未設定")
+		errs = append(errs, errors.New("DATABASE_URL 未設定"))
+	}
+	if len(cfg.JWTSecret) < 32 {
+		errs = append(errs, errors.New("JWT_SECRET 至少 32 個字元"))
+	}
+	if cfg.IsProduction() && strings.Contains(string(cfg.JWTSecret), devSecretMarker) {
+		errs = append(errs, errors.New("正式環境不可使用開發用 JWT_SECRET"))
+	}
+
+	var err error
+	if cfg.AccessTokenTTL, err = getDuration("ACCESS_TOKEN_TTL", 15*time.Minute); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.RefreshTokenTTL, err = getDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.RateLimitPerMinute, err = getPositiveInt("RATE_LIMIT_PER_MINUTE", 600); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.LoginRateLimitPerMinute, err = getPositiveInt("LOGIN_RATE_LIMIT_PER_MINUTE", 60); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.RefreshRateLimitPerMinute, err = getPositiveInt("REFRESH_RATE_LIMIT_PER_MINUTE", 300); err != nil {
+		errs = append(errs, err)
+	}
+	if err := errors.Join(errs...); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -39,6 +84,30 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getDuration(key string, def time.Duration) (time.Duration, error) {
+	s := os.Getenv(key)
+	if s == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s 格式錯誤(例:15m、168h)", key)
+	}
+	return d, nil
+}
+
+func getPositiveInt(key string, def int) (int, error) {
+	s := os.Getenv(key)
+	if s == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s 須為正整數", key)
+	}
+	return n, nil
 }
 
 func splitList(s string) []string {
