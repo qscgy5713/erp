@@ -88,7 +88,7 @@
 
 ### 已完成(M7 部署與操作文件)
 - **正式環境部署**:`docker-compose.prod.yml`、`.env.prod.example`、強化的 nginx、`cli` 維運工具;流程見 [doc/deploy.md](doc/deploy.md)
-- **相依套件弱點掃描**:`scripts/osv-scan.sh`(比對 OSV,已評估的列在 `scripts/osv-ignore.txt`)
+- **相依套件弱點掃描**:`make osv` / `scripts/osv-scan.sh`(比對 OSV,已評估的列在 `scripts/osv-ignore.txt`)
 - **備份與還原**:`scripts/backup.sh`、`scripts/restore.sh`(`--verify` 在暫存資料庫還原並核對,不動正式資料)
 - **操作手冊**:[doc/manual.md](doc/manual.md)
 

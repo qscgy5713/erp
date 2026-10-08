@@ -2,7 +2,7 @@
 DC := docker compose
 MIGRATE := $(DC) run --rm migrate
 
-.PHONY: help sqlc sqlc-check admin up down restart logs ps migrate-up migrate-down migrate-new psql test test-api test-web lint reset-db perf-db perf-api perf-run perf-down
+.PHONY: help sqlc sqlc-check admin up down restart logs ps migrate-up migrate-down migrate-new psql test test-api test-web lint osv reset-db perf-db perf-api perf-run perf-down
 
 help: ## 列出可用指令
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +58,10 @@ test-api: .env ## 後端測試(含資料庫整合測試)
 
 test-web: .env ## 前端測試
 	$(DC) run --rm --no-deps web npx vitest run
+
+# 相依套件弱點掃描(需 python3 與網路;已評估的項目見 scripts/osv-ignore.txt)
+osv: ## 相依套件弱點掃描(OSV)
+	scripts/osv-scan.sh
 
 # 只檢查不修改(npm run lint 會 --fix,這裡不用)
 lint: .env ## 程式檢查
