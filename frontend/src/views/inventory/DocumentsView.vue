@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   inventoryApi,
   type DocStatus,
@@ -14,6 +14,7 @@ import { useApiError } from '@/composables/useApiError'
 import { statusLabels } from '@/utils/docstate'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('inventory.stock.write'))
@@ -27,7 +28,7 @@ const typeLabels: Record<StockDocType, string> = {
 
 const query = reactive({
   doc_type: '' as StockDocType | '',
-  status: '' as DocStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as DocStatus | '',
   warehouse_id: null as number | null,
   keyword: '',
   range: null as [string, string] | null,

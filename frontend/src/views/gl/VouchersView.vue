@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 傳票列表:手動傳票與業務單據自動拋轉的傳票
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   glApi,
   sourceLabels,
@@ -13,6 +13,7 @@ import type { PageMeta } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can(['gl.voucher.write']))
@@ -26,7 +27,7 @@ const statusLabels: Record<VoucherStatus, { label: string; type: 'info' | 'succe
   }
 
 const query = reactive({
-  status: '' as VoucherStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as VoucherStatus | '',
   source: '' as '' | 'manual' | 'auto',
   account_id: null as number | null,
   keyword: '',

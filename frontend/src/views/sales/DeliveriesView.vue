@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 出貨單與銷貨退回單列表(依資料範圍);可篩選尚未登錄發票的單據
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { DocStatus } from '@/api/inventory'
 import { salesApi, type DeliveryDocType, type DeliveryRow } from '@/api/sales'
 import type { PageMeta } from '@/api/http'
@@ -11,6 +11,7 @@ import { statusLabels } from '@/utils/docstate'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import PartnerPicker from '@/components/PartnerPicker.vue'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can(['sales.delivery.write']))
@@ -24,7 +25,7 @@ const deliveryStatuses = Object.fromEntries(
 
 const query = reactive({
   doc_type: '' as DeliveryDocType | '',
-  status: '' as DocStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as DocStatus | '',
   customer_id: null as number | null,
   keyword: '',
   no_invoice: false,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { inventoryApi, type Balance } from '@/api/inventory'
 import { masterdataApi, type ItemCategory, type Warehouse } from '@/api/masterdata'
 import type { PageMeta } from '@/api/http'
@@ -8,12 +9,14 @@ import { buildTree } from '@/utils/tree'
 import ItemLedgerDrawer from '@/components/ItemLedgerDrawer.vue'
 
 const { handle } = useApiError()
+const route = useRoute()
 const query = reactive({
   warehouse_id: null as number | null,
   category_id: null as number | null,
   keyword: '',
   nonzero: true,
-  below_safety: false,
+  // 儀表板的「庫存警示」連結帶 ?below_safety=true
+  below_safety: route.query.below_safety === 'true',
   page: 1,
   size: 50,
 })

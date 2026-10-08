@@ -7,6 +7,7 @@ import (
 
 	"erp/internal/auth"
 	"erp/internal/costing"
+	"erp/internal/dashboard"
 	"erp/internal/finance"
 	"erp/internal/gl"
 	"erp/internal/imports"
@@ -41,6 +42,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	glModule := gl.New(store)
 	costingModule := costing.New(store)
 	importsModule := imports.New(store)
+	dashboardModule := dashboard.New(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
 		DB:             pool,
@@ -59,6 +61,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 			glModule.Register(protected)
 			costingModule.Register(protected)
 			importsModule.Register(protected)
+			dashboardModule.Register(protected)
 		},
 	})
 }

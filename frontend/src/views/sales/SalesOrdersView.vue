@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 報價單與訂單列表(依資料範圍只列出自己範圍內的單據)
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { DocStatus } from '@/api/inventory'
 import { salesApi, type SalesOrderRow, type SalesOrderType, type ShipState } from '@/api/sales'
 import type { PageMeta } from '@/api/http'
@@ -11,6 +11,7 @@ import { statusLabels } from '@/utils/docstate'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import PartnerPicker from '@/components/PartnerPicker.vue'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can(['sales.order.write']))
@@ -29,7 +30,7 @@ const orderStatuses = Object.fromEntries(
 
 const query = reactive({
   doc_type: '' as SalesOrderType | '',
-  status: '' as DocStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as DocStatus | '',
   customer_id: null as number | null,
   keyword: '',
   range: null as [string, string] | null,

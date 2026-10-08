@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M6 會計總帳完成;M7 進行中(月結成本、對帳檢查、Excel 匯入已完成)**。下一步:儀表板、壓測、部署文件。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M6 會計總帳完成;M7 進行中(月結成本、對帳檢查、Excel 匯入、儀表板已完成)**。下一步:壓力測試、部署與操作文件。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -78,8 +78,11 @@
 - 期初資料(需指定期初日期):**期初庫存**(數量 + 單位成本)、**期初應收 / 應付帳款**(逐筆未沖帳款,可照常收付款沖帳)、**期初科目餘額**(產生一張已過帳傳票,借貸須相等)
 - 期初資料整批可**撤銷**(已被沖帳、已月結成本、期間已關帳者無法撤銷);匯入後以「對帳檢查」確認庫存、應收、應付與總帳一致
 
+### 已完成(M7 首頁儀表板)
+- **首頁儀表板**:銷售(今日、本月、近 7 天長條)、待處理單據(只列你有核准權限的)、庫存警示、應收 / 應付(未沖、已逾期、7 日內到期)、月結提醒;**每張卡片依權限出現**,銷售與應收只含你資料範圍內的客戶;各項可點擊直達已篩選的列表
+
 ### 規劃中(第一期)
-首頁儀表板、壓力測試、部署與操作文件 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+壓力測試、部署與操作文件 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -201,6 +204,7 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `GET /gl/reports/{trial-balance\|ledger\|journal}` | 試算表、總分類帳、日記帳 |
 | `GET /costing/closings`、`GET …/{YYYY-MM}/items`、`POST …/{YYYY-MM}/{run\|cancel}` | 月結成本與各料品計算明細、月結 / 取消月結 |
 | `GET /costing/reconcile` | 自動對帳檢查 |
+| `GET /dashboard` | 首頁儀表板(依權限回傳卡片) |
 | `GET /imports/types`、`GET /imports/types/{type}/template`、`POST /imports/types/{type}?dry_run=&date=`(multipart `file`)、`GET /imports/batches`、`POST /imports/batches/{id}/undo` | Excel 匯入(類型:items、customers、suppliers、opening_stock、opening_ar、opening_ap、opening_balance) |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
@@ -230,6 +234,7 @@ erp/
 │   │   ├── gl/              # 會計總帳:科目、拋轉(PostSource / ReverseSource)、傳票、期間關帳、報表
 │   │   ├── costing/         # 月結成本(月加權平均)、銷貨成本傳票、對帳檢查
 │   │   ├── imports/         # Excel 匯入:主檔與期初資料(預檢、範本、撤銷)
+│   │   ├── dashboard/       # 首頁儀表板(依權限與資料範圍)
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
 │   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid

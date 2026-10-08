@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { DocStatus } from '@/api/inventory'
 import { purchaseApi, type OrderRow, type ReceiptState } from '@/api/purchase'
 import type { PageMeta } from '@/api/http'
@@ -10,6 +10,7 @@ import { statusLabels } from '@/utils/docstate'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import PartnerPicker from '@/components/PartnerPicker.vue'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('purchase.order.write'))
@@ -27,7 +28,7 @@ const orderStatuses = Object.fromEntries(
 ) as Partial<Record<DocStatus, string>>
 
 const query = reactive({
-  status: '' as DocStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as DocStatus | '',
   supplier_id: null as number | null,
   keyword: '',
   range: null as [string, string] | null,

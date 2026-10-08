@@ -25,7 +25,7 @@ const statuses = Object.fromEntries(
 ) as Partial<Record<DocStatus, string>>
 
 const query = reactive({
-  status: '' as DocStatus | '',
+  status: ((route.query.status as string | undefined) ?? '') as DocStatus | '',
   partner_id: null as number | null,
   keyword: '',
   range: null as [string, string] | null,
