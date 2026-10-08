@@ -101,6 +101,8 @@ const form = reactive({
   tax_type_id: null as number | null,
   payment_term_id: null as number | null,
   invoice_no: '',
+  invoice_date: null as string | null,
+  invoice_kind: '',
   note: '',
   lines: [] as LineRow[],
 })
@@ -139,6 +141,8 @@ function applyDoc(d: TradeDoc) {
     tax_type_id: d.tax_type_id,
     payment_term_id: d.payment_term_id,
     invoice_no: d.invoice_no,
+    invoice_date: d.invoice_date,
+    invoice_kind: d.invoice_kind,
     note: d.note,
     lines: d.lines.map((l) => ({
       ...l,
@@ -493,6 +497,8 @@ function payload(): Record<string, unknown> {
       break
     case 'receipt':
       p.invoice_no = form.invoice_no
+      p.invoice_date = form.invoice_date || null
+      p.invoice_kind = form.invoice_kind
       break
     case 'sales-order':
       p.customer_po_no = form.customer_po_no
@@ -779,11 +785,37 @@ onMounted(async () => {
               />
             </el-form-item>
           </el-col>
-          <el-col v-else-if="flow.kind === 'receipt'" :xs="24" :sm="12" :md="6">
-            <el-form-item label="發票號碼" :error="fieldErrors.invoice_no">
-              <el-input v-model="form.invoice_no" maxlength="20" />
-            </el-form-item>
-          </el-col>
+          <template v-else-if="flow.kind === 'receipt'">
+            <el-col :xs="24" :sm="12" :md="6">
+              <el-form-item label="憑證種類" :error="fieldErrors.invoice_kind">
+                <el-select v-model="form.invoice_kind" style="width: 100%">
+                  <el-option label="無 / 其他" value="" />
+                  <el-option label="三聯式 / 電子計算機發票" value="triplicate" />
+                  <el-option label="二聯式收銀機發票" value="register2" />
+                  <el-option label="三聯式收銀機 / 電子發票" value="register3" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="6">
+              <el-form-item label="發票號碼" :error="fieldErrors.invoice_no">
+                <el-input
+                  v-model="form.invoice_no"
+                  maxlength="20"
+                  :placeholder="form.invoice_kind ? 'AB12345678' : ''"
+                />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="6">
+              <el-form-item label="發票日期" :error="fieldErrors.invoice_date">
+                <el-date-picker
+                  v-model="form.invoice_date"
+                  value-format="YYYY-MM-DD"
+                  :disabled="!form.invoice_kind && !form.invoice_no"
+                  style="width: 100%"
+                />
+              </el-form-item>
+            </el-col>
+          </template>
           <el-col v-else-if="isQuotation" :xs="24" :sm="12" :md="6">
             <el-form-item label="有效期限" :error="fieldErrors.valid_until">
               <el-date-picker

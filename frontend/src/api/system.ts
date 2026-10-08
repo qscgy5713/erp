@@ -146,7 +146,17 @@ export interface DocNumberRule {
   updated_at: string
 }
 
+export interface Company {
+  name: string
+  tax_id: string
+  tax_reg_no: string
+  version: number
+}
+
 export const systemApi = {
+  company: () => http.get<Company>('/system/company'),
+  updateCompany: (input: Omit<Company, 'version'> & { version: number }) =>
+    http.put<Company>('/system/company', input),
   permissions: () => http.get<PermissionGroup[]>('/system/permissions'),
 
   departments: () => http.get<Department[]>('/system/departments'),

@@ -240,11 +240,12 @@ FOR UPDATE;
 
 -- name: CreateGoodsReceipt :one
 INSERT INTO goods_receipts (company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency,
-                            exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount,
+                            exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, invoice_date,
+                            invoice_kind, untaxed_amount,
                             tax_amount, total_amount, base_untaxed, base_tax, base_total, note, created_by,
                             updated_by)
 VALUES (@company_id, @doc_type, @doc_no, @doc_date, @supplier_id, @warehouse_id, @currency, @exchange_rate,
-        @tax_type_id, @tax_rate, sqlc.narg(payment_term_id), @invoice_no, @untaxed_amount, @tax_amount,
+        @tax_type_id, @tax_rate, sqlc.narg(payment_term_id), @invoice_no, sqlc.narg(invoice_date), @invoice_kind, @untaxed_amount, @tax_amount,
         @total_amount, @base_untaxed, @base_tax, @base_total, @note, @created_by, @created_by)
 RETURNING *;
 
@@ -252,7 +253,8 @@ RETURNING *;
 UPDATE goods_receipts
 SET doc_date = @doc_date, supplier_id = @supplier_id, warehouse_id = @warehouse_id, currency = @currency,
     exchange_rate = @exchange_rate, tax_type_id = @tax_type_id, tax_rate = @tax_rate,
-    payment_term_id = sqlc.narg(payment_term_id), invoice_no = @invoice_no, untaxed_amount = @untaxed_amount,
+    payment_term_id = sqlc.narg(payment_term_id), invoice_no = @invoice_no, invoice_date = sqlc.narg(invoice_date),
+    invoice_kind = @invoice_kind, untaxed_amount = @untaxed_amount,
     tax_amount = @tax_amount, total_amount = @total_amount, base_untaxed = @base_untaxed, base_tax = @base_tax,
     base_total = @base_total, note = @note, version = version + 1, updated_by = @updated_by
 WHERE id = @id AND company_id = @company_id AND version = @version AND status = 'draft'

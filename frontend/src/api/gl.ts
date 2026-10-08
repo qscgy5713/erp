@@ -114,6 +114,29 @@ export interface VatReport {
   purchases: VatDetail[]
 }
 
+export interface MediaExcluded {
+  side: 'sales' | 'purchase'
+  doc_no: string
+  reason: string
+  untaxed: Decimal
+  tax: Decimal
+}
+
+export interface MediaPreview {
+  file_name: string
+  count: number
+  totals: {
+    sales_count: number
+    sales_amount: Decimal
+    sales_tax: Decimal
+    purchase_count: number
+    purchase_amount: Decimal
+    purchase_tax: Decimal
+  }
+  excluded: MediaExcluded[]
+  covered: string
+}
+
 export interface YearEnd {
   year: number
   status: 'closed' | 'open' | 'not_ended'
@@ -300,6 +323,10 @@ export const glApi = {
   ) => download(`/gl/reports/${kind}${qs({ ...params, format: 'xlsx' })}`, name),
   vat401: (year: number, period: number) =>
     http.get<VatReport>(`/gl/reports/vat401${qs({ year, period })}`),
+  vat401Media: (year: number, period: number) =>
+    http.get<MediaPreview>(`/gl/reports/vat401/media${qs({ year, period })}`),
+  downloadVat401Media: (year: number, period: number, fileName: string) =>
+    download(`/gl/reports/vat401/media${qs({ year, period, format: 'txt' })}`, fileName),
   exportVat401: (year: number, period: number) =>
     download(
       `/gl/reports/vat401${qs({ year, period, format: 'xlsx' })}`,

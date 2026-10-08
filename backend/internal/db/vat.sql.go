@@ -13,7 +13,8 @@ import (
 )
 
 const vatPurchaseDocs = `-- name: VatPurchaseDocs :many
-SELECT r.id, r.doc_no, r.doc_type, r.doc_date, r.invoice_no, r.base_untaxed, r.base_tax, t.kind AS tax_kind,
+SELECT r.id, r.doc_no, r.doc_type, r.doc_date, COALESCE(r.invoice_date, r.doc_date)::date AS eff_date, r.invoice_no,
+       r.invoice_kind, r.base_untaxed, r.base_tax, t.kind AS tax_kind,
        s.code AS partner_code, s.name AS partner_name, COALESCE(s.tax_id, '')::text AS partner_tax_id,
        COALESCE(SUM(l.base_amount) FILTER (WHERE i.item_type = 'goods'), 0)::numeric AS goods_amount,
        COALESCE(SUM(l.base_amount) FILTER (WHERE i.item_type <> 'goods'), 0)::numeric AS expense_amount
@@ -23,9 +24,9 @@ JOIN tax_types t ON t.id = r.tax_type_id
 LEFT JOIN goods_receipt_lines l ON l.receipt_id = r.id
 LEFT JOIN items i ON i.id = l.item_id
 WHERE r.company_id = $1 AND r.status = 'posted'
-  AND r.doc_date BETWEEN $2::date AND $3::date
+  AND COALESCE(r.invoice_date, r.doc_date) BETWEEN $2::date AND $3::date
 GROUP BY r.id, t.kind, s.id
-ORDER BY r.doc_date, r.doc_no
+ORDER BY eff_date, r.doc_no
 `
 
 type VatPurchaseDocsParams struct {
@@ -39,7 +40,9 @@ type VatPurchaseDocsRow struct {
 	DocNo         string
 	DocType       string
 	DocDate       time.Time
+	EffDate       time.Time
 	InvoiceNo     string
+	InvoiceKind   string
 	BaseUntaxed   decimal.Decimal
 	BaseTax       decimal.Decimal
 	TaxKind       string
@@ -50,7 +53,7 @@ type VatPurchaseDocsRow struct {
 	ExpenseAmount decimal.Decimal
 }
 
-// 期間內已過帳的進貨 / 進貨退出;進貨(商品)與費用(服務)依料品類型拆分
+// 期間內已過帳的進貨 / 進貨退出;日期以發票日期為準(沒填則用單據日期);進貨(商品)與費用(服務)依料品類型拆分
 func (q *Queries) VatPurchaseDocs(ctx context.Context, arg VatPurchaseDocsParams) ([]VatPurchaseDocsRow, error) {
 	rows, err := q.db.Query(ctx, vatPurchaseDocs, arg.CompanyID, arg.FromDate, arg.ToDate)
 	if err != nil {
@@ -65,7 +68,9 @@ func (q *Queries) VatPurchaseDocs(ctx context.Context, arg VatPurchaseDocsParams
 			&i.DocNo,
 			&i.DocType,
 			&i.DocDate,
+			&i.EffDate,
 			&i.InvoiceNo,
+			&i.InvoiceKind,
 			&i.BaseUntaxed,
 			&i.BaseTax,
 			&i.TaxKind,

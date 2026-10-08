@@ -129,6 +129,7 @@ type Company struct {
 	Version   int32
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	TaxRegNo  string
 }
 
 type CostClosing struct {
@@ -325,6 +326,8 @@ type GoodsReceipt struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 }
 
 type GoodsReceiptLine struct {

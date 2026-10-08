@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -89,6 +90,8 @@ type receiptDTO struct {
 	PaymentTermID   *int64           `json:"payment_term_id"`
 	PaymentTermName *string          `json:"payment_term_name"`
 	InvoiceNo       string           `json:"invoice_no"`
+	InvoiceDate     *string          `json:"invoice_date"`
+	InvoiceKind     string           `json:"invoice_kind"`
 	UntaxedAmount   decimal.Decimal  `json:"untaxed_amount"`
 	TaxAmount       decimal.Decimal  `json:"tax_amount"`
 	TotalAmount     decimal.Decimal  `json:"total_amount"`
@@ -137,6 +140,7 @@ func loadReceipt(ctx context.Context, q *db.Queries, companyID, id int64) (recei
 		WarehouseID: r.WarehouseID, WarehouseName: r.WarehouseName, Currency: r.Currency,
 		ExchangeRate: r.ExchangeRate, TaxTypeID: r.TaxTypeID, TaxTypeName: r.TaxTypeName, TaxRate: r.TaxRate,
 		PaymentTermID: r.PaymentTermID, PaymentTermName: r.PaymentTermName, InvoiceNo: r.InvoiceNo,
+		InvoiceDate: trade.DateString(r.InvoiceDate), InvoiceKind: r.InvoiceKind,
 		UntaxedAmount: r.UntaxedAmount, TaxAmount: r.TaxAmount, TotalAmount: r.TotalAmount,
 		BaseUntaxed: r.BaseUntaxed, BaseTax: r.BaseTax, BaseTotal: r.BaseTotal, Status: r.Status, Note: r.Note,
 		CreatedByName: r.CreatedByName, SubmittedByName: r.SubmittedByName, SubmittedAt: r.SubmittedAt,
@@ -361,13 +365,42 @@ func checkRefs(ctx context.Context, q *db.Queries, d refDoc, lines []refLine, lo
 
 type receiptInput struct {
 	headerInput
-	DocType   string      `json:"doc_type" binding:"required,oneof=receipt return"`
-	InvoiceNo string      `json:"invoice_no" binding:"max=20"`
-	Lines     []lineInput `json:"lines" binding:"dive"`
+	DocType   string `json:"doc_type" binding:"required,oneof=receipt return"`
+	InvoiceNo string `json:"invoice_no" binding:"max=20"`
+	// 供應商發票的日期與憑證種類(營業稅媒體申報用)。選了憑證種類,發票號碼必須是「2 碼大寫英文字軌 + 8 碼數字」且須有發票日期
+	InvoiceDate *string     `json:"invoice_date"`
+	InvoiceKind string      `json:"invoice_kind" binding:"omitempty,oneof=triplicate register2 register3"`
+	Lines       []lineInput `json:"lines" binding:"dive"`
+
+	invoiceDate *time.Time // prepareReceipt 解析後的發票日期
+}
+
+var invoiceNoRe = regexp.MustCompile(`^[A-Z]{2}[0-9]{8}$`)
+
+// checkInvoice 發票欄位檢查;沒有選憑證種類時只當作備註文字,不做格式要求。
+func (in *receiptInput) checkInvoice() error {
+	var err error
+	if in.invoiceDate, err = trade.OptionalInputDate("invoice_date", in.InvoiceDate); err != nil {
+		return err
+	}
+	if in.InvoiceKind == "" {
+		return nil
+	}
+	in.InvoiceNo = strings.ToUpper(in.InvoiceNo)
+	if !invoiceNoRe.MatchString(in.InvoiceNo) {
+		return fieldErr("invoice_no", "發票號碼須為 2 碼英文字軌加 8 碼數字,例如 AB12345678")
+	}
+	if in.invoiceDate == nil {
+		return fieldErr("invoice_date", "請輸入發票日期")
+	}
+	return nil
 }
 
 func prepareReceipt(ctx context.Context, q *db.Queries, companyID, excludeID int64, in *receiptInput) (trade.Header, []pricedLine, trade.Totals, error) {
 	in.InvoiceNo = strings.TrimSpace(in.InvoiceNo)
+	if err := in.checkInvoice(); err != nil {
+		return trade.Header{}, nil, trade.Totals{}, err
+	}
 	h, err := checkHeader(ctx, q, companyID, &in.headerInput)
 	if err != nil {
 		return h, nil, trade.Totals{}, err
@@ -439,8 +472,9 @@ func (m *Module) createReceipt(c *gin.Context) {
 		r, err := q.CreateGoodsReceipt(ctx, db.CreateGoodsReceiptParams{
 			CompanyID: a.CompanyID, DocType: in.DocType, DocNo: no, DocDate: h.Date, SupplierID: in.SupplierID,
 			WarehouseID: in.WarehouseID, Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID,
-			TaxRate: h.TaxRate, PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.Untaxed,
-			TaxAmount: t.Tax, TotalAmount: t.Total, BaseUntaxed: t.BaseUntaxed, BaseTax: t.BaseTax,
+			TaxRate: h.TaxRate, PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, InvoiceDate: in.invoiceDate, InvoiceKind: in.InvoiceKind,
+			UntaxedAmount: t.Untaxed,
+			TaxAmount:     t.Tax, TotalAmount: t.Total, BaseUntaxed: t.BaseUntaxed, BaseTax: t.BaseTax,
 			BaseTotal: t.BaseTotal, Note: in.Note, CreatedBy: &a.UserID,
 		})
 		if err != nil {
@@ -506,7 +540,8 @@ func (m *Module) updateReceipt(c *gin.Context) {
 		if _, err := q.UpdateGoodsReceiptHeader(ctx, db.UpdateGoodsReceiptHeaderParams{
 			ID: id, CompanyID: a.CompanyID, DocDate: h.Date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
 			Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID, TaxRate: h.TaxRate,
-			PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.Untaxed, TaxAmount: t.Tax,
+			PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, InvoiceDate: in.invoiceDate, InvoiceKind: in.InvoiceKind,
+			UntaxedAmount: t.Untaxed, TaxAmount: t.Tax,
 			TotalAmount: t.Total, BaseUntaxed: t.BaseUntaxed, BaseTax: t.BaseTax, BaseTotal: t.BaseTotal,
 			Note: in.Note, Version: in.Version, UpdatedBy: &a.UserID,
 		}); err != nil {

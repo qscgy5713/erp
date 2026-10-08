@@ -40,18 +40,11 @@ type vatDTO struct {
 // vat401 GET /gl/reports/vat401?year=2026&period=5&format=xlsx
 // 營業稅申報書(401)資料:依申報期別(雙月)彙總銷項與進項,並列出明細與待處理單據。
 func (m *Module) vat401(c *gin.Context) {
-	year, err1 := strconv.Atoi(c.Query("year"))
-	period, err2 := strconv.Atoi(c.Query("period"))
-	if err1 != nil || year < 2000 || year > 2100 {
-		response.Error(c, fieldErr("year", "請指定年度"))
+	year, period, from, to, err := vatPeriod(c)
+	if err != nil {
+		response.Error(c, err)
 		return
 	}
-	if err2 != nil || period < 1 || period > 6 {
-		response.Error(c, fieldErr("period", "申報期別為 1–6(每期兩個月)"))
-		return
-	}
-	from := time.Date(year, time.Month(period*2-1), 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(year, time.Month(period*2+1), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
 	ctx := c.Request.Context()
 	companyID := actor(c).CompanyID
 
@@ -80,9 +73,9 @@ func (m *Module) vat401(c *gin.Context) {
 	for i, r := range pRows {
 		buys[i] = VatPurchase{DocNo: r.DocNo, DocType: r.DocType, InvoiceNo: r.InvoiceNo, TaxKind: r.TaxKind,
 			PartnerCode: r.PartnerCode, PartnerName: r.PartnerName, PartnerTaxID: r.PartnerTaxID,
-			Date: r.DocDate.Format(time.DateOnly), Untaxed: r.BaseUntaxed, Tax: r.BaseTax, Goods: r.GoodsAmount, Expense: r.ExpenseAmount}
+			Date: r.EffDate.Format(time.DateOnly), Untaxed: r.BaseUntaxed, Tax: r.BaseTax, Goods: r.GoodsAmount, Expense: r.ExpenseAmount}
 		u, t := signed(r.DocType, r.BaseUntaxed), signed(r.DocType, r.BaseTax)
-		dto.BuyRows = append(dto.BuyRows, vatDetail{DocNo: r.DocNo, DocType: r.DocType, Date: r.DocDate.Format(time.DateOnly),
+		dto.BuyRows = append(dto.BuyRows, vatDetail{DocNo: r.DocNo, DocType: r.DocType, Date: r.EffDate.Format(time.DateOnly),
 			InvoiceNo: r.InvoiceNo, TaxKind: r.TaxKind, Partner: r.PartnerName, PartnerID: r.PartnerTaxID, Untaxed: u.String(), Tax: t.String()})
 	}
 	dto.Summary, dto.Issues = BuildVat(sales, buys)
@@ -99,6 +92,21 @@ func (m *Module) vat401(c *gin.Context) {
 	name := fmt.Sprintf("營業稅401_%d年第%d期.xlsx", year, period)
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+urlEscape(name))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", data)
+}
+
+// vatPeriod 解析 year、period(1–6,每期兩個月),回傳該期別的起訖日。
+func vatPeriod(c *gin.Context) (year, period int, from, to time.Time, err error) {
+	year, err1 := strconv.Atoi(c.Query("year"))
+	period, err2 := strconv.Atoi(c.Query("period"))
+	if err1 != nil || year < 2000 || year > 2100 {
+		return 0, 0, from, to, fieldErr("year", "請指定年度")
+	}
+	if err2 != nil || period < 1 || period > 6 {
+		return 0, 0, from, to, fieldErr("period", "申報期別為 1–6(每期兩個月)")
+	}
+	from = time.Date(year, time.Month(period*2-1), 1, 0, 0, 0, 0, time.UTC)
+	to = time.Date(year, time.Month(period*2+1), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	return year, period, from, to, nil
 }
 
 func vatXLSX(d vatDTO) ([]byte, error) {

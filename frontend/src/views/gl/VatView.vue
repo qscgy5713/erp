@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 營業稅申報(401)資料:依申報期別(雙月)彙總銷項與進項,列明細與待處理單據,可匯出 Excel
 import { computed, onMounted, ref } from 'vue'
-import { glApi, type VatReport } from '@/api/gl'
+import { glApi, type MediaPreview, type VatReport } from '@/api/gl'
+import { ApiRequestError } from '@/api/http'
 import { useApiError } from '@/composables/useApiError'
 
 const { handle } = useApiError()
@@ -12,6 +13,9 @@ const period = ref(Math.floor(now.getMonth() / 2) + 1)
 const loading = ref(false)
 const report = ref<VatReport | null>(null)
 const tab = ref<'sales' | 'purchases' | 'issues'>('sales')
+const media = ref<MediaPreview | null>(null)
+const mediaLoading = ref(false)
+const mediaError = ref('')
 
 const money = (v: string | number) =>
   Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 0 })
@@ -61,13 +65,41 @@ async function run() {
   loading.value = true
   try {
     const res = await glApi.vat401(year.value, period.value)
-    if (mine === seq) report.value = res
+    if (mine === seq) {
+      report.value = res
+      media.value = null // 換了期別,先前的申報檔檢查結果作廢
+      mediaError.value = ''
+    }
   } catch (e) {
     if (mine !== seq) return
     report.value = null
     handle(e)
   } finally {
     if (mine === seq) loading.value = false
+  }
+}
+
+async function checkMedia() {
+  mediaLoading.value = true
+  mediaError.value = ''
+  media.value = null
+  try {
+    media.value = await glApi.vat401Media(year.value, period.value)
+  } catch (e) {
+    // 公司資料沒填是可預期的狀況,直接顯示在區塊內並指引去哪裡設定
+    if (e instanceof ApiRequestError && e.code === 'GL-040') mediaError.value = e.message
+    else handle(e)
+  } finally {
+    mediaLoading.value = false
+  }
+}
+
+async function downloadMedia() {
+  if (!media.value) return
+  try {
+    await glApi.downloadVat401Media(year.value, period.value, media.value.file_name)
+  } catch (e) {
+    handle(e)
   }
 }
 
@@ -179,6 +211,56 @@ onMounted(run)
           <template #default="{ row }">{{ money(row.tax) }}</template>
         </el-table-column>
       </el-table>
+
+      <el-card v-if="report" shadow="never" class="media">
+        <div class="media-head">
+          <strong>媒體申報檔(第一版)</strong>
+          <el-button :loading="mediaLoading" @click="checkMedia">檢查申報檔</el-button>
+          <el-button v-if="media && media.count" type="primary" @click="downloadMedia">
+            下載 {{ media.file_name }}
+          </el-button>
+        </div>
+        <el-alert v-if="mediaError" type="warning" :closable="false" show-icon :title="mediaError">
+          <router-link to="/system/company">前往公司資料</router-link>
+        </el-alert>
+        <template v-if="media">
+          <p class="muted">{{ media.covered }}</p>
+          <p>
+            申報檔共 <strong>{{ media.count }}</strong> 筆:銷項
+            {{ media.totals.sales_count }} 筆(銷售額 {{ money(media.totals.sales_amount) }}、稅額
+            {{ money(media.totals.sales_tax) }}),進項 {{ media.totals.purchase_count }} 筆(金額
+            {{ money(media.totals.purchase_amount) }}、稅額
+            {{ money(media.totals.purchase_tax) }})。
+          </p>
+          <el-alert
+            v-if="media.excluded.length"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="`有 ${media.excluded.length} 張單據沒有納入申報檔,與上方 401 彙總的差異來自這些單據`"
+          />
+          <el-table
+            v-if="media.excluded.length"
+            :data="media.excluded"
+            border
+            size="small"
+            class="ex"
+          >
+            <el-table-column label="類別" width="80">
+              <template #default="{ row }">{{ row.side === 'sales' ? '銷項' : '進項' }}</template>
+            </el-table-column>
+            <el-table-column prop="doc_no" label="單號" width="170" />
+            <el-table-column prop="reason" label="未納入原因" min-width="320" />
+            <el-table-column label="金額(未稅)" width="110" align="right">
+              <template #default="{ row }">{{ money(row.untaxed) }}</template>
+            </el-table-column>
+          </el-table>
+          <p class="muted">
+            申報前請先用財政部提供的媒體申報檢核軟體驗證這個檔案;檔案內容的規格說明見
+            doc/vat-media-spec.md。
+          </p>
+        </template>
+      </el-card>
     </div>
   </div>
 </template>
@@ -192,6 +274,21 @@ onMounted(run)
 }
 .tabs {
   margin-top: 16px;
+}
+.media {
+  margin-top: 20px;
+}
+.media-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.muted {
+  color: var(--el-text-color-secondary);
+}
+.ex {
+  margin: 12px 0;
 }
 :deep(.k-head td) {
   background: var(--el-fill-color-light);

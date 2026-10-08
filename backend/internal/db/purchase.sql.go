@@ -240,13 +240,14 @@ func (q *Queries) CountPurchaseOrders(ctx context.Context, arg CountPurchaseOrde
 
 const createGoodsReceipt = `-- name: CreateGoodsReceipt :one
 INSERT INTO goods_receipts (company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency,
-                            exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount,
+                            exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, invoice_date,
+                            invoice_kind, untaxed_amount,
                             tax_amount, total_amount, base_untaxed, base_tax, base_total, note, created_by,
                             updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13, $14,
-        $15, $16, $17, $18, $19, $20, $20)
-RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+        $9, $10, $11, $12, $13, $14, $15, $16,
+        $17, $18, $19, $20, $21, $22, $22)
+RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, invoice_date, invoice_kind
 `
 
 type CreateGoodsReceiptParams struct {
@@ -262,6 +263,8 @@ type CreateGoodsReceiptParams struct {
 	TaxRate       decimal.Decimal
 	PaymentTermID *int64
 	InvoiceNo     string
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 	UntaxedAmount decimal.Decimal
 	TaxAmount     decimal.Decimal
 	TotalAmount   decimal.Decimal
@@ -286,6 +289,8 @@ func (q *Queries) CreateGoodsReceipt(ctx context.Context, arg CreateGoodsReceipt
 		arg.TaxRate,
 		arg.PaymentTermID,
 		arg.InvoiceNo,
+		arg.InvoiceDate,
+		arg.InvoiceKind,
 		arg.UntaxedAmount,
 		arg.TaxAmount,
 		arg.TotalAmount,
@@ -329,6 +334,8 @@ func (q *Queries) CreateGoodsReceipt(ctx context.Context, arg CreateGoodsReceipt
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }
@@ -443,7 +450,7 @@ func (q *Queries) DeletePurchaseOrderLines(ctx context.Context, orderID int64) e
 }
 
 const getGoodsReceipt = `-- name: GetGoodsReceipt :one
-SELECT r.id, r.company_id, r.doc_type, r.doc_no, r.doc_date, r.supplier_id, r.warehouse_id, r.currency, r.exchange_rate, r.tax_type_id, r.tax_rate, r.payment_term_id, r.invoice_no, r.untaxed_amount, r.tax_amount, r.total_amount, r.base_untaxed, r.base_tax, r.base_total, r.status, r.note, r.submitted_by, r.submitted_at, r.approved_by, r.approved_at, r.posted_by, r.posted_at, r.created_by, r.updated_by, r.version, r.created_at, r.updated_at, s.code AS supplier_code, s.name AS supplier_name, w.name AS warehouse_name,
+SELECT r.id, r.company_id, r.doc_type, r.doc_no, r.doc_date, r.supplier_id, r.warehouse_id, r.currency, r.exchange_rate, r.tax_type_id, r.tax_rate, r.payment_term_id, r.invoice_no, r.untaxed_amount, r.tax_amount, r.total_amount, r.base_untaxed, r.base_tax, r.base_total, r.status, r.note, r.submitted_by, r.submitted_at, r.approved_by, r.approved_at, r.posted_by, r.posted_at, r.created_by, r.updated_by, r.version, r.created_at, r.updated_at, r.invoice_date, r.invoice_kind, s.code AS supplier_code, s.name AS supplier_name, w.name AS warehouse_name,
        t.name AS tax_type_name, pt.name AS payment_term_name,
        cu.name AS created_by_name, su.name AS submitted_by_name, au.name AS approved_by_name,
        pu.name AS posted_by_name
@@ -497,6 +504,8 @@ type GetGoodsReceiptRow struct {
 	Version         int32
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	InvoiceDate     *time.Time
+	InvoiceKind     string
 	SupplierCode    string
 	SupplierName    string
 	WarehouseName   string
@@ -544,6 +553,8 @@ func (q *Queries) GetGoodsReceipt(ctx context.Context, arg GetGoodsReceiptParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 		&i.SupplierCode,
 		&i.SupplierName,
 		&i.WarehouseName,
@@ -1169,7 +1180,7 @@ func (q *Queries) ListPurchaseOrders(ctx context.Context, arg ListPurchaseOrders
 }
 
 const lockGoodsReceipt = `-- name: LockGoodsReceipt :one
-SELECT id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at FROM goods_receipts WHERE id = $1 AND company_id = $2 FOR UPDATE
+SELECT id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, invoice_date, invoice_kind FROM goods_receipts WHERE id = $1 AND company_id = $2 FOR UPDATE
 `
 
 type LockGoodsReceiptParams struct {
@@ -1213,6 +1224,8 @@ func (q *Queries) LockGoodsReceipt(ctx context.Context, arg LockGoodsReceiptPara
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }
@@ -1759,7 +1772,7 @@ SET status       = $1,
     version      = version + 1,
     updated_by   = $3::bigint
 WHERE id = $4 AND company_id = $5 AND version = $6
-RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, invoice_date, invoice_kind
 `
 
 type SetGoodsReceiptStatusParams struct {
@@ -1814,6 +1827,8 @@ func (q *Queries) SetGoodsReceiptStatus(ctx context.Context, arg SetGoodsReceipt
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }
@@ -1977,11 +1992,12 @@ const updateGoodsReceiptHeader = `-- name: UpdateGoodsReceiptHeader :one
 UPDATE goods_receipts
 SET doc_date = $1, supplier_id = $2, warehouse_id = $3, currency = $4,
     exchange_rate = $5, tax_type_id = $6, tax_rate = $7,
-    payment_term_id = $8, invoice_no = $9, untaxed_amount = $10,
-    tax_amount = $11, total_amount = $12, base_untaxed = $13, base_tax = $14,
-    base_total = $15, note = $16, version = version + 1, updated_by = $17
-WHERE id = $18 AND company_id = $19 AND version = $20 AND status = 'draft'
-RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+    payment_term_id = $8, invoice_no = $9, invoice_date = $10,
+    invoice_kind = $11, untaxed_amount = $12,
+    tax_amount = $13, total_amount = $14, base_untaxed = $15, base_tax = $16,
+    base_total = $17, note = $18, version = version + 1, updated_by = $19
+WHERE id = $20 AND company_id = $21 AND version = $22 AND status = 'draft'
+RETURNING id, company_id, doc_type, doc_no, doc_date, supplier_id, warehouse_id, currency, exchange_rate, tax_type_id, tax_rate, payment_term_id, invoice_no, untaxed_amount, tax_amount, total_amount, base_untaxed, base_tax, base_total, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, invoice_date, invoice_kind
 `
 
 type UpdateGoodsReceiptHeaderParams struct {
@@ -1994,6 +2010,8 @@ type UpdateGoodsReceiptHeaderParams struct {
 	TaxRate       decimal.Decimal
 	PaymentTermID *int64
 	InvoiceNo     string
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 	UntaxedAmount decimal.Decimal
 	TaxAmount     decimal.Decimal
 	TotalAmount   decimal.Decimal
@@ -2018,6 +2036,8 @@ func (q *Queries) UpdateGoodsReceiptHeader(ctx context.Context, arg UpdateGoodsR
 		arg.TaxRate,
 		arg.PaymentTermID,
 		arg.InvoiceNo,
+		arg.InvoiceDate,
+		arg.InvoiceKind,
 		arg.UntaxedAmount,
 		arg.TaxAmount,
 		arg.TotalAmount,
@@ -2064,6 +2084,8 @@ func (q *Queries) UpdateGoodsReceiptHeader(ctx context.Context, arg UpdateGoodsR
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }

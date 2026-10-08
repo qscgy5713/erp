@@ -78,6 +78,8 @@ export interface ReceiptLine extends PurchaseLine {
 export interface GoodsReceipt extends PurchaseHeader {
   doc_type: ReceiptDocType
   invoice_no: string
+  invoice_date: string | null
+  invoice_kind: string
   base_untaxed: Decimal
   base_tax: Decimal
   base_total: Decimal

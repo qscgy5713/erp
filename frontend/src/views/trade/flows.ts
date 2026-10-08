@@ -59,6 +59,8 @@ export interface TradeDoc {
   quotation_no: string | null
   invoice_no: string
   invoice_date: string | null
+  /** 進貨單的供應商發票憑證種類(營業稅媒體申報用),空字串 = 沒有 */
+  invoice_kind: string
   created_by_name: string | null
   submitted_by_name: string | null
   submitted_at: string | null
@@ -147,6 +149,7 @@ const base = (d: PurchaseOrder | GoodsReceipt | SalesOrder | Delivery) => ({
   quotation_no: null,
   invoice_no: '',
   invoice_date: null,
+  invoice_kind: '',
   closed_by_name: null,
   closed_at: null,
   posted_by_name: null,
@@ -203,6 +206,8 @@ function fromReceipt(d: GoodsReceipt): TradeDoc {
     partner_label: `${d.supplier_code} ${d.supplier_name}`,
     base_total: d.base_total,
     invoice_no: d.invoice_no,
+    invoice_date: d.invoice_date,
+    invoice_kind: d.invoice_kind,
     posted_by_name: d.posted_by_name,
     posted_at: d.posted_at,
     lines: d.lines.map((l) => ({

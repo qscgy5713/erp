@@ -49,6 +49,9 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/roles/:id", auth.Require(permission.RoleWrite), m.updateRole)
 	g.DELETE("/roles/:id", auth.Require(permission.RoleWrite), m.deleteRole)
 
+	g.GET("/company", auth.Require(permission.CompanyRead, permission.CompanyWrite), m.getCompany)
+	g.PUT("/company", auth.Require(permission.CompanyWrite), m.updateCompany)
+
 	g.GET("/audit-logs", auth.Require(permission.AuditRead), m.listAuditLogs)
 
 	g.GET("/doc-number-rules", auth.Require(permission.DocNumberRead, permission.DocNumberWrite), m.listDocNumberRules)

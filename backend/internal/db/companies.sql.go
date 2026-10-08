@@ -10,7 +10,7 @@ import (
 )
 
 const getCompany = `-- name: GetCompany :one
-SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at FROM companies WHERE id = $1
+SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no FROM companies WHERE id = $1
 `
 
 func (q *Queries) GetCompany(ctx context.Context, id int64) (Company, error) {
@@ -26,12 +26,13 @@ func (q *Queries) GetCompany(ctx context.Context, id int64) (Company, error) {
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TaxRegNo,
 	)
 	return i, err
 }
 
 const getCompanyByCode = `-- name: GetCompanyByCode :one
-SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at FROM companies WHERE code = $1
+SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no FROM companies WHERE code = $1
 `
 
 func (q *Queries) GetCompanyByCode(ctx context.Context, code string) (Company, error) {
@@ -47,6 +48,44 @@ func (q *Queries) GetCompanyByCode(ctx context.Context, code string) (Company, e
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TaxRegNo,
+	)
+	return i, err
+}
+
+const updateCompany = `-- name: UpdateCompany :one
+UPDATE companies SET name = $1, tax_id = $2, tax_reg_no = $3, version = version + 1
+WHERE id = $4 AND version = $5 RETURNING id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no
+`
+
+type UpdateCompanyParams struct {
+	Name     string
+	TaxID    *string
+	TaxRegNo string
+	ID       int64
+	Version  int32
+}
+
+func (q *Queries) UpdateCompany(ctx context.Context, arg UpdateCompanyParams) (Company, error) {
+	row := q.db.QueryRow(ctx, updateCompany,
+		arg.Name,
+		arg.TaxID,
+		arg.TaxRegNo,
+		arg.ID,
+		arg.Version,
+	)
+	var i Company
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.TaxID,
+		&i.Currency,
+		&i.IsActive,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TaxRegNo,
 	)
 	return i, err
 }
