@@ -136,7 +136,7 @@ scripts/restore.sh backups/erp_20261008_020000.dump --yes      # 輸入 RESTORE 
 
 還原後 migration 會自動補上較新的版本。從備份時間點之後輸入的資料會遺失,需補登。
 
-**相依套件弱點掃描**:`scripts/osv-scan.sh` 比對後端 `go.mod` 與前端 `package-lock.json` 的正式相依是否有已知弱點(OSV),有未評估的弱點時結束碼為 1;已評估確認不受影響的列在 `scripts/osv-ignore.txt`(附理由)。建議每週排程執行一次。
+**相依套件弱點掃描**:`scripts/osv-scan.sh` 比對後端 `go.mod` 與前端 `package-lock.json` 的正式相依是否有已知弱點(OSV),有未評估的弱點時結束碼為 1;已評估確認不受影響的列在 `scripts/osv-ignore.txt`(附理由)。已有 GitHub Actions 每週一自動執行(`.github/workflows/osv-scan.yml`,也可手動觸發);自行部署的環境也可用 cron 執行。
 
 ## 7. 升級
 

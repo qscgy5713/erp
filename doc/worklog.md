@@ -3,6 +3,7 @@
 ## 2026-10-08 相依套件弱點掃描腳本
 - 查 excelize:最新正式版仍是 v2.11.0,pseudo-version 暫時保留。
 - 新增 `scripts/osv-scan.sh`(後端 go.mod + 前端 package-lock 的正式相依,送 OSV 批次比對)與 `scripts/osv-ignore.txt`(已評估項目與理由,目前只有 x/crypto openpgp)。實測 198 個套件,無未評估弱點。
+- 新增 `.github/workflows/osv-scan.yml`:每週一自動執行,也可手動觸發。
 
 ## 2026-10-08 BOM 版本
 - 設計見 plan D72。migration 000022 `boms.effective_from`、唯一鍵改為(公司, 成品, 生效日);新增查詢 `GetBomForDate`、`CountBomsOfItem`;展開 API 多 `date` 參數,工單開單以工單日期展開;循環檢查改以 BOM 為單位替換。

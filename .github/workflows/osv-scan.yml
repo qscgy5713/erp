@@ -1,0 +1,17 @@
+name: 相依套件弱點掃描
+
+on:
+  schedule:
+    - cron: "0 1 * * 1" # 每週一 09:00(台灣時間)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  osv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: 比對 OSV 已知弱點(已評估的項目見 scripts/osv-ignore.txt)
+        run: scripts/osv-scan.sh
