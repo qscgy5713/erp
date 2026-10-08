@@ -35,8 +35,11 @@ SELECT t.item_id,
        COALESCE(SUM(t.qty * COALESCE(t.unit_cost, 0)) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return', 'opening_stock')), 0)::numeric AS purchase_value,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('delivery', 'sales_return')), 0)::numeric AS sales_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('stock_adjustment', 'stock_count')), 0)::numeric AS adjust_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type = 'work_order_issue'), 0)::numeric AS consume_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type = 'work_order_receipt'), 0)::numeric AS produce_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type NOT IN ('goods_receipt', 'purchase_return', 'delivery',
-                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock')), 0)::numeric AS other_qty
+                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock',
+                                   'work_order_issue', 'work_order_receipt')), 0)::numeric AS other_qty
 FROM inventory_transactions t
 WHERE t.company_id = $1 AND t.doc_date BETWEEN $2::date AND $3::date
 GROUP BY t.item_id
@@ -55,6 +58,8 @@ type CostPeriodAggregatesRow struct {
 	PurchaseValue decimal.Decimal
 	SalesQty      decimal.Decimal
 	AdjustQty     decimal.Decimal
+	ConsumeQty    decimal.Decimal
+	ProduceQty    decimal.Decimal
 	OtherQty      decimal.Decimal
 }
 
@@ -74,6 +79,8 @@ func (q *Queries) CostPeriodAggregates(ctx context.Context, arg CostPeriodAggreg
 			&i.PurchaseValue,
 			&i.SalesQty,
 			&i.AdjustQty,
+			&i.ConsumeQty,
+			&i.ProduceQty,
 			&i.OtherQty,
 		); err != nil {
 			return nil, err
@@ -205,9 +212,11 @@ func (q *Queries) InsertCostClosing(ctx context.Context, arg InsertCostClosingPa
 
 const insertItemCost = `-- name: InsertItemCost :exec
 INSERT INTO item_costs (closing_id, item_id, opening_qty, opening_value, purchase_qty, purchase_value, sales_qty,
-                        adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value)
+                        adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value,
+                        consume_qty, consume_value)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13)
+        $8, $9, $10, $11, $12, $13,
+        $14, $15)
 `
 
 type InsertItemCostParams struct {
@@ -224,6 +233,8 @@ type InsertItemCostParams struct {
 	AdjustAmount  decimal.Decimal
 	ClosingQty    decimal.Decimal
 	ClosingValue  decimal.Decimal
+	ConsumeQty    decimal.Decimal
+	ConsumeValue  decimal.Decimal
 }
 
 func (q *Queries) InsertItemCost(ctx context.Context, arg InsertItemCostParams) error {
@@ -241,6 +252,8 @@ func (q *Queries) InsertItemCost(ctx context.Context, arg InsertItemCostParams) 
 		arg.AdjustAmount,
 		arg.ClosingQty,
 		arg.ClosingValue,
+		arg.ConsumeQty,
+		arg.ConsumeValue,
 	)
 	return err
 }
@@ -363,7 +376,7 @@ func (q *Queries) ListCostClosings(ctx context.Context, companyID int64) ([]List
 }
 
 const listItemCostsForClosing = `-- name: ListItemCostsForClosing :many
-SELECT ic.closing_id, ic.item_id, ic.opening_qty, ic.opening_value, ic.purchase_qty, ic.purchase_value, ic.sales_qty, ic.adjust_qty, ic.avg_cost, ic.cogs_amount, ic.adjust_amount, ic.closing_qty, ic.closing_value, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+SELECT ic.closing_id, ic.item_id, ic.opening_qty, ic.opening_value, ic.purchase_qty, ic.purchase_value, ic.sales_qty, ic.adjust_qty, ic.avg_cost, ic.cogs_amount, ic.adjust_amount, ic.closing_qty, ic.closing_value, ic.consume_qty, ic.consume_value, i.code AS item_code, i.name AS item_name, u.name AS unit_name
 FROM item_costs ic JOIN items i ON i.id = ic.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE ic.closing_id = $1
   AND ($2::text IS NULL OR i.code ILIKE '%' || $2 || '%' OR i.name ILIKE '%' || $2 || '%')
@@ -392,6 +405,8 @@ type ListItemCostsForClosingRow struct {
 	AdjustAmount  decimal.Decimal
 	ClosingQty    decimal.Decimal
 	ClosingValue  decimal.Decimal
+	ConsumeQty    decimal.Decimal
+	ConsumeValue  decimal.Decimal
 	ItemCode      string
 	ItemName      string
 	UnitName      string
@@ -425,6 +440,8 @@ func (q *Queries) ListItemCostsForClosing(ctx context.Context, arg ListItemCosts
 			&i.AdjustAmount,
 			&i.ClosingQty,
 			&i.ClosingValue,
+			&i.ConsumeQty,
+			&i.ConsumeValue,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,
@@ -440,7 +457,7 @@ func (q *Queries) ListItemCostsForClosing(ctx context.Context, arg ListItemCosts
 }
 
 const listItemCostsRaw = `-- name: ListItemCostsRaw :many
-SELECT closing_id, item_id, opening_qty, opening_value, purchase_qty, purchase_value, sales_qty, adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value FROM item_costs WHERE closing_id = $1
+SELECT closing_id, item_id, opening_qty, opening_value, purchase_qty, purchase_value, sales_qty, adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value, consume_qty, consume_value FROM item_costs WHERE closing_id = $1
 `
 
 func (q *Queries) ListItemCostsRaw(ctx context.Context, closingID int64) ([]ItemCost, error) {
@@ -466,6 +483,8 @@ func (q *Queries) ListItemCostsRaw(ctx context.Context, closingID int64) ([]Item
 			&i.AdjustAmount,
 			&i.ClosingQty,
 			&i.ClosingValue,
+			&i.ConsumeQty,
+			&i.ConsumeValue,
 		); err != nil {
 			return nil, err
 		}
@@ -590,7 +609,7 @@ const writebackUnitCost = `-- name: WritebackUnitCost :exec
 UPDATE inventory_transactions SET unit_cost = $1
 WHERE company_id = $2 AND item_id = $3
   AND doc_date BETWEEN $4::date AND $5::date
-  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock')
+  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock', 'work_order_receipt')
 `
 
 type WritebackUnitCostParams struct {

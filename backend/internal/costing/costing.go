@@ -52,16 +52,20 @@ type activity struct {
 	purchaseQty, purchaseValue decimal.Decimal // 進貨 − 進貨退出(數量與依單位成本的金額)
 	salesQty                   decimal.Decimal // 出貨(負)+ 銷貨退回(正)
 	adjustQty                  decimal.Decimal // 盤點 / 調整 / 其他來源
+	consumeQty                 decimal.Decimal // 工單領料(負):扣庫存,依平均成本計價,但不是銷貨成本
+	produceQty                 decimal.Decimal // 工單完工入庫(正):金額為材料成本 + 加工費,月結時併入 purchaseQty / purchaseValue
 }
 
 func (a activity) idle() bool {
-	return a.purchaseQty.IsZero() && a.purchaseValue.IsZero() && a.salesQty.IsZero() && a.adjustQty.IsZero()
+	return a.purchaseQty.IsZero() && a.purchaseValue.IsZero() && a.salesQty.IsZero() && a.adjustQty.IsZero() &&
+		a.consumeQty.IsZero() && a.produceQty.IsZero()
 }
 
 // result 單一料品的月結結果。
 type result struct {
 	avg                  decimal.Decimal
 	cogs, adjust         decimal.Decimal // 銷貨成本、存貨損失(正為損失、負為盈餘),皆已捨入到元
+	consumeV             decimal.Decimal // 工單領料的金額(正數)
 	closingQty, closingV decimal.Decimal
 }
 
@@ -85,8 +89,9 @@ func compute(o opening, a activity) result {
 	case avg.IsZero() && !a.purchaseQty.IsZero():
 		avg = a.purchaseValue.Div(a.purchaseQty).Round(money.UnitPricePlaces)
 	}
-	closingQty := o.qty.Add(a.purchaseQty).Add(a.salesQty).Add(a.adjustQty)
+	closingQty := o.qty.Add(a.purchaseQty).Add(a.salesQty).Add(a.adjustQty).Add(a.consumeQty)
 	return result{
+		consumeV:   a.consumeQty.Neg().Mul(avg).Round(4),
 		avg:        avg,
 		cogs:       money.Amount(a.salesQty.Neg().Mul(avg)),
 		adjust:     money.Amount(a.adjustQty.Neg().Mul(avg)),

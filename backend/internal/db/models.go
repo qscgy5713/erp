@@ -119,6 +119,28 @@ type AuditLog struct {
 	CreatedAt  time.Time
 }
 
+type Bom struct {
+	ID        int64
+	CompanyID int64
+	ItemID    int64
+	YieldQty  decimal.Decimal
+	IsActive  bool
+	Note      string
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type BomLine struct {
+	BomID  int64
+	LineNo int32
+	ItemID int64
+	Qty    decimal.Decimal
+	Note   string
+}
+
 type Company struct {
 	ID        int64
 	Code      string
@@ -452,6 +474,8 @@ type ItemCost struct {
 	AdjustAmount  decimal.Decimal
 	ClosingQty    decimal.Decimal
 	ClosingValue  decimal.Decimal
+	ConsumeQty    decimal.Decimal
+	ConsumeValue  decimal.Decimal
 }
 
 type ItemLot struct {
@@ -816,4 +840,41 @@ type Warehouse struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type WorkOrder struct {
+	ID                  int64
+	CompanyID           int64
+	DocNo               string
+	DocDate             time.Time
+	ItemID              int64
+	PlanQty             decimal.Decimal
+	WarehouseID         int64
+	MaterialWarehouseID int64
+	ProcessingCost      decimal.Decimal
+	OutputLotNo         string
+	OutputExpiry        *time.Time
+	DueDate             *time.Time
+	Status              string
+	Note                string
+	SubmittedBy         *int64
+	SubmittedAt         *time.Time
+	ApprovedBy          *int64
+	ApprovedAt          *time.Time
+	PostedBy            *int64
+	PostedAt            *time.Time
+	CreatedBy           *int64
+	UpdatedBy           *int64
+	Version             int32
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type WorkOrderLine struct {
+	WorkOrderID int64
+	LineNo      int32
+	ItemID      int64
+	Qty         decimal.Decimal
+	LotNo       string
+	Note        string
 }

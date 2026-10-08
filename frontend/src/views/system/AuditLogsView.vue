@@ -47,6 +47,8 @@ const entityLabels: Record<string, string> = {
   payment_term: '付款條件',
   stock_document: '庫存單據',
   approval_rule: '簽核規則',
+  bom: 'BOM',
+  work_order: '工單',
   accounting_year: '會計年度',
 }
 

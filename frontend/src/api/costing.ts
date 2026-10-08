@@ -23,6 +23,9 @@ export interface ItemCost {
   purchase_value: Decimal
   sales_qty: Decimal
   adjust_qty: Decimal
+  /** 工單領料(負數)與金額:扣庫存,但不是銷貨成本 */
+  consume_qty: Decimal
+  consume_value: Decimal
   avg_cost: Decimal
   cogs_amount: Decimal
   adjust_amount: Decimal

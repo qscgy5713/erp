@@ -53,6 +53,13 @@ const (
 	DeliveryWrite     = "sales.delivery.write" // 含登錄發票號碼
 	DeliveryApprove   = "sales.delivery.approve"
 	DeliveryPost      = "sales.delivery.post"
+	// 生產
+	BomRead          = "production.bom.read"
+	BomWrite         = "production.bom.write"
+	WorkOrderRead    = "production.order.read"
+	WorkOrderWrite   = "production.order.write"   // 建立/修改草稿、送審、作廢草稿
+	WorkOrderApprove = "production.order.approve" // 核准、退回、取消核准、作廢
+	WorkOrderPost    = "production.order.post"    // 完工(領料並成品入庫)、反完工
 	// 月結成本與對帳
 	CostRead  = "costing.read"  // 月結結果、對帳檢查
 	CostClose = "costing.close" // 月結 / 取消月結
@@ -119,6 +126,10 @@ var Groups = []Group{
 	}},
 	{"銷售", "出貨單與銷貨退回單", []Permission{
 		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
+	}},
+	{"生產", "BOM(物料清單)", []Permission{{BomRead, "檢視"}, {BomWrite, "新增/修改/刪除"}}},
+	{"生產", "工單", []Permission{
+		{WorkOrderRead, "檢視"}, {WorkOrderWrite, "開單/送審"}, {WorkOrderApprove, "核准/退回/作廢"}, {WorkOrderPost, "完工(領料入庫)/反完工"},
 	}},
 	{"庫存", "月結成本與對帳檢查", []Permission{{CostRead, "檢視"}, {CostClose, "月結/取消月結"}}},
 	{"會計", "會計科目與拋轉規則", []Permission{{AccountRead, "檢視"}, {AccountWrite, "新增/修改"}}},

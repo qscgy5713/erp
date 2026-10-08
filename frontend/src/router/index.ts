@@ -4,6 +4,7 @@ import {
   COLLECTION_ANY,
   DELIVERY_ANY,
   INVENTORY_ANY,
+  WORK_ORDER_ANY,
   ORDER_ANY,
   PAYMENT_ANY,
   RECEIPT_ANY,
@@ -96,6 +97,30 @@ const router = createRouter({
       path: '/inventory/lots',
       component: () => import('@/views/inventory/LotsView.vue'),
       meta: { title: '批號庫存', perm: INVENTORY_ANY },
+    },
+    {
+      path: '/production/boms',
+      name: 'boms',
+      component: () => import('@/views/production/BomsView.vue'),
+      meta: { title: 'BOM', perm: ['production.bom.read', 'production.bom.write'] },
+    },
+    {
+      path: '/production/work-orders',
+      name: 'work-orders',
+      component: () => import('@/views/production/WorkOrdersView.vue'),
+      meta: { title: '工單', perm: WORK_ORDER_ANY },
+    },
+    {
+      path: '/production/work-orders/new',
+      name: 'work-order-new',
+      component: () => import('@/views/production/WorkOrderEditView.vue'),
+      meta: { title: '新增工單', perm: ['production.order.write'] },
+    },
+    {
+      path: '/production/work-orders/:id(\\d+)',
+      name: 'work-order',
+      component: () => import('@/views/production/WorkOrderEditView.vue'),
+      meta: { title: '工單', perm: WORK_ORDER_ANY },
     },
     {
       path: '/inventory/movement-summary',

@@ -208,10 +208,10 @@ onMounted(load)
         <el-table-column label="期初金額" width="100" align="right">
           <template #default="{ row }">{{ money(row.opening_value) }}</template>
         </el-table-column>
-        <el-table-column label="進貨量" width="90" align="right">
+        <el-table-column label="進貨 / 完工量" width="110" align="right">
           <template #default="{ row }">{{ money(row.purchase_qty) }}</template>
         </el-table-column>
-        <el-table-column label="進貨金額" width="100" align="right">
+        <el-table-column label="進貨 / 完工金額" width="120" align="right">
           <template #default="{ row }">{{ money(row.purchase_value) }}</template>
         </el-table-column>
         <el-table-column label="平均成本" width="110" align="right">
@@ -222,6 +222,12 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="銷貨成本" width="100" align="right">
           <template #default="{ row }">{{ money(row.cogs_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="領料量" width="90" align="right">
+          <template #default="{ row }">{{ money(row.consume_qty) }}</template>
+        </el-table-column>
+        <el-table-column label="領料金額" width="100" align="right">
+          <template #default="{ row }">{{ money(row.consume_value) }}</template>
         </el-table-column>
         <el-table-column label="盤調量" width="90" align="right">
           <template #default="{ row }">{{ money(row.adjust_qty) }}</template>

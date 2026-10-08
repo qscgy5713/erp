@@ -92,6 +92,8 @@ type itemCostDTO struct {
 	PurchaseValue decimal.Decimal `json:"purchase_value"`
 	SalesQty      decimal.Decimal `json:"sales_qty"`
 	AdjustQty     decimal.Decimal `json:"adjust_qty"`
+	ConsumeQty    decimal.Decimal `json:"consume_qty"` // 工單領料(負數)
+	ConsumeValue  decimal.Decimal `json:"consume_value"`
 	AvgCost       decimal.Decimal `json:"avg_cost"`
 	CogsAmount    decimal.Decimal `json:"cogs_amount"`
 	AdjustAmount  decimal.Decimal `json:"adjust_amount"`
@@ -135,6 +137,7 @@ func (m *Module) listItems(c *gin.Context) {
 			ItemID: r.ItemID, ItemCode: r.ItemCode, ItemName: r.ItemName, UnitName: r.UnitName,
 			OpeningQty: r.OpeningQty, OpeningValue: r.OpeningValue, PurchaseQty: r.PurchaseQty,
 			PurchaseValue: r.PurchaseValue, SalesQty: r.SalesQty, AdjustQty: r.AdjustQty, AvgCost: r.AvgCost,
+			ConsumeQty: r.ConsumeQty, ConsumeValue: r.ConsumeValue,
 			CogsAmount: r.CogsAmount, AdjustAmount: r.AdjustAmount, ClosingQty: r.ClosingQty, ClosingValue: r.ClosingValue,
 		}
 	}
@@ -194,8 +197,25 @@ func (m *Module) run(c *gin.Context) {
 		for _, g := range aggs {
 			act[g.ItemID] = activity{
 				purchaseQty: g.PurchaseQty, purchaseValue: g.PurchaseValue, salesQty: g.SalesQty,
-				adjustQty: g.AdjustQty.Add(g.OtherQty),
+				adjustQty: g.AdjustQty.Add(g.OtherQty), consumeQty: g.ConsumeQty, produceQty: g.ProduceQty,
 			}
+		}
+		cons, err := q.ProductionConsumption(ctx, db.ProductionConsumptionParams{CompanyID: a.CompanyID, StartDate: start, EndDate: end})
+		if err != nil {
+			return err
+		}
+		procs, err := q.ProductionProcessing(ctx, db.ProductionProcessingParams{CompanyID: a.CompanyID, StartDate: start, EndDate: end})
+		if err != nil {
+			return err
+		}
+		prod := productionInputs{materials: map[int64][]materialUse{}, processing: map[int64]decimal.Decimal{}}
+		for _, cn := range cons {
+			prod.materials[cn.OutputItemID] = append(prod.materials[cn.OutputItemID], materialUse{cn.MaterialID, cn.Qty.Neg()})
+		}
+		absorb := decimal.Zero
+		for _, p := range procs {
+			prod.processing[p.ItemID] = p.Processing
+			absorb = absorb.Add(p.Processing)
 		}
 		ids := map[int64]bool{}
 		for id := range open {
@@ -211,16 +231,35 @@ func (m *Module) run(c *gin.Context) {
 		slices.Sort(sorted)
 
 		type row struct {
-			id int64
-			o  opening
-			a  activity
-			r  result
+			id          int64
+			o           opening
+			a           activity
+			r           result
+			produceUnit *decimal.Decimal
 		}
 		rows := make([]row, 0, len(sorted))
 		var cogs, adjust, inv decimal.Decimal
-		for _, id := range sorted {
+		// 完工成品的成本依賴材料的平均成本,所以依「材料 → 成品」的順序計算;循環(A 用 B、B 用 A)無法定價
+		order, err := costOrder(sorted, prod)
+		if err != nil {
+			return err
+		}
+		results := map[int64]result{}
+		for _, id := range order {
 			r := row{id: id, o: open[id], a: act[id]}
+			if !r.a.produceQty.IsZero() {
+				value := prod.processing[id]
+				for _, mu := range prod.materials[id] {
+					value = value.Add(mu.qty.Mul(results[mu.item].avg))
+				}
+				value = value.Round(4)
+				r.a.purchaseQty = r.a.purchaseQty.Add(r.a.produceQty)
+				r.a.purchaseValue = r.a.purchaseValue.Add(value)
+				unit := value.Div(r.a.produceQty).Round(6)
+				r.produceUnit = &unit
+			}
 			r.r = compute(r.o, r.a)
+			results[id] = r.r
 			rows = append(rows, r)
 			cogs, adjust, inv = cogs.Add(r.r.cogs), adjust.Add(r.r.adjust), inv.Add(r.r.closingV)
 		}
@@ -237,9 +276,16 @@ func (m *Module) run(c *gin.Context) {
 				ClosingID: cl.ID, ItemID: r.id, OpeningQty: r.o.qty, OpeningValue: r.o.value,
 				PurchaseQty: r.a.purchaseQty, PurchaseValue: r.a.purchaseValue, SalesQty: r.a.salesQty,
 				AdjustQty: r.a.adjustQty, AvgCost: r.r.avg, CogsAmount: r.r.cogs, AdjustAmount: r.r.adjust,
-				ClosingQty: r.r.closingQty, ClosingValue: r.r.closingV,
+				ClosingQty: r.r.closingQty, ClosingValue: r.r.closingV, ConsumeQty: r.a.consumeQty, ConsumeValue: r.r.consumeV,
 			}); err != nil {
 				return err
+			}
+			if r.produceUnit != nil {
+				if err := q.WritebackProduceCost(ctx, db.WritebackProduceCostParams{
+					CompanyID: a.CompanyID, ItemID: r.id, StartDate: start, EndDate: end, UnitCost: r.produceUnit,
+				}); err != nil {
+					return err
+				}
 			}
 			if !r.a.idle() {
 				avg := r.r.avg
@@ -262,6 +308,11 @@ func (m *Module) run(c *gin.Context) {
 		if err := gl.PostSource(ctx, q, opt, src, pair(adjust, "cost.adjustment", "cost.inventory")); err != nil {
 			return err
 		}
+		// 完工成品成本含加工費:加工費由「加工費轉出」轉入存貨(實際發生的人工與製造費用已另外入帳為費用)
+		src.Desc = "月結完工加工費轉入存貨 " + period
+		if err := gl.PostSource(ctx, q, opt, src, pair(absorb, "cost.inventory", "cost.absorb")); err != nil {
+			return err
+		}
 
 		dto = closingDTO{
 			Period: period, Status: "costed", ItemCount: cl.ItemCount, CogsAmount: cl.CogsAmount,
@@ -276,6 +327,51 @@ func (m *Module) run(c *gin.Context) {
 		return
 	}
 	response.OK(c, dto)
+}
+
+type materialUse struct {
+	item int64
+	qty  decimal.Decimal // 領用數量(正數)
+}
+
+// productionInputs 當月完工的成品用了哪些材料(依成品)與加工費。
+type productionInputs struct {
+	materials  map[int64][]materialUse
+	processing map[int64]decimal.Decimal
+}
+
+// costOrder 計算順序:材料先於用到它的成品。同一階層維持料品 id 順序,結果固定;有循環時回報錯誤。
+func costOrder(ids []int64, p productionInputs) ([]int64, error) {
+	inSet := map[int64]bool{}
+	for _, id := range ids {
+		inSet[id] = true
+	}
+	done := map[int64]bool{}
+	order := make([]int64, 0, len(ids))
+	for len(order) < len(ids) {
+		progressed := false
+		for _, id := range ids {
+			if done[id] {
+				continue
+			}
+			ready := true
+			for _, mu := range p.materials[id] {
+				if inSet[mu.item] && !done[mu.item] && mu.item != id {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				done[id] = true
+				order = append(order, id)
+				progressed = true
+			}
+		}
+		if !progressed {
+			return nil, apperr.New(422, "CST-006", "當月工單的材料與成品互相循環使用(例如 A 用到 B、B 又用到 A),無法計算成本,請檢查工單")
+		}
+	}
+	return order, nil
 }
 
 // pair 金額為正時 借 debitKey 貸 creditKey;為負時方向相反;為 0 時沒有分錄。

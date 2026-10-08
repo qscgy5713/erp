@@ -34,8 +34,11 @@ SELECT t.item_id,
        COALESCE(SUM(t.qty * COALESCE(t.unit_cost, 0)) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return', 'opening_stock')), 0)::numeric AS purchase_value,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('delivery', 'sales_return')), 0)::numeric AS sales_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('stock_adjustment', 'stock_count')), 0)::numeric AS adjust_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type = 'work_order_issue'), 0)::numeric AS consume_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type = 'work_order_receipt'), 0)::numeric AS produce_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type NOT IN ('goods_receipt', 'purchase_return', 'delivery',
-                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock')), 0)::numeric AS other_qty
+                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock',
+                                   'work_order_issue', 'work_order_receipt')), 0)::numeric AS other_qty
 FROM inventory_transactions t
 WHERE t.company_id = @company_id AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 GROUP BY t.item_id
@@ -64,9 +67,11 @@ RETURNING *;
 
 -- name: InsertItemCost :exec
 INSERT INTO item_costs (closing_id, item_id, opening_qty, opening_value, purchase_qty, purchase_value, sales_qty,
-                        adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value)
+                        adjust_qty, avg_cost, cogs_amount, adjust_amount, closing_qty, closing_value,
+                        consume_qty, consume_value)
 VALUES (@closing_id, @item_id, @opening_qty, @opening_value, @purchase_qty, @purchase_value, @sales_qty,
-        @adjust_qty, @avg_cost, @cogs_amount, @adjust_amount, @closing_qty, @closing_value);
+        @adjust_qty, @avg_cost, @cogs_amount, @adjust_amount, @closing_qty, @closing_value,
+        @consume_qty, @consume_value);
 
 -- name: DeleteCostClosing :exec
 DELETE FROM cost_closings WHERE id = @id;
@@ -76,7 +81,7 @@ DELETE FROM cost_closings WHERE id = @id;
 UPDATE inventory_transactions SET unit_cost = @avg_cost
 WHERE company_id = @company_id AND item_id = @item_id
   AND doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock');
+  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock', 'work_order_receipt');
 
 -- ======== 對帳檢查 ========
 

@@ -18,6 +18,7 @@ import (
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpserver"
 	"erp/internal/platform/ratelimit"
+	"erp/internal/production"
 	"erp/internal/purchase"
 	"erp/internal/sales"
 	"erp/internal/system"
@@ -45,6 +46,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	importsModule := imports.New(store)
 	dashboardModule := dashboard.New(store)
 	approvalModule := approval.New(store)
+	productionModule := production.New(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
 		DB:             pool,
@@ -65,6 +67,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 			importsModule.Register(protected)
 			dashboardModule.Register(protected)
 			approvalModule.Register(protected)
+			productionModule.Register(protected)
 		},
 	})
 }

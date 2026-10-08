@@ -7,6 +7,13 @@ export interface NavItem {
   children?: NavItem[]
 }
 
+export const WORK_ORDER_ANY = [
+  'production.order.read',
+  'production.order.write',
+  'production.order.approve',
+  'production.order.post',
+]
+
 export const INVENTORY_ANY = [
   'inventory.stock.read',
   'inventory.stock.write',
@@ -81,6 +88,17 @@ export const navigation: NavItem[] = [
         path: '/sales/unshipped',
         perm: [...SALES_ORDER_ANY, 'sales.delivery.write'],
       },
+    ],
+  },
+  {
+    title: '生產',
+    children: [
+      {
+        title: 'BOM',
+        path: '/production/boms',
+        perm: ['production.bom.read', 'production.bom.write'],
+      },
+      { title: '工單', path: '/production/work-orders', perm: WORK_ORDER_ANY },
     ],
   },
   {
