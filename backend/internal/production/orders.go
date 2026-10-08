@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/db"
 	"erp/internal/inventory"
 	"erp/internal/platform/database"
@@ -629,6 +630,16 @@ func (m *Module) orderAction(c *gin.Context) {
 		doc, err := loadOrder(ctx, q, a.CompanyID, id)
 		if err != nil {
 			return err
+		}
+		if partial, msg, err := approval.Intercept(ctx, q, a, approval.WorkOrder, id, action, cur.ProcessingCost); err != nil {
+			return err
+		} else if partial {
+			if dto, err = loadOrder(ctx, q, a.CompanyID, id); err != nil {
+				return err
+			}
+			return audit.Record(ctx, q, audit.Entry{
+				Action: "approve_step", EntityType: "work_order", EntityID: &id, Summary: msg + " 工單 " + cur.DocNo,
+			})
 		}
 		if err := applyAction(ctx, q, a, cur, doc, action); err != nil {
 			return err

@@ -66,6 +66,7 @@ SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = @user_id AND role_id = @
 SELECT (
   (@doc_type::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = @doc_id AND x.company_id = @company_id))
+  OR (@doc_type::text = 'work_order' AND EXISTS (SELECT 1 FROM work_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = @doc_id AND x.company_id = @company_id AND x.side = 'payment'))
   OR (@doc_type::text = 'sales_order' AND EXISTS (
         SELECT 1 FROM sales_orders x LEFT JOIN users su ON su.id = x.sales_user_id

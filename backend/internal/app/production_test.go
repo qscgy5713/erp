@@ -321,3 +321,64 @@ func TestWorkOrderPermissionsAndLots(t *testing.T) {
 	}
 	expect(t, c.do(http.MethodGet, prodWO+"?status=bogus", nil), http.StatusUnprocessableEntity, "SYS-422")
 }
+
+// 工單納入多層簽核:金額以加工費計;低於門檻維持單層;超過門檻須第二層角色核准後才能完工
+func TestWorkOrderMultiLevelApproval(t *testing.T) {
+	p := newPurCtx(t)
+	e, root := p.e, p.c
+	fg, mat := e.seedItem("FG1", "goods"), e.seedItem("MAT", "goods")
+	expect(t, root.postLot(p.wh, mat, e.unitID("PCS"), "100", "", ""), http.StatusOK, "")
+
+	maker := e.seedRole("maker", "all", permission.WorkOrderRead, permission.WorkOrderWrite)
+	l1 := e.seedRole("l1", "all", permission.WorkOrderRead, permission.WorkOrderApprove)
+	cfo := e.seedRole("cfo", "all", permission.WorkOrderRead, permission.WorkOrderApprove)
+	poster := e.seedRole("poster", "all", permission.WorkOrderRead, permission.WorkOrderPost)
+	e.seedUser("maker", pw, false, false, maker.ID)
+	e.seedUser("appr1", pw, false, false, l1.ID)
+	e.seedUser("boss", pw, false, false, cfo.ID)
+	e.seedUser("poster", pw, false, false, poster.ID)
+	mk, a1, boss, po := e.loggedIn("maker", pw), e.loggedIn("appr1", pw), e.loggedIn("boss", pw), e.loggedIn("poster", pw)
+
+	expect(t, root.do(http.MethodPost, "/approval/rules", map[string]any{"doc_type": "work_order", "min_amount": "5000", "role_ids": []int64{cfo.ID}}), http.StatusCreated, "")
+
+	newWO := func(fee string) woDoc {
+		res := mk.do(http.MethodPost, prodWO, woBody(fg, "5", p.wh, fee, map[string]any{"lines": []map[string]any{{"item_id": mat, "qty": "10"}}}))
+		expect(t, res, http.StatusCreated, "")
+		return decode[woDoc](t, res.Data)
+	}
+
+	// 加工費低於門檻:單層
+	small := newWO("100")
+	expect(t, mk.woAct(&small, "submit"), http.StatusOK, "")
+	if pr := mk.progress("work_order", small.ID); pr.Required != 0 {
+		t.Fatalf("低於門檻應為單層: %+v", pr)
+	}
+	expect(t, a1.woAct(&small, "approve"), http.StatusOK, "")
+	if small.Status != "approved" {
+		t.Fatalf("單層核准後 status=%s", small.Status)
+	}
+
+	// 加工費超過門檻:兩層,第 1 層核准後仍待審,第 2 層須 CFO 角色
+	big := newWO("6000")
+	expect(t, mk.woAct(&big, "submit"), http.StatusOK, "")
+	if pr := mk.progress("work_order", big.ID); pr.Required != 2 {
+		t.Fatalf("送審後流程: %+v", pr)
+	}
+	expect(t, a1.woAct(&big, "approve"), http.StatusOK, "")
+	if big.Status != "pending" {
+		t.Fatalf("第 1 層核准後應為待審,status=%s", big.Status)
+	}
+	expect(t, a1.woAct(&big, "approve"), http.StatusForbidden, "APR-002")
+	expect(t, po.woAct(&big, "post"), http.StatusConflict, "DOC-001") // 尚未核准不能完工
+	expect(t, boss.woAct(&big, "approve"), http.StatusOK, "")
+	if big.Status != "approved" {
+		t.Fatalf("全部核准後 status=%s", big.Status)
+	}
+	expect(t, po.woAct(&big, "post"), http.StatusOK, "")
+
+	// 沒有工單檢視權限者看不到進度;不存在的工單 404
+	nobody := e.seedRole("nobody", "all", permission.CustomerRead)
+	e.seedUser("nobody", pw, false, false, nobody.ID)
+	expect(t, e.loggedIn("nobody", pw).do(http.MethodGet, "/approval/progress?doc_type=work_order&doc_id="+itoa(big.ID), nil), http.StatusForbidden, "SYS-403")
+	expect(t, mk.do(http.MethodGet, "/approval/progress?doc_type=work_order&doc_id=999999", nil), http.StatusNotFound, "SYS-404")
+}

@@ -16,6 +16,7 @@ const approvalDocVisible = `-- name: ApprovalDocVisible :one
 SELECT (
   ($1::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = $2 AND x.company_id = $3))
   OR ($1::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = $2 AND x.company_id = $3))
+  OR ($1::text = 'work_order' AND EXISTS (SELECT 1 FROM work_orders x WHERE x.id = $2 AND x.company_id = $3))
   OR ($1::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = $2 AND x.company_id = $3 AND x.side = 'payment'))
   OR ($1::text = 'sales_order' AND EXISTS (
         SELECT 1 FROM sales_orders x LEFT JOIN users su ON su.id = x.sales_user_id

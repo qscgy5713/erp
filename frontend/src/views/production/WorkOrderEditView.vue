@@ -10,6 +10,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 import { actionLabels, allowedActions } from '@/utils/docstate'
 import { formatDateTime } from '@/utils/format'
+import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
+import ApprovalProgress from '@/components/ApprovalProgress.vue'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
@@ -215,6 +217,14 @@ async function save(): Promise<boolean> {
   }
 }
 
+// ---- 多層簽核(金額以加工費計) ----
+const approvalInfo = ref<ApprovalProgressData | null>(null)
+const progressRef = ref<InstanceType<typeof ApprovalProgress> | null>(null)
+/** 套用多層簽核的待審工單:只有輪到的人才顯示「核准」 */
+const approveBlocked = computed(
+  () => doc.value?.status === 'pending' && !!approvalInfo.value && !approvalInfo.value.can_approve,
+)
+
 // ---- 狀態動作 ----
 
 function canDo(action: DocAction): boolean {
@@ -223,6 +233,7 @@ function canDo(action: DocAction): boolean {
     case 'submit':
       return auth.can('production.order.write')
     case 'approve':
+      return auth.can('production.order.approve') && !approveBlocked.value
     case 'reject':
     case 'unapprove':
       return auth.can('production.order.approve')
@@ -266,8 +277,14 @@ async function runAction(action: DocAction) {
   if (dirty.value && editable.value && !(await save())) return
   acting.value = action
   try {
-    applyDoc(await productionApi.action(doc.value.id, action, doc.value.version))
-    ElMessage.success(`已${label(action)}`)
+    const next = await productionApi.action(doc.value.id, action, doc.value.version)
+    applyDoc(next)
+    ElMessage.success(
+      action === 'approve' && next.status === 'pending'
+        ? '已完成本層核准,等待下一層核准'
+        : `已${label(action)}`,
+    )
+    progressRef.value?.reload()
   } catch (e) {
     handle(e)
   } finally {
@@ -319,6 +336,15 @@ onMounted(async () => {
         </el-button>
       </div>
     </div>
+
+    <ApprovalProgress
+      ref="progressRef"
+      doc-type="work_order"
+      :doc-id="doc?.id"
+      :status="doc?.status"
+      :version="doc?.version"
+      @loaded="approvalInfo = $event"
+    />
 
     <el-card shadow="never" class="mb">
       <el-form label-width="100px" :disabled="!editable">

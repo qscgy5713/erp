@@ -28,6 +28,7 @@ const (
 	Delivery      = "delivery"
 	Collection    = "collection"
 	Payment       = "payment"
+	WorkOrder     = "work_order" // 金額為加工費(完工成本在月結才確定)
 )
 
 type docInfo struct {
@@ -43,10 +44,11 @@ var docTypes = map[string]docInfo{
 	Delivery:      {"出貨單 / 銷貨退回", permission.DeliveryApprove, permission.DeliveryRead},
 	Collection:    {"收款單", permission.CollectionApprove, permission.CollectionRead},
 	Payment:       {"付款單", permission.PaymentApprove, permission.PaymentRead},
+	WorkOrder:     {"工單(以加工費計)", permission.WorkOrderApprove, permission.WorkOrderRead},
 }
 
 // DocTypeOrder 固定的顯示順序。
-var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment}
+var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment, WorkOrder}
 
 func Label(docType string) string { return docTypes[docType].Label }
 
