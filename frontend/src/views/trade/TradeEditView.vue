@@ -23,6 +23,8 @@ import ItemPicker from '@/components/ItemPicker.vue'
 import PartnerPicker, { type PartnerOption } from '@/components/PartnerPicker.vue'
 import ApprovalProgress from '@/components/ApprovalProgress.vue'
 import LotCell from '@/components/LotCell.vue'
+import BinCell from '@/components/BinCell.vue'
+import { useBinStore } from '@/composables/useBinStore'
 import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
 import { flows, type FlowKind, type ImportRow, type TradeDoc } from './flows'
 
@@ -87,6 +89,7 @@ interface LineRow {
   /** 批號管理的料品:批號與效期(進貨 / 出貨類);已過帳的單據另有實際出庫的批號 */
   item_lot_control?: string
   lot_no?: string
+  bin_code?: string
   expiry_date?: string | null
   lots?: { lot_no: string; expiry_date: string | null; qty: string }[]
 }
@@ -470,6 +473,18 @@ async function prefill(fromKind: FlowKind, fromId: number) {
 // ---- 批號與效期(進貨 / 出貨類) ----
 
 /** 入庫類(進貨、銷貨退回)要輸入批號與效期;出庫類(出貨、進貨退出)可留空,系統先到期先出 */
+// ---- 儲位:倉庫有啟用儲位時顯示,入庫(進貨、銷貨退回)必填,出庫可留空自動分配 ----
+const binStore = useBinStore()
+const binTick = ref(0)
+void binStore.ensureWarehouses().then(() => binTick.value++)
+const binColumn = computed(
+  () =>
+    (flow.kind === 'receipt' || flow.kind === 'delivery') &&
+    binTick.value >= 0 &&
+    !!form.warehouse_id &&
+    binStore.usesBins(form.warehouse_id),
+)
+
 const lotInbound = computed(
   () =>
     (flow.kind === 'receipt' && docType.value === 'receipt') ||
@@ -525,6 +540,7 @@ function payload(): Record<string, unknown> {
       ...(refKey.value ? { [refKey.value]: l.ref_id ?? null } : {}),
       ...(flow.kind === 'receipt' || flow.kind === 'delivery'
         ? {
+            bin_code: binColumn.value ? (l.bin_code ?? '') : '',
             lot_no: lotControlled(l) ? (l.lot_no ?? '') : '',
             expiry_date: lotControlled(l) ? l.expiry_date || null : null,
           }
@@ -1018,6 +1034,16 @@ onMounted(async () => {
             <div v-if="editable && row.available" class="hint">
               剩餘 {{ fmt(row.available, 0) }}
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="binColumn" label="儲位" width="150">
+          <template #default="{ row }">
+            <BinCell
+              v-model:code="row.bin_code"
+              :warehouse-id="form.warehouse_id"
+              :mode="lotInbound ? 'in' : 'out'"
+              :editable="editable"
+            />
           </template>
         </el-table-column>
         <el-table-column v-if="lotColumn" label="批號 / 效期" width="250">

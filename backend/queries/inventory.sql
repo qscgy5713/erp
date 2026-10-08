@@ -12,10 +12,10 @@ WHERE item_id = @item_id AND warehouse_id = @warehouse_id;
 
 -- name: InsertInventoryTransaction :one
 INSERT INTO inventory_transactions (company_id, item_id, warehouse_id, doc_date, qty, unit_cost, source_type,
-                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id)
+                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id, bin_id)
 VALUES (@company_id, @item_id, @warehouse_id, @doc_date, @qty, sqlc.narg(unit_cost), @source_type,
         @source_id, sqlc.narg(source_line_id), @source_no, sqlc.narg(reversal_of), sqlc.narg(created_by),
-        sqlc.narg(lot_id))
+        sqlc.narg(lot_id), sqlc.narg(bin_id))
 RETURNING id;
 
 -- name: ListOpenTransactionsBySource :many
@@ -48,7 +48,7 @@ UNION ALL
 SELECT iu.item_id, iu.unit_id, iu.factor FROM item_units iu WHERE iu.item_id = ANY(@item_ids::bigint[]);
 
 -- name: ListWarehouseFlags :many
-SELECT w.id, w.code, w.name, w.allow_negative, w.is_active
+SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins
 FROM warehouses w
 WHERE w.company_id = @company_id AND w.id = ANY(@ids::bigint[]);
 

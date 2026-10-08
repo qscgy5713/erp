@@ -53,6 +53,7 @@ export interface WorkOrderLine {
   unit_name?: string
   qty: Decimal
   lot_no: string
+  bin_code?: string
   note: string
   item_lot_control?: LotControl
   on_hand?: Decimal
@@ -76,6 +77,7 @@ export interface WorkOrder {
   material_warehouse_name: string
   processing_cost: Decimal
   output_lot_no: string
+  output_bin_code: string
   output_expiry_date: string | null
   due_date: string | null
   note: string
@@ -114,10 +116,11 @@ export interface WorkOrderInput {
   material_warehouse_id: number
   processing_cost: Decimal
   output_lot_no: string
+  output_bin_code: string
   output_expiry_date: string | null
   due_date: string | null
   note: string
-  lines: { item_id: number; qty: Decimal; lot_no: string; note: string }[]
+  lines: { item_id: number; qty: Decimal; lot_no: string; bin_code: string; note: string }[]
   version?: number
 }
 

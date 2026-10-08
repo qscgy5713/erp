@@ -54,13 +54,13 @@ SELECT * FROM warehouses WHERE company_id = @company_id ORDER BY code;
 SELECT * FROM warehouses WHERE id = @id AND company_id = @company_id;
 
 -- name: CreateWarehouse :one
-INSERT INTO warehouses (company_id, code, name, address, allow_negative, created_by, updated_by)
-VALUES (@company_id, @code, @name, @address, @allow_negative, @created_by, @created_by)
+INSERT INTO warehouses (company_id, code, name, address, allow_negative, use_bins, created_by, updated_by)
+VALUES (@company_id, @code, @name, @address, @allow_negative, @use_bins, @created_by, @created_by)
 RETURNING *;
 
 -- name: UpdateWarehouse :one
 UPDATE warehouses
-SET code = @code, name = @name, address = @address, allow_negative = @allow_negative,
+SET code = @code, name = @name, address = @address, allow_negative = @allow_negative, use_bins = @use_bins,
     is_active = @is_active, version = version + 1, updated_by = @updated_by
 WHERE id = @id AND company_id = @company_id AND version = @version
 RETURNING *;

@@ -71,6 +71,7 @@ export interface ReceiptLine extends PurchaseLine {
   item_lot_control: LotControl
   lot_no: string
   expiry_date: string | null
+  bin_code: string
   lots?: LotUsed[]
   base_amount: Decimal
   po_line_id: number | null

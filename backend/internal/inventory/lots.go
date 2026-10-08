@@ -29,6 +29,7 @@ type posting struct {
 	line       *int64
 	reversalOf *int64
 	lotID      *int64
+	binID      *int64
 }
 
 type allocKey struct{ item, wh int64 }
@@ -64,9 +65,9 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 		}
 		it := items[m.ItemID]
 		if !lotControlled(it) {
-			out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: m.Qty, cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf})
+			out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: m.Qty, cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, binID: m.binID})
 			if m.TransferTo != nil {
-				out = append(out, posting{item: m.ItemID, wh: *m.TransferTo, qty: m.Qty.Neg(), cost: m.UnitCost, line: m.SourceLineID})
+				out = append(out, posting{item: m.ItemID, wh: *m.TransferTo, qty: m.Qty.Neg(), cost: m.UnitCost, line: m.SourceLineID, binID: m.toBinID})
 			}
 			continue
 		}
@@ -80,7 +81,7 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 				}
 				lotID = &id
 			}
-			out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: m.Qty, cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: lotID})
+			out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: m.Qty, cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: lotID, binID: m.binID})
 		default:
 			parts, err := outboundParts(ctx, q, opt, src, m, it, whs[m.WarehouseID], avail)
 			if err != nil {
@@ -88,9 +89,9 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 			}
 			for _, p := range parts {
 				lot := p.lotID
-				out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: p.qty.Neg(), cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: &lot})
+				out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: p.qty.Neg(), cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: &lot, binID: m.binID})
 				if m.TransferTo != nil {
-					out = append(out, posting{item: m.ItemID, wh: *m.TransferTo, qty: p.qty, cost: m.UnitCost, line: m.SourceLineID, lotID: &lot})
+					out = append(out, posting{item: m.ItemID, wh: *m.TransferTo, qty: p.qty, cost: m.UnitCost, line: m.SourceLineID, lotID: &lot, binID: m.toBinID})
 				}
 			}
 		}

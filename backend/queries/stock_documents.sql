@@ -94,9 +94,9 @@ DELETE FROM stock_document_lines WHERE document_id = @document_id;
 
 -- name: AddStockDocumentLine :exec
 INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note,
-                                  lot_no, expiry_date)
+                                  lot_no, expiry_date, bin_code, to_bin_code)
 VALUES (@document_id, @line_no, @item_id, @unit_id, sqlc.narg(qty), @factor, sqlc.narg(base_qty),
-        sqlc.narg(system_qty), @note, @lot_no, sqlc.narg(expiry_date));
+        sqlc.narg(system_qty), @note, @lot_no, sqlc.narg(expiry_date), @bin_code, @to_bin_code);
 
 -- name: CountSnapshot :many
 -- 盤點建立時的帳面數量快照:該倉庫有現有量紀錄的商品(可限分類,含下層)

@@ -14,9 +14,9 @@ import (
 
 const addGoodsReceiptLine = `-- name: AddGoodsReceiptLine :exec
 INSERT INTO goods_receipt_lines (receipt_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date)
+                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date, bin_code)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, $14, $15)
+        $11, $12, $13, $14, $15, $16)
 `
 
 type AddGoodsReceiptLineParams struct {
@@ -35,6 +35,7 @@ type AddGoodsReceiptLineParams struct {
 	Note          string
 	LotNo         string
 	ExpiryDate    *time.Time
+	BinCode       string
 }
 
 func (q *Queries) AddGoodsReceiptLine(ctx context.Context, arg AddGoodsReceiptLineParams) error {
@@ -54,6 +55,7 @@ func (q *Queries) AddGoodsReceiptLine(ctx context.Context, arg AddGoodsReceiptLi
 		arg.Note,
 		arg.LotNo,
 		arg.ExpiryDate,
+		arg.BinCode,
 	)
 	return err
 }
@@ -722,7 +724,7 @@ func (q *Queries) InsertPayable(ctx context.Context, arg InsertPayableParams) er
 }
 
 const listGoodsReceiptLines = `-- name: ListGoodsReceiptLines :many
-SELECT l.id, l.receipt_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.po_line_id, l.receipt_line_id, l.note, l.lot_no, l.expiry_date, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
+SELECT l.id, l.receipt_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.po_line_id, l.receipt_line_id, l.note, l.lot_no, l.expiry_date, l.bin_code, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name,
        po.doc_no AS po_no, src.doc_no AS source_receipt_no
 FROM goods_receipt_lines l
@@ -754,6 +756,7 @@ type ListGoodsReceiptLinesRow struct {
 	Note            string
 	LotNo           string
 	ExpiryDate      *time.Time
+	BinCode         string
 	ItemCode        string
 	ItemName        string
 	ItemSpec        string
@@ -791,6 +794,7 @@ func (q *Queries) ListGoodsReceiptLines(ctx context.Context, receiptID int64) ([
 			&i.Note,
 			&i.LotNo,
 			&i.ExpiryDate,
+			&i.BinCode,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.ItemSpec,

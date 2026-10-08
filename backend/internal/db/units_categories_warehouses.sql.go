@@ -105,9 +105,9 @@ func (q *Queries) CreateUnit(ctx context.Context, arg CreateUnitParams) (Unit, e
 }
 
 const createWarehouse = `-- name: CreateWarehouse :one
-INSERT INTO warehouses (company_id, code, name, address, allow_negative, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6, $6)
-RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at
+INSERT INTO warehouses (company_id, code, name, address, allow_negative, use_bins, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins
 `
 
 type CreateWarehouseParams struct {
@@ -116,6 +116,7 @@ type CreateWarehouseParams struct {
 	Name          string
 	Address       string
 	AllowNegative bool
+	UseBins       bool
 	CreatedBy     *int64
 }
 
@@ -126,6 +127,7 @@ func (q *Queries) CreateWarehouse(ctx context.Context, arg CreateWarehouseParams
 		arg.Name,
 		arg.Address,
 		arg.AllowNegative,
+		arg.UseBins,
 		arg.CreatedBy,
 	)
 	var i Warehouse
@@ -142,6 +144,7 @@ func (q *Queries) CreateWarehouse(ctx context.Context, arg CreateWarehouseParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UseBins,
 	)
 	return i, err
 }
@@ -203,7 +206,7 @@ func (q *Queries) GetUnit(ctx context.Context, arg GetUnitParams) (Unit, error) 
 }
 
 const getWarehouse = `-- name: GetWarehouse :one
-SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at FROM warehouses WHERE id = $1 AND company_id = $2
+SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins FROM warehouses WHERE id = $1 AND company_id = $2
 `
 
 type GetWarehouseParams struct {
@@ -227,6 +230,7 @@ func (q *Queries) GetWarehouse(ctx context.Context, arg GetWarehouseParams) (War
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UseBins,
 	)
 	return i, err
 }
@@ -345,7 +349,7 @@ func (q *Queries) ListUnits(ctx context.Context, companyID int64) ([]Unit, error
 }
 
 const listWarehouses = `-- name: ListWarehouses :many
-SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at FROM warehouses WHERE company_id = $1 ORDER BY code
+SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins FROM warehouses WHERE company_id = $1 ORDER BY code
 `
 
 func (q *Queries) ListWarehouses(ctx context.Context, companyID int64) ([]Warehouse, error) {
@@ -370,6 +374,7 @@ func (q *Queries) ListWarehouses(ctx context.Context, companyID int64) ([]Wareho
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UseBins,
 		); err != nil {
 			return nil, err
 		}
@@ -476,10 +481,10 @@ func (q *Queries) UpdateUnit(ctx context.Context, arg UpdateUnitParams) (Unit, e
 
 const updateWarehouse = `-- name: UpdateWarehouse :one
 UPDATE warehouses
-SET code = $1, name = $2, address = $3, allow_negative = $4,
-    is_active = $5, version = version + 1, updated_by = $6
-WHERE id = $7 AND company_id = $8 AND version = $9
-RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at
+SET code = $1, name = $2, address = $3, allow_negative = $4, use_bins = $5,
+    is_active = $6, version = version + 1, updated_by = $7
+WHERE id = $8 AND company_id = $9 AND version = $10
+RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins
 `
 
 type UpdateWarehouseParams struct {
@@ -487,6 +492,7 @@ type UpdateWarehouseParams struct {
 	Name          string
 	Address       string
 	AllowNegative bool
+	UseBins       bool
 	IsActive      bool
 	UpdatedBy     *int64
 	ID            int64
@@ -500,6 +506,7 @@ func (q *Queries) UpdateWarehouse(ctx context.Context, arg UpdateWarehouseParams
 		arg.Name,
 		arg.Address,
 		arg.AllowNegative,
+		arg.UseBins,
 		arg.IsActive,
 		arg.UpdatedBy,
 		arg.ID,
@@ -520,6 +527,7 @@ func (q *Queries) UpdateWarehouse(ctx context.Context, arg UpdateWarehouseParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UseBins,
 	)
 	return i, err
 }

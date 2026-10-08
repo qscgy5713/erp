@@ -49,6 +49,7 @@ const entityLabels: Record<string, string> = {
   approval_rule: '簽核規則',
   bom: 'BOM',
   work_order: '工單',
+  bin: '儲位',
   accounting_year: '會計年度',
 }
 

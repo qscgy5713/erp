@@ -119,6 +119,20 @@ type AuditLog struct {
 	CreatedAt  time.Time
 }
 
+type Bin struct {
+	ID          int64
+	CompanyID   int64
+	WarehouseID int64
+	Code        string
+	Name        string
+	IsActive    bool
+	CreatedBy   *int64
+	UpdatedBy   *int64
+	Version     int32
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type Bom struct {
 	ID        int64
 	CompanyID int64
@@ -255,6 +269,7 @@ type DeliveryLine struct {
 	Note           string
 	LotNo          string
 	ExpiryDate     *time.Time
+	BinCode        string
 }
 
 type Department struct {
@@ -371,6 +386,7 @@ type GoodsReceiptLine struct {
 	Note          string
 	LotNo         string
 	ExpiryDate    *time.Time
+	BinCode       string
 }
 
 type ImportBatch struct {
@@ -390,6 +406,15 @@ type InventoryBalance struct {
 	CompanyID   int64
 	ItemID      int64
 	WarehouseID int64
+	Qty         decimal.Decimal
+	UpdatedAt   time.Time
+}
+
+type InventoryBinBalance struct {
+	CompanyID   int64
+	ItemID      int64
+	WarehouseID int64
+	BinID       int64
 	Qty         decimal.Decimal
 	UpdatedAt   time.Time
 }
@@ -419,6 +444,7 @@ type InventoryTransaction struct {
 	CreatedBy    *int64
 	CreatedAt    time.Time
 	LotID        *int64
+	BinID        *int64
 }
 
 type Item struct {
@@ -710,6 +736,8 @@ type StockDocumentLine struct {
 	Note       string
 	LotNo      string
 	ExpiryDate *time.Time
+	BinCode    string
+	ToBinCode  string
 }
 
 type Supplier struct {
@@ -840,6 +868,7 @@ type Warehouse struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	UseBins       bool
 }
 
 type WorkOrder struct {
@@ -868,6 +897,7 @@ type WorkOrder struct {
 	Version             int32
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	OutputBinCode       string
 }
 
 type WorkOrderLine struct {
@@ -877,4 +907,5 @@ type WorkOrderLine struct {
 	Qty         decimal.Decimal
 	LotNo       string
 	Note        string
+	BinCode     string
 }

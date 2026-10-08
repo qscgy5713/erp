@@ -65,6 +65,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/balances", read, m.listBalances)
 	g.GET("/movement-summary", read, m.movementSummary)
 	g.GET("/items/:id/ledger", read, m.itemLedger)
+	g.GET("/bin-stock", read, m.listBinStock)
 	g.GET("/lots", read, m.listLots)
 	g.GET("/lots/:id/ledger", read, m.lotLedger)
 	// 開單時挑選批號:庫存、進貨、出貨的開單者都需要
@@ -99,6 +100,8 @@ type lineDTO struct {
 	DiffQty      *decimal.Decimal `json:"diff_qty,omitempty"` // 盤點差異 = 實盤 − 帳面
 	Note         string           `json:"note"`
 	// 批號:批號管理的料品填。調整增加為入庫批號,調整減少 / 調撥可空白(先到期先出),盤點為被盤的批號
+	BinCode        string       `json:"bin_code"`         // 啟用儲位的倉庫:入庫須指定;出庫可留空自動分配
+	ToBinCode      string       `json:"to_bin_code"`      // 調撥:調入倉的儲位
 	ItemLotControl string       `json:"item_lot_control"` // none / lot / lot_expiry
 	LotNo          string       `json:"lot_no"`
 	ExpiryDate     *string      `json:"expiry_date"`
@@ -155,6 +158,7 @@ func (m *Module) loadDocument(ctx context.Context, q *db.Queries, companyID, id 
 			ItemSpec: r.ItemSpec, UnitID: r.UnitID, UnitName: r.UnitName, BaseUnitName: r.BaseUnitName,
 			Qty: r.Qty, Factor: r.Factor, BaseQty: r.BaseQty, SystemQty: r.SystemQty, Note: r.Note,
 			ItemLotControl: r.ItemLotControl, LotNo: r.LotNo, ExpiryDate: dateStr(r.ExpiryDate), Lots: []lotUsedDTO{},
+			BinCode: r.BinCode, ToBinCode: r.ToBinCode,
 		}
 		if d.DocType == TypeCount && r.BaseQty != nil && r.SystemQty != nil {
 			diff := r.BaseQty.Sub(*r.SystemQty)
@@ -284,6 +288,9 @@ type lineInput struct {
 	// 批號管理的料品:調整增加填批號與效期;減少 / 調撥可空白(先到期先出);盤點為被盤的批號
 	LotNo      string  `json:"lot_no"`
 	ExpiryDate *string `json:"expiry_date"`
+	// 啟用儲位的倉庫:調整增加須指定儲位,減少 / 調撥可留空(庫存多的儲位先出);調撥另指定調入倉的儲位
+	BinCode   string `json:"bin_code"`
+	ToBinCode string `json:"to_bin_code"`
 }
 
 type documentInput struct {
@@ -308,7 +315,7 @@ type preparedLine struct {
 
 // prepareLines 驗證明細並換算基本單位數量。
 // 調整:數量 ≠ 0(可負);調撥:數量 > 0;盤點:實盤 ≥ 0 或未盤(null),且只能用基本單位。
-func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType string, lines []lineInput) ([]preparedLine, error) {
+func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType string, warehouseID int64, toWarehouseID *int64, lines []lineInput) ([]preparedLine, error) {
 	if len(lines) > maxLines {
 		return nil, fieldErr("lines", fmt.Sprintf("明細最多 %d 筆", maxLines))
 	}
@@ -421,6 +428,27 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 			out[i].LotNo, out[i].expiry = checked[i].LotNo, checked[i].Expiry
 		}
 	}
+	if len(fields) == 0 && docType != TypeCount {
+		binInputs := make([]BinInput, len(out))
+		for i, p := range out {
+			bi := BinInput{ItemID: p.ItemID, WarehouseID: warehouseID, BinCode: p.BinCode,
+				Inbound: docType == TypeAdjustment && p.baseQty != nil && p.baseQty.IsPositive()}
+			if docType == TypeTransfer {
+				bi.ToWarehouseID, bi.ToBinCode = toWarehouseID, p.ToBinCode
+			}
+			binInputs[i] = bi
+		}
+		codes, toCodes, binErrs, err := CheckBinInputs(ctx, q, companyID, binInputs)
+		if err != nil {
+			return nil, err
+		}
+		for i, msg := range binErrs {
+			fields[fmt.Sprintf("lines.%d", i)] = msg
+		}
+		for i := range out {
+			out[i].BinCode, out[i].ToBinCode = codes[i], toCodes[i]
+		}
+	}
 	if len(fields) > 0 {
 		return nil, apperr.Validation(fields)
 	}
@@ -437,10 +465,9 @@ func checkHeader(ctx context.Context, q *db.Queries, companyID int64, in *docume
 		if in.ToWarehouseID == nil {
 			return date, fieldErr("to_warehouse_id", "請選擇調入倉")
 		}
-		if *in.ToWarehouseID == in.WarehouseID {
-			return date, fieldErr("to_warehouse_id", "調入倉不可與調出倉相同")
+		if *in.ToWarehouseID != in.WarehouseID { // 同倉調撥(啟用儲位的倉庫)只查一次
+			ids = append(ids, *in.ToWarehouseID)
 		}
-		ids = append(ids, *in.ToWarehouseID)
 	} else {
 		in.ToWarehouseID = nil
 	}
@@ -460,6 +487,17 @@ func checkHeader(ctx context.Context, q *db.Queries, companyID int64, in *docume
 	if active != len(ids) {
 		return date, fieldErr("warehouse_id", "倉庫不存在或已停用")
 	}
+	useBins := map[int64]bool{}
+	for _, w := range whs {
+		useBins[w.ID] = w.UseBins
+	}
+	// 同一倉庫的調撥只有啟用儲位時才有意義(在不同儲位之間移動)
+	if in.DocType == TypeTransfer && *in.ToWarehouseID == in.WarehouseID && !useBins[in.WarehouseID] {
+		return date, fieldErr("to_warehouse_id", "調入倉不可與調出倉相同(只有啟用儲位的倉庫可在同倉不同儲位之間調撥)")
+	}
+	if in.DocType == TypeCount && useBins[in.WarehouseID] {
+		return date, errBinCounting
+	}
 	return date, nil
 }
 
@@ -471,6 +509,7 @@ func saveLines(ctx context.Context, q *db.Queries, docID int64, lines []prepared
 		if err := q.AddStockDocumentLine(ctx, db.AddStockDocumentLineParams{
 			DocumentID: docID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
 			Factor: l.factor, BaseQty: l.baseQty, SystemQty: l.systemQty, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry,
+			BinCode: l.BinCode, ToBinCode: l.ToBinCode,
 		}); err != nil {
 			return err
 		}
@@ -578,7 +617,7 @@ func (m *Module) createDocument(c *gin.Context) {
 			if len(in.Lines) == 0 {
 				return errNoLines
 			}
-			if lines, err = prepareLines(ctx, q, a.CompanyID, in.DocType, in.Lines); err != nil {
+			if lines, err = prepareLines(ctx, q, a.CompanyID, in.DocType, in.WarehouseID, in.ToWarehouseID, in.Lines); err != nil {
 				return err
 			}
 		}
@@ -655,7 +694,7 @@ func (m *Module) updateDocument(c *gin.Context) {
 		if len(in.Lines) == 0 {
 			return errNoLines
 		}
-		lines, err := prepareLines(ctx, q, a.CompanyID, in.DocType, in.Lines)
+		lines, err := prepareLines(ctx, q, a.CompanyID, in.DocType, in.WarehouseID, in.ToWarehouseID, in.Lines)
 		if err != nil {
 			return err
 		}
@@ -854,10 +893,10 @@ func movementsOf(cur db.StockDocument, doc documentDTO) []Movement {
 		switch cur.DocType {
 		case TypeAdjustment:
 			moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.BaseQty, SourceLineID: &lineID,
-				LotNo: l.LotNo, Expiry: exp, AllowExpired: true}) // 調整減少常用於報廢,允許出已過期的批號
+				LotNo: l.LotNo, Expiry: exp, AllowExpired: true, BinCode: l.BinCode}) // 調整減少常用於報廢,允許出已過期的批號
 		case TypeTransfer:
 			moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: l.BaseQty.Neg(), SourceLineID: &lineID,
-				LotNo: l.LotNo, TransferTo: cur.ToWarehouseID, AllowExpired: true})
+				LotNo: l.LotNo, TransferTo: cur.ToWarehouseID, AllowExpired: true, BinCode: l.BinCode, ToBinCode: l.ToBinCode})
 		case TypeCount:
 			if l.DiffQty != nil && !l.DiffQty.IsZero() {
 				moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.DiffQty, SourceLineID: &lineID,

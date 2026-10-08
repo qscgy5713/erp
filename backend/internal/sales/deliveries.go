@@ -73,6 +73,7 @@ type deliveryLineDTO struct {
 	ItemLotControl   string          `json:"item_lot_control"` // none / lot / lot_expiry
 	LotNo            string          `json:"lot_no"`           // 輸入的批號(出貨可空白)
 	ExpiryDate       *string         `json:"expiry_date"`
+	BinCode          string          `json:"bin_code"`
 	// 已過帳:實際出庫(或退回入庫)的批號,先到期先出可能拆成多個
 	Lots []lotUsedDTO `json:"lots"`
 }
@@ -148,7 +149,7 @@ func loadDelivery(ctx context.Context, q *db.Queries, a *authctx.Actor, id int64
 			BaseUnitName: l.BaseUnitName, Qty: l.Qty, Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice,
 			Amount: l.Amount, BaseAmount: l.BaseAmount, SoLineID: l.SoLineID, SoNo: l.SoNo,
 			DeliveryLineID: l.DeliveryLineID, SourceDeliveryNo: l.SourceDeliveryNo, Note: l.Note,
-			ItemLotControl: l.ItemLotControl, LotNo: l.LotNo, ExpiryDate: dateString(l.ExpiryDate), Lots: []lotUsedDTO{},
+			ItemLotControl: l.ItemLotControl, LotNo: l.LotNo, ExpiryDate: dateString(l.ExpiryDate), BinCode: l.BinCode, Lots: []lotUsedDTO{},
 		}
 	}
 	if d.Status == "posted" || d.Status == "closed" {
@@ -436,6 +437,9 @@ func prepareDelivery(ctx context.Context, q *db.Queries, a *authctx.Actor, exclu
 	if err := checkDeliveryLots(ctx, q, a.CompanyID, in.DocType, p.lines, errs); err != nil {
 		return p, err
 	}
+	if err := checkDeliveryBins(ctx, q, a.CompanyID, in.WarehouseID, in.DocType, p.lines, errs); err != nil {
+		return p, err
+	}
 	if len(errs) > 0 {
 		fields := map[string]string{}
 		for i, msg := range errs {
@@ -473,6 +477,27 @@ func checkDeliveryLots(ctx context.Context, q *db.Queries, companyID int64, docT
 	return nil
 }
 
+// checkDeliveryBins 檢查並整理明細的儲位(銷貨退回為入庫,啟用儲位的倉庫須指定;出貨可留空)。
+func checkDeliveryBins(ctx context.Context, q *db.Queries, companyID, warehouseID int64, docType string, lines []pricedLine, errs map[int]string) error {
+	inputs := make([]inventory.BinInput, len(lines))
+	for i, l := range lines {
+		inputs[i] = inventory.BinInput{ItemID: l.ItemID, WarehouseID: warehouseID, BinCode: l.BinCode, Inbound: docType == TypeReturn}
+	}
+	codes, _, binErrs, err := inventory.CheckBinInputs(ctx, q, companyID, inputs)
+	if err != nil {
+		return err
+	}
+	for i, msg := range binErrs {
+		if _, exists := errs[i]; !exists {
+			errs[i] = msg
+		}
+	}
+	for i := range lines {
+		lines[i].BinCode = codes[i]
+	}
+	return nil
+}
+
 func saveDeliveryLines(ctx context.Context, q *db.Queries, deliveryID int64, lines []pricedLine) error {
 	if err := q.DeleteDeliveryLines(ctx, deliveryID); err != nil {
 		return err
@@ -481,7 +506,7 @@ func saveDeliveryLines(ctx context.Context, q *db.Queries, deliveryID int64, lin
 		if err := q.AddDeliveryLine(ctx, db.AddDeliveryLineParams{
 			DeliveryID: deliveryID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
 			Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice, Amount: l.Amount, BaseAmount: l.BaseAmount,
-			SoLineID: l.SoLineID, DeliveryLineID: l.DeliveryLineID, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry,
+			SoLineID: l.SoLineID, DeliveryLineID: l.DeliveryLineID, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry, BinCode: l.BinCode,
 		}); err != nil {
 			return err
 		}
@@ -884,7 +909,7 @@ func movementsOf(cur db.Delivery, doc deliveryDTO) []inventory.Movement {
 		exp, _ := trade.OptionalInputDate("expiry_date", l.ExpiryDate)
 		// 出貨不可出已過期的批號;銷貨退回是入庫,效期不受限
 		moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: qty, SourceLineID: &lineID,
-			LotNo: l.LotNo, Expiry: exp, AllowExpired: false})
+			LotNo: l.LotNo, Expiry: exp, AllowExpired: false, BinCode: l.BinCode})
 	}
 	return moves
 }

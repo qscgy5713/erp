@@ -298,9 +298,9 @@ DELETE FROM goods_receipt_lines WHERE receipt_id = @receipt_id;
 
 -- name: AddGoodsReceiptLine :exec
 INSERT INTO goods_receipt_lines (receipt_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date)
+                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date, bin_code)
 VALUES (@receipt_id, @line_no, @item_id, @unit_id, @qty, @factor, @base_qty, @unit_price, @amount, @base_amount,
-        sqlc.narg(po_line_id), sqlc.narg(receipt_line_id), @note, @lot_no, sqlc.narg(expiry_date));
+        sqlc.narg(po_line_id), sqlc.narg(receipt_line_id), @note, @lot_no, sqlc.narg(expiry_date), @bin_code);
 
 -- name: ReceiptLineLots :many
 -- 進貨退出預設沿用被退進貨明細的批號

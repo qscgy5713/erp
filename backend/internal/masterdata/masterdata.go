@@ -55,6 +55,10 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/warehouses", m.listWarehouses)
 	g.POST("/warehouses", auth.Require(p.WarehouseWrite), m.createWarehouse)
 	g.PUT("/warehouses/:id", auth.Require(p.WarehouseWrite), m.updateWarehouse)
+	g.GET("/bins", m.listBins) // 開單選儲位用,只需登入
+	g.POST("/bins", auth.Require(p.WarehouseWrite), m.createBin)
+	g.PUT("/bins/:id", auth.Require(p.WarehouseWrite), m.updateBin)
+	g.DELETE("/bins/:id", auth.Require(p.WarehouseWrite), m.deleteBin)
 
 	// 開單選料用:只需登入,只回傳啟用中料品的精簡欄位
 	g.GET("/item-options", m.itemOptions)

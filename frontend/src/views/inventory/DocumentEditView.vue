@@ -20,6 +20,8 @@ import { buildTree } from '@/utils/tree'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
+import BinCell from '@/components/BinCell.vue'
+import { useBinStore } from '@/composables/useBinStore'
 
 const route = useRoute()
 const router = useRouter()
@@ -163,6 +165,14 @@ function lineError(uiIndex: number): string | undefined {
   return i < 0 ? undefined : fieldErrors.value[`lines.${i}`]
 }
 
+// ---- 儲位:倉庫有啟用儲位時顯示;調整增加為入庫(必填),減少 / 調撥可留空自動分配;調撥另選調入倉的儲位 ----
+const binStore = useBinStore()
+const binTick = ref(0)
+void binStore.ensureWarehouses().then(() => binTick.value++)
+const usesBins = (id: number | null) => binTick.value >= 0 && !!id && binStore.usesBins(id)
+const binColumn = computed(() => docType.value !== 'count' && usesBins(form.warehouse_id))
+const toBinColumn = computed(() => docType.value === 'transfer' && usesBins(form.to_warehouse_id))
+
 // ---- 批號與效期 ----
 const lotControlled = (row: LineRow) => !!row.item_lot_control && row.item_lot_control !== 'none'
 const lotColumn = computed(() => form.lines.some(lotControlled))
@@ -191,6 +201,8 @@ function payload() {
         unit_id: l.unit_id ?? 0,
         qty: l.qty === '' ? null : l.qty,
         note: l.note,
+        bin_code: binColumn.value ? (l.bin_code ?? '') : '',
+        to_bin_code: toBinColumn.value ? (l.to_bin_code ?? '') : '',
         lot_no: lotControlled(l) ? (l.lot_no ?? '') : '',
         expiry_date: lotControlled(l) ? l.expiry_date || null : null,
       })),
@@ -366,7 +378,9 @@ onMounted(async () => {
             <el-form-item label="調入倉" :error="fieldErrors.to_warehouse_id">
               <el-select v-model="form.to_warehouse_id" style="width: 100%">
                 <el-option
-                  v-for="w in activeWarehouses.filter((x) => x.id !== form.warehouse_id)"
+                  v-for="w in activeWarehouses.filter(
+                    (x) => x.id !== form.warehouse_id || x.use_bins,
+                  )"
                   :key="w.id"
                   :label="`${w.code} ${w.name}`"
                   :value="w.id"
@@ -426,6 +440,30 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
+        <el-table-column
+          v-if="binColumn"
+          :label="docType === 'transfer' ? '調出儲位' : '儲位'"
+          width="150"
+        >
+          <template #default="{ row }">
+            <BinCell
+              v-model:code="row.bin_code"
+              :warehouse-id="form.warehouse_id"
+              :mode="lotMode(row)"
+              :editable="editable"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column v-if="toBinColumn" label="調入儲位" width="150">
+          <template #default="{ row }">
+            <BinCell
+              v-model:code="row.to_bin_code"
+              :warehouse-id="form.to_warehouse_id"
+              mode="in"
+              :editable="editable"
+            />
+          </template>
+        </el-table-column>
         <el-table-column v-if="lotColumn" label="批號 / 效期" width="250">
           <template #default="{ row }">
             <LotCell

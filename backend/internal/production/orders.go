@@ -50,6 +50,7 @@ type woLineDTO struct {
 	UnitName       string          `json:"unit_name"`
 	Qty            decimal.Decimal `json:"qty"`
 	LotNo          string          `json:"lot_no"`
+	BinCode        string          `json:"bin_code"` // 領料倉有啟用儲位時可指定,留空自動分配
 	Note           string          `json:"note"`
 	ItemLotControl string          `json:"item_lot_control"`
 	OnHand         decimal.Decimal `json:"on_hand"` // 領料倉的現有量(提示用)
@@ -73,6 +74,7 @@ type woDTO struct {
 	MaterialWarehouse   string          `json:"material_warehouse_name"`
 	ProcessingCost      decimal.Decimal `json:"processing_cost"`
 	OutputLotNo         string          `json:"output_lot_no"`
+	OutputBinCode       string          `json:"output_bin_code"` // 成品入庫倉有啟用儲位時必填
 	OutputExpiry        *string         `json:"output_expiry_date"`
 	DueDate             *string         `json:"due_date"`
 	Note                string          `json:"note"`
@@ -108,14 +110,14 @@ func loadOrder(ctx context.Context, q *db.Queries, companyID, id int64) (woDTO, 
 		ItemCode: w.ItemCode, ItemName: w.ItemName, UnitName: w.UnitName, ItemLotControl: w.ItemLotControl,
 		PlanQty: w.PlanQty, WarehouseID: w.WarehouseID, WarehouseName: w.WarehouseName,
 		MaterialWarehouseID: w.MaterialWarehouseID, MaterialWarehouse: w.MaterialWarehouseName,
-		ProcessingCost: w.ProcessingCost, OutputLotNo: w.OutputLotNo, OutputExpiry: dateStr(w.OutputExpiry),
+		ProcessingCost: w.ProcessingCost, OutputLotNo: w.OutputLotNo, OutputBinCode: w.OutputBinCode, OutputExpiry: dateStr(w.OutputExpiry),
 		DueDate: dateStr(w.DueDate), Note: w.Note, CreatedByName: w.CreatedByName, SubmittedByName: w.SubmittedByName,
 		SubmittedAt: w.SubmittedAt, ApprovedByName: w.ApprovedByName, ApprovedAt: w.ApprovedAt, PostedByName: w.PostedByName,
 		PostedAt: w.PostedAt, Lines: make([]woLineDTO, len(rows)), OutputLots: []lotUsedDTO{}, Version: w.Version, UpdatedAt: w.UpdatedAt,
 	}
 	for i, l := range rows {
 		out.Lines[i] = woLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName,
-			Qty: l.Qty, LotNo: l.LotNo, Note: l.Note, ItemLotControl: l.ItemLotControl, OnHand: l.OnHand, Lots: []lotUsedDTO{}}
+			Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode, Note: l.Note, ItemLotControl: l.ItemLotControl, OnHand: l.OnHand, Lots: []lotUsedDTO{}}
 	}
 	if w.Status == "posted" {
 		used, err := q.ListWorkOrderLots(ctx, id)
@@ -282,10 +284,11 @@ func (m *Module) explode(c *gin.Context) {
 // ---- 建立與修改(草稿) ----
 
 type woLineInput struct {
-	ItemID int64           `json:"item_id" binding:"required"`
-	Qty    decimal.Decimal `json:"qty"`
-	LotNo  string          `json:"lot_no"`
-	Note   string          `json:"note" binding:"max=255"`
+	ItemID  int64           `json:"item_id" binding:"required"`
+	Qty     decimal.Decimal `json:"qty"`
+	LotNo   string          `json:"lot_no"`
+	BinCode string          `json:"bin_code"`
+	Note    string          `json:"note" binding:"max=255"`
 }
 
 type woInput struct {
@@ -296,6 +299,7 @@ type woInput struct {
 	MaterialWarehouseID int64           `json:"material_warehouse_id" binding:"required"`
 	ProcessingCost      decimal.Decimal `json:"processing_cost"`
 	OutputLotNo         string          `json:"output_lot_no"`
+	OutputBinCode       string          `json:"output_bin_code"`
 	OutputExpiry        *string         `json:"output_expiry_date"`
 	DueDate             *string         `json:"due_date"`
 	Note                string          `json:"note" binding:"max=2000"`
@@ -308,6 +312,7 @@ type preparedOrder struct {
 	due    *time.Time
 	expiry *time.Time
 	lotNo  string
+	binNo  string
 	lines  []woLineInput
 }
 
@@ -423,6 +428,30 @@ func prepareOrder(ctx context.Context, q *db.Queries, companyID int64, in *woInp
 		lines[i].LotNo = checked[i].LotNo
 	}
 	p.lotNo, p.expiry = checked[len(lines)].LotNo, checked[len(lines)].Expiry
+	// 儲位:領料倉啟用儲位時領料可指定(空白自動分配);成品入庫倉啟用儲位時須指定入庫儲位
+	binInputs := make([]inventory.BinInput, 0, len(lines)+1)
+	for _, l := range lines {
+		binInputs = append(binInputs, inventory.BinInput{ItemID: l.ItemID, WarehouseID: in.MaterialWarehouseID, BinCode: l.BinCode})
+	}
+	binInputs = append(binInputs, inventory.BinInput{ItemID: in.ItemID, WarehouseID: in.WarehouseID, BinCode: in.OutputBinCode, Inbound: true})
+	codes, _, binErrs, err := inventory.CheckBinInputs(ctx, q, companyID, binInputs)
+	if err != nil {
+		return p, err
+	}
+	for i, msg := range binErrs {
+		if i == len(lines) {
+			fields["output_bin_code"] = msg
+		} else {
+			fields[fmt.Sprintf("lines.%d", i)] = msg
+		}
+	}
+	if len(fields) > 0 {
+		return p, apperr.Validation(fields)
+	}
+	for i := range lines {
+		lines[i].BinCode = codes[i]
+	}
+	p.binNo = codes[len(lines)]
 	p.lines = lines
 	return p, nil
 }
@@ -433,7 +462,7 @@ func saveOrderLines(ctx context.Context, q *db.Queries, id int64, lines []woLine
 	}
 	for i, l := range lines {
 		if err := q.AddWorkOrderLine(ctx, db.AddWorkOrderLineParams{WorkOrderID: id, LineNo: int32(i + 1), ItemID: l.ItemID,
-			Qty: l.Qty, LotNo: l.LotNo, Note: l.Note}); err != nil {
+			Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode, Note: l.Note}); err != nil {
 			return err
 		}
 	}
@@ -460,7 +489,7 @@ func (m *Module) createOrder(c *gin.Context) {
 		}
 		w, err := q.CreateWorkOrder(ctx, db.CreateWorkOrderParams{CompanyID: a.CompanyID, DocNo: no, DocDate: p.date, ItemID: in.ItemID,
 			PlanQty: in.PlanQty, WarehouseID: in.WarehouseID, MaterialWarehouseID: in.MaterialWarehouseID,
-			ProcessingCost: in.ProcessingCost, OutputLotNo: p.lotNo, OutputExpiry: p.expiry, DueDate: p.due, Note: in.Note, ActorID: &a.UserID})
+			ProcessingCost: in.ProcessingCost, OutputLotNo: p.lotNo, OutputBinCode: p.binNo, OutputExpiry: p.expiry, DueDate: p.due, Note: in.Note, ActorID: &a.UserID})
 		if err != nil {
 			return err
 		}
@@ -515,7 +544,7 @@ func (m *Module) updateOrder(c *gin.Context) {
 		}
 		if _, err := q.UpdateWorkOrderHeader(ctx, db.UpdateWorkOrderHeaderParams{ID: id, CompanyID: a.CompanyID, DocDate: p.date,
 			ItemID: in.ItemID, PlanQty: in.PlanQty, WarehouseID: in.WarehouseID, MaterialWarehouseID: in.MaterialWarehouseID,
-			ProcessingCost: in.ProcessingCost, OutputLotNo: p.lotNo, OutputExpiry: p.expiry, DueDate: p.due, Note: in.Note,
+			ProcessingCost: in.ProcessingCost, OutputLotNo: p.lotNo, OutputBinCode: p.binNo, OutputExpiry: p.expiry, DueDate: p.due, Note: in.Note,
 			ActorID: &a.UserID, Version: in.Version}); database.IsNoRows(err) {
 			return apperr.ErrVersionConflict
 		} else if err != nil {
@@ -641,13 +670,13 @@ func applyAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cur db.Wo
 	case docstate.Post:
 		moves := make([]inventory.Movement, 0, len(doc.Lines))
 		for _, l := range doc.Lines {
-			moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.MaterialWarehouseID, Qty: l.Qty.Neg(), LotNo: l.LotNo})
+			moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.MaterialWarehouseID, Qty: l.Qty.Neg(), LotNo: l.LotNo, BinCode: l.BinCode})
 		}
 		if err := inventory.Post(ctx, q, opt, issue, moves); err != nil {
 			return err
 		}
 		return inventory.Post(ctx, q, opt, receipt, []inventory.Movement{{
-			ItemID: cur.ItemID, WarehouseID: cur.WarehouseID, Qty: cur.PlanQty, LotNo: cur.OutputLotNo, Expiry: cur.OutputExpiry,
+			ItemID: cur.ItemID, WarehouseID: cur.WarehouseID, Qty: cur.PlanQty, LotNo: cur.OutputLotNo, Expiry: cur.OutputExpiry, BinCode: cur.OutputBinCode,
 		}})
 	case docstate.Unpost:
 		// 先沖銷成品入庫(成品已被領用或出貨就會因庫存不足被擋),再沖銷領料

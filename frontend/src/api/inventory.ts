@@ -88,6 +88,9 @@ export interface StockLine {
   lot_no?: string
   expiry_date?: string | null
   lots?: LotUsed[]
+  /** 啟用儲位的倉庫:儲位代號(入庫必填,出庫可留空自動分配);調撥另有調入倉的儲位 */
+  bin_code?: string
+  to_bin_code?: string
 }
 
 export interface StockDocument {
@@ -194,7 +197,22 @@ export interface ItemOption {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface BinStock {
+  bin_id: number
+  bin_code: string
+  bin_name: string
+  warehouse_id: number
+  warehouse_code: string
+  warehouse_name: string
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  qty: Decimal
+}
+
 export const inventoryApi = {
+  binStock: (q: Q) => requestPage<BinStock>(`/inventory/bin-stock${qs(q)}`),
   lots: (q: Q) => requestPage<LotBalance>(`/inventory/lots${qs(q)}`),
   lotLedger: (id: number) => http.get<LotLedger>(`/inventory/lots/${id}/ledger`),
   lotOptions: (item_id: number, warehouse_id?: number | null) =>

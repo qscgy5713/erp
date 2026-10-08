@@ -14,11 +14,12 @@ import (
 )
 
 var (
-	errUnitCodeDup      = apperr.Conflict("UNIT-001", "單位代碼已存在")
-	errCategoryCodeDup  = apperr.Conflict("CAT-001", "分類代碼已存在")
-	errCategoryParent   = fieldErr("parent_id", "上層分類不存在")
-	errCategoryCycle    = fieldErr("parent_id", "上層分類不可為自己或自己的下層")
-	errWarehouseCodeDup = apperr.Conflict("WH-001", "倉庫代碼已存在")
+	errUnitCodeDup         = apperr.Conflict("UNIT-001", "單位代碼已存在")
+	errCategoryCodeDup     = apperr.Conflict("CAT-001", "分類代碼已存在")
+	errCategoryParent      = fieldErr("parent_id", "上層分類不存在")
+	errCategoryCycle       = fieldErr("parent_id", "上層分類不可為自己或自己的下層")
+	errWarehouseCodeDup    = apperr.Conflict("WH-001", "倉庫代碼已存在")
+	errWarehouseBinsSwitch = apperr.Conflict("WH-002", "倉庫還有庫存,不能啟用或停用儲位;請先把庫存調整為 0")
 )
 
 // ---- 單位 ----
@@ -240,13 +241,14 @@ type warehouseDTO struct {
 	Name          string `json:"name"`
 	Address       string `json:"address"`
 	AllowNegative bool   `json:"allow_negative"`
+	UseBins       bool   `json:"use_bins"`
 	IsActive      bool   `json:"is_active"`
 	Version       int32  `json:"version"`
 }
 
 func toWarehouseDTO(w db.Warehouse) warehouseDTO {
 	return warehouseDTO{ID: w.ID, Code: w.Code, Name: w.Name, Address: w.Address, AllowNegative: w.AllowNegative,
-		IsActive: w.IsActive, Version: w.Version}
+		UseBins: w.UseBins, IsActive: w.IsActive, Version: w.Version}
 }
 
 func (m *Module) listWarehouses(c *gin.Context) {
@@ -263,6 +265,7 @@ type warehouseInput struct {
 	Name          string `json:"name" binding:"required,max=100"`
 	Address       string `json:"address" binding:"max=255"`
 	AllowNegative bool   `json:"allow_negative"`
+	UseBins       bool   `json:"use_bins"`
 	IsActive      bool   `json:"is_active"`
 	Version       int32  `json:"version"`
 }
@@ -284,7 +287,7 @@ func (m *Module) createWarehouse(c *gin.Context) {
 		var err error
 		out, err = q.CreateWarehouse(ctx, db.CreateWarehouseParams{
 			CompanyID: a.CompanyID, Code: in.Code, Name: in.Name, Address: in.Address,
-			AllowNegative: in.AllowNegative, CreatedBy: &a.UserID,
+			AllowNegative: in.AllowNegative, UseBins: in.UseBins, CreatedBy: &a.UserID,
 		})
 		if err != nil {
 			return uniqueOr(err, "warehouses_company_code_key", errWarehouseCodeDup)
@@ -315,9 +318,17 @@ func (m *Module) updateWarehouse(c *gin.Context) {
 		if err != nil {
 			return notFoundOr(err)
 		}
+		if in.UseBins != before.UseBins {
+			// 儲位現有量要與倉庫現有量一致,所以只能在倉庫沒有庫存時切換(啟用 / 停用都一樣)
+			if has, err := q.WarehouseHasStock(ctx, id); err != nil {
+				return err
+			} else if has {
+				return errWarehouseBinsSwitch
+			}
+		}
 		out, err = q.UpdateWarehouse(ctx, db.UpdateWarehouseParams{
 			ID: id, CompanyID: a.CompanyID, Code: in.Code, Name: in.Name, Address: in.Address,
-			AllowNegative: in.AllowNegative, IsActive: in.IsActive, Version: in.Version, UpdatedBy: &a.UserID,
+			AllowNegative: in.AllowNegative, UseBins: in.UseBins, IsActive: in.IsActive, Version: in.Version, UpdatedBy: &a.UserID,
 		})
 		if err != nil {
 			return uniqueOr(versionConflictOr(err), "warehouses_company_code_key", errWarehouseCodeDup)

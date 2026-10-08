@@ -36,8 +36,8 @@ func (q *Queries) AddBomLine(ctx context.Context, arg AddBomLineParams) error {
 }
 
 const addWorkOrderLine = `-- name: AddWorkOrderLine :exec
-INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, note)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, bin_code, note)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type AddWorkOrderLineParams struct {
@@ -46,6 +46,7 @@ type AddWorkOrderLineParams struct {
 	ItemID      int64
 	Qty         decimal.Decimal
 	LotNo       string
+	BinCode     string
 	Note        string
 }
 
@@ -56,6 +57,7 @@ func (q *Queries) AddWorkOrderLine(ctx context.Context, arg AddWorkOrderLinePara
 		arg.ItemID,
 		arg.Qty,
 		arg.LotNo,
+		arg.BinCode,
 		arg.Note,
 	)
 	return err
@@ -222,10 +224,10 @@ func (q *Queries) CreateBom(ctx context.Context, arg CreateBomParams) (Bom, erro
 
 const createWorkOrder = `-- name: CreateWorkOrder :one
 INSERT INTO work_orders (company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id,
-                         processing_cost, output_lot_no, output_expiry, due_date, note, created_by, updated_by)
+                         processing_cost, output_lot_no, output_expiry, output_bin_code, due_date, note, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13, $13)
-RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+        $8, $9, $10, $11, $12, $13, $14, $14)
+RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, output_bin_code
 `
 
 type CreateWorkOrderParams struct {
@@ -239,6 +241,7 @@ type CreateWorkOrderParams struct {
 	ProcessingCost      decimal.Decimal
 	OutputLotNo         string
 	OutputExpiry        *time.Time
+	OutputBinCode       string
 	DueDate             *time.Time
 	Note                string
 	ActorID             *int64
@@ -256,6 +259,7 @@ func (q *Queries) CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams
 		arg.ProcessingCost,
 		arg.OutputLotNo,
 		arg.OutputExpiry,
+		arg.OutputBinCode,
 		arg.DueDate,
 		arg.Note,
 		arg.ActorID,
@@ -287,6 +291,7 @@ func (q *Queries) CreateWorkOrder(ctx context.Context, arg CreateWorkOrderParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OutputBinCode,
 	)
 	return i, err
 }
@@ -405,7 +410,7 @@ func (q *Queries) GetBomByItem(ctx context.Context, arg GetBomByItemParams) (Bom
 }
 
 const getWorkOrder = `-- name: GetWorkOrder :one
-SELECT w.id, w.company_id, w.doc_no, w.doc_date, w.item_id, w.plan_qty, w.warehouse_id, w.material_warehouse_id, w.processing_cost, w.output_lot_no, w.output_expiry, w.due_date, w.status, w.note, w.submitted_by, w.submitted_at, w.approved_by, w.approved_at, w.posted_by, w.posted_at, w.created_by, w.updated_by, w.version, w.created_at, w.updated_at, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.lot_control AS item_lot_control,
+SELECT w.id, w.company_id, w.doc_no, w.doc_date, w.item_id, w.plan_qty, w.warehouse_id, w.material_warehouse_id, w.processing_cost, w.output_lot_no, w.output_expiry, w.due_date, w.status, w.note, w.submitted_by, w.submitted_at, w.approved_by, w.approved_at, w.posted_by, w.posted_at, w.created_by, w.updated_by, w.version, w.created_at, w.updated_at, w.output_bin_code, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.lot_control AS item_lot_control,
        wh.name AS warehouse_name, mwh.name AS material_warehouse_name,
        cu.name AS created_by_name, su.name AS submitted_by_name, au.name AS approved_by_name, pu.name AS posted_by_name
 FROM work_orders w
@@ -447,6 +452,7 @@ type GetWorkOrderRow struct {
 	Version               int32
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+	OutputBinCode         string
 	ItemCode              string
 	ItemName              string
 	UnitName              string
@@ -488,6 +494,7 @@ func (q *Queries) GetWorkOrder(ctx context.Context, arg GetWorkOrderParams) (Get
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OutputBinCode,
 		&i.ItemCode,
 		&i.ItemName,
 		&i.UnitName,
@@ -694,7 +701,7 @@ func (q *Queries) ListProductionItems(ctx context.Context, arg ListProductionIte
 }
 
 const listWorkOrderLines = `-- name: ListWorkOrderLines :many
-SELECT l.work_order_id, l.line_no, l.item_id, l.qty, l.lot_no, l.note, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.lot_control AS item_lot_control,
+SELECT l.work_order_id, l.line_no, l.item_id, l.qty, l.lot_no, l.note, l.bin_code, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.lot_control AS item_lot_control,
        COALESCE((SELECT b.qty FROM inventory_balances b WHERE b.item_id = l.item_id AND b.warehouse_id = $1), 0)::numeric AS on_hand
 FROM work_order_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE l.work_order_id = $2 ORDER BY l.line_no
@@ -712,6 +719,7 @@ type ListWorkOrderLinesRow struct {
 	Qty            decimal.Decimal
 	LotNo          string
 	Note           string
+	BinCode        string
 	ItemCode       string
 	ItemName       string
 	UnitName       string
@@ -735,6 +743,7 @@ func (q *Queries) ListWorkOrderLines(ctx context.Context, arg ListWorkOrderLines
 			&i.Qty,
 			&i.LotNo,
 			&i.Note,
+			&i.BinCode,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,
@@ -888,7 +897,7 @@ func (q *Queries) ListWorkOrders(ctx context.Context, arg ListWorkOrdersParams) 
 }
 
 const lockWorkOrder = `-- name: LockWorkOrder :one
-SELECT id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at FROM work_orders WHERE id = $1 AND company_id = $2 FOR UPDATE
+SELECT id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, output_bin_code FROM work_orders WHERE id = $1 AND company_id = $2 FOR UPDATE
 `
 
 type LockWorkOrderParams struct {
@@ -925,6 +934,7 @@ func (q *Queries) LockWorkOrder(ctx context.Context, arg LockWorkOrderParams) (W
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OutputBinCode,
 	)
 	return i, err
 }
@@ -1027,7 +1037,7 @@ SET status       = $1,
     version      = version + 1,
     updated_by   = $3::bigint
 WHERE id = $4 AND company_id = $5 AND version = $6
-RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, output_bin_code
 `
 
 type SetWorkOrderStatusParams struct {
@@ -1075,6 +1085,7 @@ func (q *Queries) SetWorkOrderStatus(ctx context.Context, arg SetWorkOrderStatus
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OutputBinCode,
 	)
 	return i, err
 }
@@ -1124,10 +1135,10 @@ func (q *Queries) UpdateBom(ctx context.Context, arg UpdateBomParams) (Bom, erro
 const updateWorkOrderHeader = `-- name: UpdateWorkOrderHeader :one
 UPDATE work_orders SET doc_date = $1, item_id = $2, plan_qty = $3, warehouse_id = $4,
     material_warehouse_id = $5, processing_cost = $6, output_lot_no = $7,
-    output_expiry = $8, due_date = $9, note = $10,
-    version = version + 1, updated_by = $11
-WHERE id = $12 AND company_id = $13 AND version = $14 AND status = 'draft'
-RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+    output_expiry = $8, output_bin_code = $9, due_date = $10, note = $11,
+    version = version + 1, updated_by = $12
+WHERE id = $13 AND company_id = $14 AND version = $15 AND status = 'draft'
+RETURNING id, company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id, processing_cost, output_lot_no, output_expiry, due_date, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, output_bin_code
 `
 
 type UpdateWorkOrderHeaderParams struct {
@@ -1139,6 +1150,7 @@ type UpdateWorkOrderHeaderParams struct {
 	ProcessingCost      decimal.Decimal
 	OutputLotNo         string
 	OutputExpiry        *time.Time
+	OutputBinCode       string
 	DueDate             *time.Time
 	Note                string
 	ActorID             *int64
@@ -1157,6 +1169,7 @@ func (q *Queries) UpdateWorkOrderHeader(ctx context.Context, arg UpdateWorkOrder
 		arg.ProcessingCost,
 		arg.OutputLotNo,
 		arg.OutputExpiry,
+		arg.OutputBinCode,
 		arg.DueDate,
 		arg.Note,
 		arg.ActorID,
@@ -1191,6 +1204,7 @@ func (q *Queries) UpdateWorkOrderHeader(ctx context.Context, arg UpdateWorkOrder
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OutputBinCode,
 	)
 	return i, err
 }

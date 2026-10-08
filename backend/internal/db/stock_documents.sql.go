@@ -14,9 +14,9 @@ import (
 
 const addStockDocumentLine = `-- name: AddStockDocumentLine :exec
 INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note,
-                                  lot_no, expiry_date)
+                                  lot_no, expiry_date, bin_code, to_bin_code)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11)
+        $8, $9, $10, $11, $12, $13)
 `
 
 type AddStockDocumentLineParams struct {
@@ -31,6 +31,8 @@ type AddStockDocumentLineParams struct {
 	Note       string
 	LotNo      string
 	ExpiryDate *time.Time
+	BinCode    string
+	ToBinCode  string
 }
 
 func (q *Queries) AddStockDocumentLine(ctx context.Context, arg AddStockDocumentLineParams) error {
@@ -46,6 +48,8 @@ func (q *Queries) AddStockDocumentLine(ctx context.Context, arg AddStockDocument
 		arg.Note,
 		arg.LotNo,
 		arg.ExpiryDate,
+		arg.BinCode,
+		arg.ToBinCode,
 	)
 	return err
 }
@@ -384,7 +388,7 @@ func (q *Queries) GetStockDocument(ctx context.Context, arg GetStockDocumentPara
 }
 
 const listStockDocumentLines = `-- name: ListStockDocumentLines :many
-SELECT l.id, l.document_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.system_qty, l.note, l.lot_no, l.expiry_date, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.lot_control AS item_lot_control,
+SELECT l.id, l.document_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.system_qty, l.note, l.lot_no, l.expiry_date, l.bin_code, l.to_bin_code, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name
 FROM stock_document_lines l
 JOIN items i ON i.id = l.item_id
@@ -407,6 +411,8 @@ type ListStockDocumentLinesRow struct {
 	Note           string
 	LotNo          string
 	ExpiryDate     *time.Time
+	BinCode        string
+	ToBinCode      string
 	ItemCode       string
 	ItemName       string
 	ItemSpec       string
@@ -437,6 +443,8 @@ func (q *Queries) ListStockDocumentLines(ctx context.Context, documentID int64) 
 			&i.Note,
 			&i.LotNo,
 			&i.ExpiryDate,
+			&i.BinCode,
+			&i.ToBinCode,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.ItemSpec,

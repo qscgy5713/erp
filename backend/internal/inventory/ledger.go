@@ -60,8 +60,15 @@ type Movement struct {
 	// AllowExpired 允許出庫已過期的批號(報廢、調整、調撥、沖銷);出貨不允許。
 	AllowExpired bool
 
+	// 儲位:倉庫有啟用儲位時,入庫須指定;出庫可指定,留空自動分配(庫存多的儲位先出)。
+	// ToBinCode 為調撥目的倉庫的儲位(目的倉有啟用儲位時必填);同一倉庫的調撥來源與目的儲位須不同。
+	BinCode   string
+	ToBinCode string
+
 	reversalOf *int64
 	lotID      *int64 // 沖銷時沿用原分錄的批號
+	binID      *int64 // 沖銷時沿用原分錄的儲位;一般異動由 expandBins 決定
+	toBinID    *int64
 }
 
 // Options 過帳選項。
@@ -95,7 +102,7 @@ func Reverse(ctx context.Context, q *db.Queries, opt Options, src Source) error 
 	for i, t := range txs {
 		moves[i] = Movement{
 			ItemID: t.ItemID, WarehouseID: t.WarehouseID, Qty: t.Qty.Neg(), UnitCost: t.UnitCost,
-			SourceLineID: t.SourceLineID, reversalOf: &t.ID, lotID: t.LotID, AllowExpired: true,
+			SourceLineID: t.SourceLineID, reversalOf: &t.ID, lotID: t.LotID, binID: t.BinID, AllowExpired: true,
 		}
 	}
 	// 沖銷分錄沿用原單據日期,收發存報表才會在同一期間互相抵銷
@@ -216,8 +223,15 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 
 	// 批號:展開成逐批號的分錄(先到期先出、調撥沿用批號),再更新批號現有量。
 	// (料品, 倉庫) 的鎖已取得,批號列的鎖在其後取得,上鎖順序一致
+	moves, err = expandBins(ctx, q, opt, moves, itemByID, whByID)
+	if err != nil {
+		return err
+	}
 	posts, err := expand(ctx, q, opt, src, moves, itemByID, whByID)
 	if err != nil {
+		return err
+	}
+	if err := applyBinBalances(ctx, q, opt, posts, itemByID); err != nil {
 		return err
 	}
 	if err := applyLotBalances(ctx, q, opt, posts, itemByID, whByID); err != nil {
@@ -233,7 +247,7 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 		if _, err := q.InsertInventoryTransaction(ctx, db.InsertInventoryTransactionParams{
 			CompanyID: opt.CompanyID, ItemID: p.item, WarehouseID: p.wh, DocDate: src.DocDate,
 			Qty: p.qty, UnitCost: p.cost, SourceType: src.Type, SourceID: src.ID,
-			SourceLineID: p.line, SourceNo: src.No, ReversalOf: p.reversalOf, CreatedBy: opt.ActorID, LotID: p.lotID,
+			SourceLineID: p.line, SourceNo: src.No, ReversalOf: p.reversalOf, CreatedBy: opt.ActorID, LotID: p.lotID, BinID: p.binID,
 		}); err != nil {
 			return err
 		}

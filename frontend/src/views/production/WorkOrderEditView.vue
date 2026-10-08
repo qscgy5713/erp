@@ -13,6 +13,8 @@ import { formatDateTime } from '@/utils/format'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
+import BinCell from '@/components/BinCell.vue'
+import { useBinStore } from '@/composables/useBinStore'
 
 const route = useRoute()
 const router = useRouter()
@@ -49,6 +51,7 @@ const form = reactive({
   material_warehouse_id: null as number | null,
   processing_cost: '0',
   output_lot_no: '',
+  output_bin_code: '',
   output_expiry_date: null as string | null,
   due_date: null as string | null,
   note: '',
@@ -67,6 +70,7 @@ function applyDoc(d: WorkOrder) {
     material_warehouse_id: d.material_warehouse_id,
     processing_cost: d.processing_cost,
     output_lot_no: d.output_lot_no,
+    output_bin_code: d.output_bin_code,
     output_expiry_date: d.output_expiry_date,
     due_date: d.due_date,
     note: d.note,
@@ -91,6 +95,14 @@ async function load() {
     loading.value = false
   }
 }
+
+// ---- 儲位:成品入庫倉啟用儲位時成品儲位必填;領料倉啟用儲位時領料可指定(留空自動分配) ----
+const binStore = useBinStore()
+const binTick = ref(0)
+void binStore.ensureWarehouses().then(() => binTick.value++)
+const usesBins = (id: number | null) => binTick.value >= 0 && !!id && binStore.usesBins(id)
+const outputBin = computed(() => usesBins(form.warehouse_id))
+const materialBin = computed(() => usesBins(form.material_warehouse_id))
 
 // ---- 領料明細 ----
 
@@ -162,6 +174,7 @@ function payload() {
     material_warehouse_id: form.material_warehouse_id ?? 0,
     processing_cost: form.processing_cost === '' ? '0' : form.processing_cost,
     output_lot_no: form.item_lot_control !== 'none' ? form.output_lot_no : '',
+    output_bin_code: outputBin.value ? form.output_bin_code : '',
     output_expiry_date:
       form.item_lot_control === 'lot_expiry' ? form.output_expiry_date || null : null,
     due_date: form.due_date || null,
@@ -172,6 +185,7 @@ function payload() {
         item_id: l.item_id,
         qty: l.qty === '' ? '0' : l.qty,
         lot_no: lotControlled(l) ? (l.lot_no ?? '') : '',
+        bin_code: materialBin.value ? (l.bin_code ?? '') : '',
         note: l.note,
       })),
     version: doc.value?.version,
@@ -373,6 +387,16 @@ onMounted(async () => {
               />
             </el-form-item>
           </el-col>
+          <el-col v-if="outputBin" :xs="24" :sm="12" :md="6">
+            <el-form-item label="成品儲位" :error="fieldErrors.output_bin_code">
+              <BinCell
+                v-model:code="form.output_bin_code"
+                :warehouse-id="form.warehouse_id"
+                mode="in"
+                :editable="editable"
+              />
+            </el-form-item>
+          </el-col>
           <template v-if="form.item_lot_control !== 'none'">
             <el-col :xs="24" :sm="12" :md="6">
               <el-form-item label="成品批號" :error="fieldErrors.output_lot_no">
@@ -438,6 +462,16 @@ onMounted(async () => {
           <template #default="{ row }">
             <span :class="{ neg: short(row) }">{{ row.on_hand ?? '' }}</span>
             <el-tag v-if="short(row)" size="small" type="danger">不足</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="materialBin" label="儲位" width="150">
+          <template #default="{ row }">
+            <BinCell
+              v-model:code="row.bin_code"
+              :warehouse-id="form.material_warehouse_id"
+              mode="out"
+              :editable="editable"
+            />
           </template>
         </el-table-column>
         <el-table-column label="批號" width="230">

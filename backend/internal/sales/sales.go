@@ -97,6 +97,8 @@ type lineInput struct {
 	// 批號管理料品:出貨可指定批號(空白則先到期先出);銷貨退回須輸入退回的批號(新批號另須效期)
 	LotNo      string  `json:"lot_no"`
 	ExpiryDate *string `json:"expiry_date"`
+	// 啟用儲位的倉庫:銷貨退回須指定儲位;出貨可留空(庫存多的儲位先出)
+	BinCode string `json:"bin_code"`
 
 	expiry *time.Time // 解析後的效期
 }

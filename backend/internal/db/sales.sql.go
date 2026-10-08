@@ -14,9 +14,9 @@ import (
 
 const addDeliveryLine = `-- name: AddDeliveryLine :exec
 INSERT INTO delivery_lines (delivery_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                            base_amount, so_line_id, delivery_line_id, note, lot_no, expiry_date)
+                            base_amount, so_line_id, delivery_line_id, note, lot_no, expiry_date, bin_code)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, $14, $15)
+        $11, $12, $13, $14, $15, $16)
 `
 
 type AddDeliveryLineParams struct {
@@ -35,6 +35,7 @@ type AddDeliveryLineParams struct {
 	Note           string
 	LotNo          string
 	ExpiryDate     *time.Time
+	BinCode        string
 }
 
 func (q *Queries) AddDeliveryLine(ctx context.Context, arg AddDeliveryLineParams) error {
@@ -54,6 +55,7 @@ func (q *Queries) AddDeliveryLine(ctx context.Context, arg AddDeliveryLineParams
 		arg.Note,
 		arg.LotNo,
 		arg.ExpiryDate,
+		arg.BinCode,
 	)
 	return err
 }
@@ -1184,7 +1186,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 }
 
 const listDeliveryLines = `-- name: ListDeliveryLines :many
-SELECT l.id, l.delivery_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.so_line_id, l.delivery_line_id, l.note, l.lot_no, l.expiry_date, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
+SELECT l.id, l.delivery_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.so_line_id, l.delivery_line_id, l.note, l.lot_no, l.expiry_date, l.bin_code, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name,
        so.doc_no AS so_no, src.doc_no AS source_delivery_no
 FROM delivery_lines l
@@ -1216,6 +1218,7 @@ type ListDeliveryLinesRow struct {
 	Note             string
 	LotNo            string
 	ExpiryDate       *time.Time
+	BinCode          string
 	ItemCode         string
 	ItemName         string
 	ItemSpec         string
@@ -1253,6 +1256,7 @@ func (q *Queries) ListDeliveryLines(ctx context.Context, deliveryID int64) ([]Li
 			&i.Note,
 			&i.LotNo,
 			&i.ExpiryDate,
+			&i.BinCode,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.ItemSpec,

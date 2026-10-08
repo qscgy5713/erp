@@ -66,8 +66,29 @@ export interface Warehouse {
   name: string
   address: string
   allow_negative: boolean
+  /** 啟用儲位:所有庫存異動都須指定儲位(出庫可留空自動分配) */
+  use_bins: boolean
   is_active: boolean
   version: number
+}
+
+export interface Bin {
+  id: number
+  warehouse_id: number
+  code: string
+  name: string
+  is_active: boolean
+  /** 儲位內所有料品的數量合計(判斷是否為空) */
+  stock_qty: Decimal
+  version: number
+}
+
+export interface BinInput {
+  warehouse_id: number
+  code: string
+  name: string
+  is_active: boolean
+  version?: number
 }
 
 export interface ItemUnit {
@@ -209,6 +230,11 @@ export const masterdataApi = {
   category: crud<ItemCategory, CategoryInput>('/masterdata/item-categories'),
   warehouses: () => http.get<Warehouse[]>('/masterdata/warehouses'),
   warehouse: crud<Warehouse>('/masterdata/warehouses'),
+  bins: (warehouse_id?: number | null) =>
+    http.get<Bin[]>(`/masterdata/bins${qs({ warehouse_id })}`),
+  createBin: (input: BinInput) => http.post<Bin>('/masterdata/bins', input),
+  updateBin: (id: number, input: BinInput) => http.put<Bin>(`/masterdata/bins/${id}`, input),
+  deleteBin: (id: number) => http.delete(`/masterdata/bins/${id}`),
 
   items: (q: ListQuery & { category_id?: number | null; item_type?: string }) =>
     requestPage<Item>(`/masterdata/items${qs({ ...q })}`),

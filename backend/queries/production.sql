@@ -111,15 +111,15 @@ WHERE l.work_order_id = @work_order_id ORDER BY l.line_no;
 
 -- name: CreateWorkOrder :one
 INSERT INTO work_orders (company_id, doc_no, doc_date, item_id, plan_qty, warehouse_id, material_warehouse_id,
-                         processing_cost, output_lot_no, output_expiry, due_date, note, created_by, updated_by)
+                         processing_cost, output_lot_no, output_expiry, output_bin_code, due_date, note, created_by, updated_by)
 VALUES (@company_id, @doc_no, @doc_date, @item_id, @plan_qty, @warehouse_id, @material_warehouse_id,
-        @processing_cost, @output_lot_no, sqlc.narg(output_expiry), sqlc.narg(due_date), @note, @actor_id, @actor_id)
+        @processing_cost, @output_lot_no, sqlc.narg(output_expiry), @output_bin_code, sqlc.narg(due_date), @note, @actor_id, @actor_id)
 RETURNING *;
 
 -- name: UpdateWorkOrderHeader :one
 UPDATE work_orders SET doc_date = @doc_date, item_id = @item_id, plan_qty = @plan_qty, warehouse_id = @warehouse_id,
     material_warehouse_id = @material_warehouse_id, processing_cost = @processing_cost, output_lot_no = @output_lot_no,
-    output_expiry = sqlc.narg(output_expiry), due_date = sqlc.narg(due_date), note = @note,
+    output_expiry = sqlc.narg(output_expiry), output_bin_code = @output_bin_code, due_date = sqlc.narg(due_date), note = @note,
     version = version + 1, updated_by = @actor_id
 WHERE id = @id AND company_id = @company_id AND version = @version AND status = 'draft'
 RETURNING *;
@@ -128,8 +128,8 @@ RETURNING *;
 DELETE FROM work_order_lines WHERE work_order_id = @work_order_id;
 
 -- name: AddWorkOrderLine :exec
-INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, note)
-VALUES (@work_order_id, @line_no, @item_id, @qty, @lot_no, @note);
+INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, bin_code, note)
+VALUES (@work_order_id, @line_no, @item_id, @qty, @lot_no, @bin_code, @note);
 
 -- name: SetWorkOrderStatus :one
 UPDATE work_orders

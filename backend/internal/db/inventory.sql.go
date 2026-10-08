@@ -105,10 +105,10 @@ func (q *Queries) EnsureBalance(ctx context.Context, arg EnsureBalanceParams) er
 
 const insertInventoryTransaction = `-- name: InsertInventoryTransaction :one
 INSERT INTO inventory_transactions (company_id, item_id, warehouse_id, doc_date, qty, unit_cost, source_type,
-                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id)
+                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id, bin_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11, $12,
-        $13)
+        $13, $14)
 RETURNING id
 `
 
@@ -126,6 +126,7 @@ type InsertInventoryTransactionParams struct {
 	ReversalOf   *int64
 	CreatedBy    *int64
 	LotID        *int64
+	BinID        *int64
 }
 
 func (q *Queries) InsertInventoryTransaction(ctx context.Context, arg InsertInventoryTransactionParams) (int64, error) {
@@ -143,6 +144,7 @@ func (q *Queries) InsertInventoryTransaction(ctx context.Context, arg InsertInve
 		arg.ReversalOf,
 		arg.CreatedBy,
 		arg.LotID,
+		arg.BinID,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -390,7 +392,7 @@ func (q *Queries) ListItemUnitFactors(ctx context.Context, itemIds []int64) ([]L
 }
 
 const listOpenTransactionsBySource = `-- name: ListOpenTransactionsBySource :many
-SELECT t.id, t.company_id, t.item_id, t.warehouse_id, t.doc_date, t.qty, t.unit_cost, t.source_type, t.source_id, t.source_line_id, t.source_no, t.reversal_of, t.created_by, t.created_at, t.lot_id FROM inventory_transactions t
+SELECT t.id, t.company_id, t.item_id, t.warehouse_id, t.doc_date, t.qty, t.unit_cost, t.source_type, t.source_id, t.source_line_id, t.source_no, t.reversal_of, t.created_by, t.created_at, t.lot_id, t.bin_id FROM inventory_transactions t
 WHERE t.source_type = $1 AND t.source_id = $2 AND t.reversal_of IS NULL
   AND NOT EXISTS (SELECT 1 FROM inventory_transactions r WHERE r.reversal_of = t.id)
 ORDER BY t.id
@@ -427,6 +429,7 @@ func (q *Queries) ListOpenTransactionsBySource(ctx context.Context, arg ListOpen
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.LotID,
+			&i.BinID,
 		); err != nil {
 			return nil, err
 		}
@@ -489,7 +492,7 @@ func (q *Queries) ListStockItems(ctx context.Context, arg ListStockItemsParams) 
 }
 
 const listWarehouseFlags = `-- name: ListWarehouseFlags :many
-SELECT w.id, w.code, w.name, w.allow_negative, w.is_active
+SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins
 FROM warehouses w
 WHERE w.company_id = $1 AND w.id = ANY($2::bigint[])
 `
@@ -505,6 +508,7 @@ type ListWarehouseFlagsRow struct {
 	Name          string
 	AllowNegative bool
 	IsActive      bool
+	UseBins       bool
 }
 
 func (q *Queries) ListWarehouseFlags(ctx context.Context, arg ListWarehouseFlagsParams) ([]ListWarehouseFlagsRow, error) {
@@ -522,6 +526,7 @@ func (q *Queries) ListWarehouseFlags(ctx context.Context, arg ListWarehouseFlags
 			&i.Name,
 			&i.AllowNegative,
 			&i.IsActive,
+			&i.UseBins,
 		); err != nil {
 			return nil, err
 		}

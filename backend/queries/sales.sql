@@ -378,9 +378,9 @@ DELETE FROM delivery_lines WHERE delivery_id = @delivery_id;
 
 -- name: AddDeliveryLine :exec
 INSERT INTO delivery_lines (delivery_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                            base_amount, so_line_id, delivery_line_id, note, lot_no, expiry_date)
+                            base_amount, so_line_id, delivery_line_id, note, lot_no, expiry_date, bin_code)
 VALUES (@delivery_id, @line_no, @item_id, @unit_id, @qty, @factor, @base_qty, @unit_price, @amount, @base_amount,
-        sqlc.narg(so_line_id), sqlc.narg(delivery_line_id), @note, @lot_no, sqlc.narg(expiry_date));
+        sqlc.narg(so_line_id), sqlc.narg(delivery_line_id), @note, @lot_no, sqlc.narg(expiry_date), @bin_code);
 
 -- name: SoLineRefs :many
 -- 出貨明細引用的訂單明細,以及「其他」已過帳出貨單的已出貨量
