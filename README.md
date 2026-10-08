@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M4 銷售完成**。下一步 M5 應收應付。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M5 應收應付完成**。下一步 M6 會計總帳。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -49,8 +49,17 @@
 - **資料範圍**:業務只看得到自己(或本部門)客戶的單據與應收
 - **應收帳款**查詢、**未出貨清單**(可只看逾期)
 
+### 已完成(M5 應收應付)
+- **收款單 / 付款單**:選客戶(供應商)與幣別 → 挑未沖帳款 → 輸入本次沖帳金額;一筆收付款可沖多張、可部分沖;過帳才沖銷,反過帳還原
+- 退回 / 退出的負數帳款可與正數互抵(合計不可為負);同一筆帳款被兩張單同時沖,過帳時會擋下超沖
+- 被收付款單引用(含草稿、待審)的帳款,來源出貨 / 進貨單不可反過帳
+- **對帳單**:單一對象單一幣別的期初、明細、期末,可列印
+- **帳齡分析**:本位幣、依到期日分組(未到期、逾期 1–30 / 31–60 / 61–90 / 90 天以上)
+- 收款單、應收、對帳單與帳齡依客戶負責業務套用資料範圍
+- 應收 / 應付帳款頁的合計改為「未沖餘額」
+
 ### 規劃中(第一期)
-應收應付沖帳 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+會計總帳 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -163,6 +172,9 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `GET /sales/availability?warehouse_id=&item_ids=`、`/sales/unshipped-lines`、`/sales/returnable-lines` | 可用量、未出貨明細、可退回明細 |
 | `GET /masterdata/customer-options?keyword=` | 開單選客戶(只需登入,依資料範圍) |
 | `GET /finance/receivables` | 應收帳款(依資料範圍) |
+| `/finance/collections`、`/finance/payments`、`POST …/{id}/actions/{…\|post\|unpost}` | 收款單 / 付款單(沖帳) |
+| `GET /finance/statements?side=receivable\|payable&partner_id=&currency=&from=&to=` | 對帳單 |
+| `GET /finance/aging?side=receivable\|payable&as_of=` | 帳齡分析 |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
 ## 目錄結構

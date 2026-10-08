@@ -17,7 +17,7 @@ import (
 	"erp/internal/shared/response"
 )
 
-var errReceivableSettled = apperr.New(http.StatusConflict, "FIN-002", "應收帳款已有收款沖帳,請先取消沖帳")
+var errReceivableSettled = apperr.New(http.StatusConflict, "FIN-002", "應收帳款已有收款單沖帳或引用,請先作廢 / 反過帳收款單")
 
 // CreateReceivable 由出貨 / 退回過帳產生應收(退回為負數)。須在呼叫端的交易內執行;金額為 0 時不產生。
 func CreateReceivable(ctx context.Context, q *db.Queries, p db.InsertReceivableParams) error {
@@ -38,6 +38,16 @@ func RemoveReceivable(ctx context.Context, q *db.Queries, sourceType string, sou
 	}
 	if !r.PaidAmount.IsZero() {
 		return errReceivableSettled.WithDetails(map[string]string{"source_no": r.SourceNo})
+	}
+	// 草稿 / 待審 / 已核准的收款單已引用此應收時也不可移除
+	if no, err := q.ReceivableSettlementNo(ctx, &r.ID); err == nil {
+		return errReceivableSettled.WithDetails(map[string]string{"source_no": r.SourceNo, "settlement_no": no})
+	} else if !database.IsNoRows(err) {
+		return err
+	}
+	// 剩下的只會是已作廢收款單的明細(單據本身保留,明細隨應收移除)
+	if err := q.DeleteSettlementLinesByReceivable(ctx, &r.ID); err != nil {
+		return err
 	}
 	return q.DeleteReceivable(ctx, r.ID)
 }

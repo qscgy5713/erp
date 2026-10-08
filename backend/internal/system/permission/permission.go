@@ -49,8 +49,17 @@ const (
 	DeliveryApprove   = "sales.delivery.approve"
 	DeliveryPost      = "sales.delivery.post"
 	// 應收應付
-	PayableRead    = "finance.payable.read"
-	ReceivableRead = "finance.receivable.read"
+	PayableRead    = "finance.payable.read"    // 應付帳款、付款對帳單、應付帳齡
+	ReceivableRead = "finance.receivable.read" // 應收帳款、收款對帳單、應收帳齡
+	// 收款單 / 付款單(沖帳)
+	CollectionRead    = "finance.collection.read"
+	CollectionWrite   = "finance.collection.write" // 建立/修改草稿、送審、作廢草稿
+	CollectionApprove = "finance.collection.approve"
+	CollectionPost    = "finance.collection.post" // 過帳(沖帳)、反過帳
+	PaymentRead       = "finance.payment.read"
+	PaymentWrite      = "finance.payment.write"
+	PaymentApprove    = "finance.payment.approve"
+	PaymentPost       = "finance.payment.post"
 )
 
 type Permission struct {
@@ -91,8 +100,14 @@ var Groups = []Group{
 	{"銷售", "出貨單與銷貨退回單", []Permission{
 		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
 	}},
-	{"應收應付", "應收帳款", []Permission{{ReceivableRead, "檢視"}}},
-	{"應收應付", "應付帳款", []Permission{{PayableRead, "檢視"}}},
+	{"應收應付", "應收帳款(含對帳單、帳齡)", []Permission{{ReceivableRead, "檢視"}}},
+	{"應收應付", "應付帳款(含對帳單、帳齡)", []Permission{{PayableRead, "檢視"}}},
+	{"應收應付", "收款單", []Permission{
+		{CollectionRead, "檢視"}, {CollectionWrite, "開單/送審"}, {CollectionApprove, "核准/退回/作廢"}, {CollectionPost, "過帳(沖帳)/反過帳"},
+	}},
+	{"應收應付", "付款單", []Permission{
+		{PaymentRead, "檢視"}, {PaymentWrite, "開單/送審"}, {PaymentApprove, "核准/退回/作廢"}, {PaymentPost, "過帳(沖帳)/反過帳"},
+	}},
 }
 
 var known = func() map[string]struct{} {

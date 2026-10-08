@@ -156,7 +156,7 @@ type payableRow struct {
 
 func (c *client) payables() ([]payableRow, string) {
 	c.e.t.Helper()
-	res := c.do(http.MethodGet, "/finance/payables", nil)
+	res := c.do(http.MethodGet, "/finance/payables?open_only=true", nil)
 	expect(c.e.t, res, http.StatusOK, "")
 	meta := decode[struct {
 		BaseAmountSum string `json:"base_amount_sum"`

@@ -391,7 +391,9 @@ ORDER BY p.due_date, p.id
 LIMIT @lim OFFSET @off;
 
 -- name: CountPayables :one
-SELECT count(*) AS total, COALESCE(SUM(p.base_amount), 0)::numeric AS base_amount_sum
+-- base_amount_sum:未沖餘額的本位幣合計(依原幣餘額比例換算)
+SELECT count(*) AS total,
+       COALESCE(SUM(CASE WHEN p.amount = 0 THEN 0 ELSE p.base_amount * (p.amount - p.paid_amount) / p.amount END), 0)::numeric AS base_amount_sum
 FROM accounts_payable p
 WHERE p.company_id = @company_id
   AND (sqlc.narg(supplier_id)::bigint IS NULL OR p.supplier_id = sqlc.narg(supplier_id))

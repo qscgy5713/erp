@@ -478,6 +478,43 @@ type SalesOrderLine struct {
 	Note      string
 }
 
+type Settlement struct {
+	ID          int64
+	CompanyID   int64
+	Side        string
+	DocNo       string
+	DocDate     time.Time
+	CustomerID  *int64
+	SupplierID  *int64
+	SalesUserID *int64
+	Currency    string
+	Method      string
+	Reference   string
+	Amount      decimal.Decimal
+	Status      string
+	Note        string
+	SubmittedBy *int64
+	SubmittedAt *time.Time
+	ApprovedBy  *int64
+	ApprovedAt  *time.Time
+	PostedBy    *int64
+	PostedAt    *time.Time
+	CreatedBy   *int64
+	UpdatedBy   *int64
+	Version     int32
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type SettlementLine struct {
+	ID           int64
+	SettlementID int64
+	LineNo       int32
+	ReceivableID *int64
+	PayableID    *int64
+	Amount       decimal.Decimal
+}
+
 type StockDocument struct {
 	ID            int64
 	CompanyID     int64

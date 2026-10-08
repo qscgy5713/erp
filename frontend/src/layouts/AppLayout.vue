@@ -63,7 +63,10 @@ async function onCommand(cmd: string) {
       <el-main>
         <!-- 採購 / 銷售單據共用編輯頁:換單據(轉單、開來源單)時要重建元件,不能沿用前一張的狀態 -->
         <RouterView v-slot="{ Component, route: r }">
-          <component :is="Component" :key="r.meta.kind ? r.path : ''" />
+          <component
+            :is="Component"
+            :key="r.meta.kind || r.meta.settle || r.meta.ledger ? r.path : ''"
+          />
         </RouterView>
       </el-main>
     </el-container>

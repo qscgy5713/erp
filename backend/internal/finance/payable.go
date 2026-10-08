@@ -28,7 +28,7 @@ const (
 	SourceSalesReturn    = "sales_return"
 )
 
-var errPayableSettled = apperr.New(http.StatusConflict, "FIN-001", "應付帳款已有付款沖帳,請先取消沖帳")
+var errPayableSettled = apperr.New(http.StatusConflict, "FIN-001", "應付帳款已有付款單沖帳或引用,請先作廢 / 反過帳付款單")
 
 // CreatePayable 由進貨 / 退出過帳產生應付(退出為負數)。須在呼叫端的交易內執行;金額為 0 時不產生。
 func CreatePayable(ctx context.Context, q *db.Queries, p db.InsertPayableParams) error {
@@ -50,6 +50,16 @@ func RemovePayable(ctx context.Context, q *db.Queries, sourceType string, source
 	if !p.PaidAmount.IsZero() {
 		return errPayableSettled.WithDetails(map[string]string{"source_no": p.SourceNo})
 	}
+	// 草稿 / 待審 / 已核准的付款單已引用此應付時也不可移除
+	if no, err := q.PayableSettlementNo(ctx, &p.ID); err == nil {
+		return errPayableSettled.WithDetails(map[string]string{"source_no": p.SourceNo, "settlement_no": no})
+	} else if !database.IsNoRows(err) {
+		return err
+	}
+	// 剩下的只會是已作廢付款單的明細(單據本身保留,明細隨應付移除)
+	if err := q.DeleteSettlementLinesByPayable(ctx, &p.ID); err != nil {
+		return err
+	}
 	return q.DeletePayable(ctx, p.ID)
 }
 
@@ -64,6 +74,12 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g := r.Group("/finance")
 	g.GET("/payables", auth.Require(permission.PayableRead), m.listPayables)
 	g.GET("/receivables", auth.Require(permission.ReceivableRead), m.listReceivables)
+	// 對帳單 / 帳齡:邊別(side)決定所需權限,於 handler 內判斷
+	report := auth.Require(permission.ReceivableRead, permission.PayableRead)
+	g.GET("/statements", report, m.statement)
+	g.GET("/aging", report, m.aging)
+	m.registerSettlements(g, "/collections", sides[SideReceipt])
+	m.registerSettlements(g, "/payments", sides[SidePayment])
 }
 
 type payableDTO struct {

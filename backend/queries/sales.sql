@@ -484,7 +484,9 @@ ORDER BY r.due_date, r.id
 LIMIT @lim OFFSET @off;
 
 -- name: CountReceivables :one
-SELECT count(*) AS total, COALESCE(SUM(r.base_amount), 0)::numeric AS base_amount_sum
+-- base_amount_sum:未沖餘額的本位幣合計(依原幣餘額比例換算)
+SELECT count(*) AS total,
+       COALESCE(SUM(CASE WHEN r.amount = 0 THEN 0 ELSE r.base_amount * (r.amount - r.paid_amount) / r.amount END), 0)::numeric AS base_amount_sum
 FROM accounts_receivable r
 JOIN customers c ON c.id = r.customer_id
 LEFT JOIN users su ON su.id = c.sales_user_id

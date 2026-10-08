@@ -136,7 +136,8 @@ func (q *Queries) CountDeliveries(ctx context.Context, arg CountDeliveriesParams
 }
 
 const countReceivables = `-- name: CountReceivables :one
-SELECT count(*) AS total, COALESCE(SUM(r.base_amount), 0)::numeric AS base_amount_sum
+SELECT count(*) AS total,
+       COALESCE(SUM(CASE WHEN r.amount = 0 THEN 0 ELSE r.base_amount * (r.amount - r.paid_amount) / r.amount END), 0)::numeric AS base_amount_sum
 FROM accounts_receivable r
 JOIN customers c ON c.id = r.customer_id
 LEFT JOIN users su ON su.id = c.sales_user_id
@@ -166,6 +167,7 @@ type CountReceivablesRow struct {
 	BaseAmountSum decimal.Decimal
 }
 
+// base_amount_sum:未沖餘額的本位幣合計(依原幣餘額比例換算)
 func (q *Queries) CountReceivables(ctx context.Context, arg CountReceivablesParams) (CountReceivablesRow, error) {
 	row := q.db.QueryRow(ctx, countReceivables,
 		arg.CompanyID,

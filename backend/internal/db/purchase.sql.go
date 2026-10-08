@@ -165,7 +165,8 @@ func (q *Queries) CountOutstandingPurchaseLines(ctx context.Context, arg CountOu
 }
 
 const countPayables = `-- name: CountPayables :one
-SELECT count(*) AS total, COALESCE(SUM(p.base_amount), 0)::numeric AS base_amount_sum
+SELECT count(*) AS total,
+       COALESCE(SUM(CASE WHEN p.amount = 0 THEN 0 ELSE p.base_amount * (p.amount - p.paid_amount) / p.amount END), 0)::numeric AS base_amount_sum
 FROM accounts_payable p
 WHERE p.company_id = $1
   AND ($2::bigint IS NULL OR p.supplier_id = $2)
@@ -189,6 +190,7 @@ type CountPayablesRow struct {
 	BaseAmountSum decimal.Decimal
 }
 
+// base_amount_sum:未沖餘額的本位幣合計(依原幣餘額比例換算)
 func (q *Queries) CountPayables(ctx context.Context, arg CountPayablesParams) (CountPayablesRow, error) {
 	row := q.db.QueryRow(ctx, countPayables,
 		arg.CompanyID,

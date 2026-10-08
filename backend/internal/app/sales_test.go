@@ -83,7 +83,7 @@ func (s *salCtx) deliver(so purDoc, qty string) (purDoc, apiResp) {
 
 func (c *client) receivables() ([]payableRow, string) {
 	c.e.t.Helper()
-	res := c.do(http.MethodGet, "/finance/receivables", nil)
+	res := c.do(http.MethodGet, "/finance/receivables?open_only=true", nil)
 	expect(c.e.t, res, http.StatusOK, "")
 	meta := decode[struct {
 		BaseAmountSum string `json:"base_amount_sum"`

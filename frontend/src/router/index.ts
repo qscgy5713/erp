@@ -1,6 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { DELIVERY_ANY, INVENTORY_ANY, ORDER_ANY, RECEIPT_ANY, SALES_ORDER_ANY } from '@/navigation'
+import {
+  COLLECTION_ANY,
+  DELIVERY_ANY,
+  INVENTORY_ANY,
+  ORDER_ANY,
+  PAYMENT_ANY,
+  RECEIPT_ANY,
+  SALES_ORDER_ANY,
+} from '@/navigation'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -13,8 +21,10 @@ declare module 'vue-router' {
     perm?: string[]
     /** 採購 / 銷售共用編輯頁的流程,見 views/trade/flows.ts */
     kind?: 'purchase-order' | 'receipt' | 'sales-order' | 'delivery'
-    /** 應收 / 應付帳款頁 */
+    /** 應收 / 應付帳款、對帳單、帳齡頁 */
     ledger?: 'receivable' | 'payable'
+    /** 收款單 / 付款單頁 */
+    settle?: 'collection' | 'payment'
   }
 }
 
@@ -185,6 +195,62 @@ const router = createRouter({
       path: '/sales/unshipped',
       component: () => import('@/views/sales/UnshippedView.vue'),
       meta: { title: '未出貨清單', perm: [...SALES_ORDER_ANY, 'sales.delivery.write'] },
+    },
+    {
+      path: '/finance/collections',
+      name: 'collections',
+      component: () => import('@/views/finance/SettlementsView.vue'),
+      meta: { title: '收款單', perm: COLLECTION_ANY, settle: 'collection' },
+    },
+    {
+      path: '/finance/collections/new',
+      name: 'collection-new',
+      component: () => import('@/views/finance/SettlementEditView.vue'),
+      meta: { title: '新增收款單', perm: ['finance.collection.write'], settle: 'collection' },
+    },
+    {
+      path: '/finance/collections/:id(\\d+)',
+      name: 'collection',
+      component: () => import('@/views/finance/SettlementEditView.vue'),
+      meta: { title: '收款單', perm: COLLECTION_ANY, settle: 'collection' },
+    },
+    {
+      path: '/finance/payments',
+      name: 'payments',
+      component: () => import('@/views/finance/SettlementsView.vue'),
+      meta: { title: '付款單', perm: PAYMENT_ANY, settle: 'payment' },
+    },
+    {
+      path: '/finance/payments/new',
+      name: 'payment-new',
+      component: () => import('@/views/finance/SettlementEditView.vue'),
+      meta: { title: '新增付款單', perm: ['finance.payment.write'], settle: 'payment' },
+    },
+    {
+      path: '/finance/payments/:id(\\d+)',
+      name: 'payment',
+      component: () => import('@/views/finance/SettlementEditView.vue'),
+      meta: { title: '付款單', perm: PAYMENT_ANY, settle: 'payment' },
+    },
+    {
+      path: '/finance/statement/receivable',
+      component: () => import('@/views/finance/StatementView.vue'),
+      meta: { title: '應收對帳單', perm: ['finance.receivable.read'], ledger: 'receivable' },
+    },
+    {
+      path: '/finance/statement/payable',
+      component: () => import('@/views/finance/StatementView.vue'),
+      meta: { title: '應付對帳單', perm: ['finance.payable.read'], ledger: 'payable' },
+    },
+    {
+      path: '/finance/aging/receivable',
+      component: () => import('@/views/finance/AgingView.vue'),
+      meta: { title: '應收帳齡', perm: ['finance.receivable.read'], ledger: 'receivable' },
+    },
+    {
+      path: '/finance/aging/payable',
+      component: () => import('@/views/finance/AgingView.vue'),
+      meta: { title: '應付帳齡', perm: ['finance.payable.read'], ledger: 'payable' },
     },
     {
       path: '/finance/receivables',
