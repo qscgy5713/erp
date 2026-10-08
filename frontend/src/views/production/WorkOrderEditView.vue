@@ -115,7 +115,7 @@ async function explode(force = false) {
   if (!editable.value || !form.item_id || !Number(form.plan_qty)) return
   if (manualLines.value && !force) return
   try {
-    const lines = await productionApi.explode(form.item_id, form.plan_qty)
+    const lines = await productionApi.explode(form.item_id, form.plan_qty, form.doc_date)
     form.lines = lines.map((l) => ({
       item_id: l.item_id,
       item_code: l.item_code,
@@ -372,6 +372,7 @@ onMounted(async () => {
                 value-format="YYYY-MM-DD"
                 style="width: 100%"
                 :clearable="false"
+                @change="explode()"
               />
             </el-form-item>
           </el-col>

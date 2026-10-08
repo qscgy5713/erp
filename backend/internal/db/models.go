@@ -134,17 +134,18 @@ type Bin struct {
 }
 
 type Bom struct {
-	ID        int64
-	CompanyID int64
-	ItemID    int64
-	YieldQty  decimal.Decimal
-	IsActive  bool
-	Note      string
-	CreatedBy *int64
-	UpdatedBy *int64
-	Version   int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            int64
+	CompanyID     int64
+	ItemID        int64
+	YieldQty      decimal.Decimal
+	IsActive      bool
+	Note          string
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	EffectiveFrom time.Time
 }
 
 type BomLine struct {

@@ -21,6 +21,8 @@ export interface Bom {
   item_name: string
   unit_name: string
   yield_qty: Decimal
+  /** 生效日 YYYY-MM-DD */
+  effective_from: string
   is_active: boolean
   note: string
   lines: BomLine[]
@@ -34,6 +36,7 @@ export interface BomRow {
   item_name: string
   unit_name: string
   yield_qty: Decimal
+  effective_from: string
   is_active: boolean
   line_count: number
 }
@@ -41,6 +44,7 @@ export interface BomRow {
 export interface BomInput {
   item_id: number
   yield_qty: Decimal
+  effective_from: string
   is_active: boolean
   note: string
   lines: { item_id: number; qty: Decimal; scrap_pct: Decimal; note: string }[]
@@ -150,6 +154,6 @@ export const productionApi = {
     http.put<WorkOrder>(`/production/work-orders/${id}`, input),
   action: (id: number, action: DocAction, version: number) =>
     http.post<WorkOrder>(`/production/work-orders/${id}/actions/${action}`, { version }),
-  explode: (item_id: number, qty: string) =>
-    http.get<ExplodeLine[]>(`/production/work-orders/explode${qs({ item_id, qty })}`),
+  explode: (item_id: number, qty: string, date?: string) =>
+    http.get<ExplodeLine[]>(`/production/work-orders/explode${qs({ item_id, qty, date })}`),
 }

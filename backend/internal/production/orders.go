@@ -240,16 +240,21 @@ type explodeLineDTO struct {
 	Qty      decimal.Decimal `json:"qty"`
 }
 
-func explodeLines(ctx context.Context, q *db.Queries, companyID, itemID int64, planQty decimal.Decimal) ([]explodeLineDTO, error) {
-	bom, err := q.GetBomByItem(ctx, db.GetBomByItemParams{CompanyID: companyID, ItemID: itemID})
+// explodeLines 依「工單日期適用的 BOM」(已生效且啟用中、生效日最晚的一份)展開。
+func explodeLines(ctx context.Context, q *db.Queries, companyID, itemID int64, planQty decimal.Decimal, on time.Time) ([]explodeLineDTO, error) {
+	bom, err := q.GetBomForDate(ctx, db.GetBomForDateParams{CompanyID: companyID, ItemID: itemID, OnDate: on})
 	if database.IsNoRows(err) {
-		return nil, fieldErr("item_id", "這個成品還沒有 BOM,請先建立 BOM 或自行輸入領料明細")
+		n, cerr := q.CountBomsOfItem(ctx, db.CountBomsOfItemParams{CompanyID: companyID, ItemID: itemID})
+		if cerr != nil {
+			return nil, cerr
+		}
+		if n == 0 {
+			return nil, fieldErr("item_id", "這個成品還沒有 BOM,請先建立 BOM 或自行輸入領料明細")
+		}
+		return nil, fieldErr("item_id", "這個成品在 "+on.Format(time.DateOnly)+" 沒有適用的 BOM(已停用或尚未生效)")
 	}
 	if err != nil {
 		return nil, err
-	}
-	if !bom.IsActive {
-		return nil, fieldErr("item_id", "這個成品的 BOM 已停用")
 	}
 	rows, err := q.ListBomLines(ctx, bom.ID)
 	if err != nil {
@@ -275,7 +280,14 @@ func (m *Module) explode(c *gin.Context) {
 		response.Error(c, fieldErr("qty", "數量須大於 0,最多 4 位小數"))
 		return
 	}
-	lines, err := explodeLines(c.Request.Context(), m.store.Queries, actor(c).CompanyID, *itemID, qty)
+	on := time.Now()
+	if d := c.Query("date"); d != "" {
+		if on, err = time.Parse(time.DateOnly, d); err != nil {
+			response.Error(c, fieldErr("date", "日期格式須為 YYYY-MM-DD"))
+			return
+		}
+	}
+	lines, err := explodeLines(c.Request.Context(), m.store.Queries, actor(c).CompanyID, *itemID, qty, on)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -356,7 +368,7 @@ func prepareOrder(ctx context.Context, q *db.Queries, companyID int64, in *woInp
 		if !generate {
 			return p, fieldErr("lines", "請輸入領料明細")
 		}
-		exp, err := explodeLines(ctx, q, companyID, in.ItemID, in.PlanQty)
+		exp, err := explodeLines(ctx, q, companyID, in.ItemID, in.PlanQty, p.date)
 		if err != nil {
 			return p, err
 		}

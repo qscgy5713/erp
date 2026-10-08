@@ -3,6 +3,8 @@ package production
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -20,7 +22,7 @@ import (
 const maxBomLines = 100
 
 var (
-	errBomDup   = apperr.Conflict("PRD-001", "這個成品已有 BOM,請直接修改")
+	errBomDup   = apperr.Conflict("PRD-001", "這個成品在這個生效日已有 BOM,請直接修改,或換一個生效日")
 	errBomCycle = apperr.New(http.StatusUnprocessableEntity, "PRD-002", "BOM 不可循環:材料的 BOM 又用到這個成品")
 	errBomInUse = apperr.Conflict("PRD-003", "已有工單使用這個成品,不可刪除 BOM;不再生產請改為停用")
 )
@@ -71,10 +73,12 @@ type bomDTO struct {
 	ItemName string          `json:"item_name"`
 	UnitName string          `json:"unit_name"`
 	YieldQty decimal.Decimal `json:"yield_qty"`
-	IsActive bool            `json:"is_active"`
-	Note     string          `json:"note"`
-	Lines    []bomLineDTO    `json:"lines"`
-	Version  int32           `json:"version"`
+	// 生效日(YYYY-MM-DD):工單日期當天或之後適用;同一成品可有多份不同生效日的 BOM
+	EffectiveFrom string       `json:"effective_from"`
+	IsActive      bool         `json:"is_active"`
+	Note          string       `json:"note"`
+	Lines         []bomLineDTO `json:"lines"`
+	Version       int32        `json:"version"`
 }
 
 func loadBom(c *gin.Context, q *db.Queries, companyID, id int64) (bomDTO, error) {
@@ -91,7 +95,7 @@ func loadBom(c *gin.Context, q *db.Queries, companyID, id int64) (bomDTO, error)
 		return bomDTO{}, err
 	}
 	out := bomDTO{ID: b.ID, ItemID: b.ItemID, ItemCode: b.ItemCode, ItemName: b.ItemName, UnitName: b.UnitName,
-		YieldQty: b.YieldQty, IsActive: b.IsActive, Note: b.Note, Lines: make([]bomLineDTO, len(rows)), Version: b.Version}
+		YieldQty: b.YieldQty, EffectiveFrom: b.EffectiveFrom.Format(time.DateOnly), IsActive: b.IsActive, Note: b.Note, Lines: make([]bomLineDTO, len(rows)), Version: b.Version}
 	for i, l := range rows {
 		out.Lines[i] = bomLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note}
 	}
@@ -99,14 +103,15 @@ func loadBom(c *gin.Context, q *db.Queries, companyID, id int64) (bomDTO, error)
 }
 
 type bomListDTO struct {
-	ID        int64           `json:"id"`
-	ItemID    int64           `json:"item_id"`
-	ItemCode  string          `json:"item_code"`
-	ItemName  string          `json:"item_name"`
-	UnitName  string          `json:"unit_name"`
-	YieldQty  decimal.Decimal `json:"yield_qty"`
-	IsActive  bool            `json:"is_active"`
-	LineCount int64           `json:"line_count"`
+	ID            int64           `json:"id"`
+	ItemID        int64           `json:"item_id"`
+	ItemCode      string          `json:"item_code"`
+	ItemName      string          `json:"item_name"`
+	UnitName      string          `json:"unit_name"`
+	YieldQty      decimal.Decimal `json:"yield_qty"`
+	EffectiveFrom string          `json:"effective_from"`
+	IsActive      bool            `json:"is_active"`
+	LineCount     int64           `json:"line_count"`
 }
 
 func (m *Module) listBoms(c *gin.Context) {
@@ -127,7 +132,7 @@ func (m *Module) listBoms(c *gin.Context) {
 	out := make([]bomListDTO, len(rows))
 	for i, r := range rows {
 		out[i] = bomListDTO{ID: r.ID, ItemID: r.ItemID, ItemCode: r.ItemCode, ItemName: r.ItemName, UnitName: r.UnitName,
-			YieldQty: r.YieldQty, IsActive: r.IsActive, LineCount: r.LineCount}
+			YieldQty: r.YieldQty, EffectiveFrom: r.EffectiveFrom.Format(time.DateOnly), IsActive: r.IsActive, LineCount: r.LineCount}
 	}
 	response.List(c, out, pg.Meta(total))
 }
@@ -157,10 +162,12 @@ type bomLineInput struct {
 type bomInput struct {
 	ItemID   int64           `json:"item_id" binding:"required"`
 	YieldQty decimal.Decimal `json:"yield_qty"`
-	IsActive bool            `json:"is_active"`
-	Note     string          `json:"note" binding:"max=2000"`
-	Lines    []bomLineInput  `json:"lines" binding:"dive"`
-	Version  int32           `json:"version"`
+	// 生效日(YYYY-MM-DD),空白表示一直有效(2000-01-01)
+	EffectiveFrom string         `json:"effective_from"`
+	IsActive      bool           `json:"is_active"`
+	Note          string         `json:"note" binding:"max=2000"`
+	Lines         []bomLineInput `json:"lines" binding:"dive"`
+	Version       int32          `json:"version"`
 }
 
 func qtyOK(q decimal.Decimal) bool {
@@ -168,8 +175,11 @@ func qtyOK(q decimal.Decimal) bool {
 }
 
 // validateBom 成品與材料須為啟用的商品類料品;材料不可重複、不可是成品自己,也不可造成循環。
-func validateBom(c *gin.Context, q *db.Queries, companyID int64, in *bomInput) error {
+func validateBom(c *gin.Context, q *db.Queries, companyID, selfID int64, in *bomInput) error {
 	ctx := c.Request.Context()
+	if _, err := bomEffectiveDate(in.EffectiveFrom); err != nil {
+		return fieldErr("effective_from", "生效日格式須為 YYYY-MM-DD")
+	}
 	if !qtyOK(in.YieldQty) {
 		return fieldErr("yield_qty", "須大於 0,最多 4 位小數")
 	}
@@ -221,7 +231,7 @@ func validateBom(c *gin.Context, q *db.Queries, companyID int64, in *bomInput) e
 	}
 	graph := map[int64][]int64{}
 	for _, e := range edges {
-		if e.ParentID != in.ItemID { // 這個成品原本的關係會被新的取代
+		if e.BomID != selfID { // 修改中的這份 BOM 原本的關係會被新的取代;同一成品其他版本的關係保留
 			graph[e.ParentID] = append(graph[e.ParentID], e.ChildID)
 		}
 	}
@@ -254,12 +264,13 @@ func (m *Module) createBom(c *gin.Context) {
 	ctx := c.Request.Context()
 	var out bomDTO
 	err := m.store.InTx(ctx, func(q *db.Queries) error {
-		if err := validateBom(c, q, a.CompanyID, &in); err != nil {
+		if err := validateBom(c, q, a.CompanyID, 0, &in); err != nil {
 			return err
 		}
-		b, err := q.CreateBom(ctx, db.CreateBomParams{CompanyID: a.CompanyID, ItemID: in.ItemID, YieldQty: in.YieldQty,
+		eff, _ := bomEffectiveDate(in.EffectiveFrom)
+		b, err := q.CreateBom(ctx, db.CreateBomParams{CompanyID: a.CompanyID, ItemID: in.ItemID, YieldQty: in.YieldQty, EffectiveFrom: eff,
 			IsActive: in.IsActive, Note: in.Note, ActorID: &a.UserID})
-		if database.IsUniqueViolation(err, "boms_company_item_key") {
+		if database.IsUniqueViolation(err, "boms_company_item_effective_key") {
 			return errBomDup
 		}
 		if err != nil {
@@ -303,10 +314,11 @@ func (m *Module) updateBom(c *gin.Context) {
 		if in.ItemID != before.ItemID {
 			return fieldErr("item_id", "BOM 的成品不能更換,請新增另一份 BOM")
 		}
-		if err := validateBom(c, q, a.CompanyID, &in); err != nil {
+		if err := validateBom(c, q, a.CompanyID, id, &in); err != nil {
 			return err
 		}
-		if _, err := q.UpdateBom(ctx, db.UpdateBomParams{ID: id, CompanyID: a.CompanyID, YieldQty: in.YieldQty,
+		eff, _ := bomEffectiveDate(in.EffectiveFrom)
+		if _, err := q.UpdateBom(ctx, db.UpdateBomParams{ID: id, CompanyID: a.CompanyID, YieldQty: in.YieldQty, EffectiveFrom: eff,
 			IsActive: in.IsActive, Note: in.Note, ActorID: &a.UserID, Version: in.Version}); database.IsNoRows(err) {
 			return apperr.ErrVersionConflict
 		} else if err != nil {
@@ -360,3 +372,11 @@ func (m *Module) deleteBom(c *gin.Context) {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// bomEffectiveDate 解析生效日;空白為 2000-01-01(一直有效)。
+func bomEffectiveDate(s string) (time.Time, error) {
+	if strings.TrimSpace(s) == "" {
+		return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), nil
+	}
+	return time.Parse(time.DateOnly, strings.TrimSpace(s))
+}

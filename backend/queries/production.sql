@@ -6,7 +6,7 @@ SELECT b.*, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
 FROM boms b JOIN items i ON i.id = b.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE b.company_id = @company_id
   AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%')
-ORDER BY i.code
+ORDER BY i.code, b.effective_from DESC
 LIMIT @lim OFFSET @off;
 
 -- name: CountBoms :one
@@ -19,8 +19,14 @@ SELECT b.*, i.code AS item_code, i.name AS item_name, u.name AS unit_name
 FROM boms b JOIN items i ON i.id = b.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE b.id = @id AND b.company_id = @company_id;
 
--- name: GetBomByItem :one
-SELECT * FROM boms WHERE company_id = @company_id AND item_id = @item_id;
+-- name: GetBomForDate :one
+-- 工單日期適用的 BOM:已生效且啟用中,生效日最晚的一份
+SELECT * FROM boms
+WHERE company_id = @company_id AND item_id = @item_id AND is_active AND effective_from <= @on_date
+ORDER BY effective_from DESC LIMIT 1;
+
+-- name: CountBomsOfItem :one
+SELECT count(*) FROM boms WHERE company_id = @company_id AND item_id = @item_id;
 
 -- name: ListBomLines :many
 SELECT l.*, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.item_type, i.is_active AS item_active
@@ -28,11 +34,11 @@ FROM bom_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_
 WHERE l.bom_id = @bom_id ORDER BY l.line_no;
 
 -- name: CreateBom :one
-INSERT INTO boms (company_id, item_id, yield_qty, is_active, note, created_by, updated_by)
-VALUES (@company_id, @item_id, @yield_qty, @is_active, @note, @actor_id, @actor_id) RETURNING *;
+INSERT INTO boms (company_id, item_id, yield_qty, effective_from, is_active, note, created_by, updated_by)
+VALUES (@company_id, @item_id, @yield_qty, @effective_from, @is_active, @note, @actor_id, @actor_id) RETURNING *;
 
 -- name: UpdateBom :one
-UPDATE boms SET yield_qty = @yield_qty, is_active = @is_active, note = @note, version = version + 1, updated_by = @actor_id
+UPDATE boms SET yield_qty = @yield_qty, effective_from = @effective_from, is_active = @is_active, note = @note, version = version + 1, updated_by = @actor_id
 WHERE id = @id AND company_id = @company_id AND version = @version RETURNING *;
 
 -- name: DeleteBom :execrows
@@ -46,7 +52,7 @@ INSERT INTO bom_lines (bom_id, line_no, item_id, qty, scrap_pct, note) VALUES (@
 
 -- name: AllBomEdges :many
 -- 全公司所有 BOM 的 (成品 → 材料) 關係,檢查循環用
-SELECT b.item_id AS parent_id, l.item_id AS child_id
+SELECT b.id AS bom_id, b.item_id AS parent_id, l.item_id AS child_id
 FROM boms b JOIN bom_lines l ON l.bom_id = b.id WHERE b.company_id = @company_id;
 
 -- name: ListProductionItems :many

@@ -398,3 +398,80 @@ func TestWorkOrderMultiLevelApproval(t *testing.T) {
 	expect(t, e.loggedIn("nobody", pw).do(http.MethodGet, "/approval/progress?doc_type=work_order&doc_id="+itoa(big.ID), nil), http.StatusForbidden, "SYS-403")
 	expect(t, mk.do(http.MethodGet, "/approval/progress?doc_type=work_order&doc_id=999999", nil), http.StatusNotFound, "SYS-404")
 }
+
+// BOM 版本:同一成品可有多份不同生效日的 BOM,展開時依日期選用
+func TestBomVersions(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	fg, m1, m2, m3 := e.seedItem("FG1", "goods"), e.seedItem("M1", "goods"), e.seedItem("M2", "goods"), e.seedItem("M3", "goods")
+	mk := func(item int64, eff string, lines ...map[string]any) apiResp {
+		body := bomBody(item, "1", lines...)
+		body["effective_from"] = eff
+		return c.do(http.MethodPost, "/production/boms", body)
+	}
+	explodeQty := func(date string) (string, apiResp) {
+		res := c.do(http.MethodGet, prodWO+"/explode?item_id="+itoa(fg)+"&qty=1&date="+date, nil)
+		if res.status != http.StatusOK {
+			return "", res
+		}
+		l := decode[[]struct {
+			ItemID int64  `json:"item_id"`
+			Qty    string `json:"qty"`
+		}](t, res.Data)
+		return itoa(l[0].ItemID) + ":" + l[0].Qty, res
+	}
+
+	v1 := mk(fg, "2026-09-01", bl(m1, "5"))
+	expect(t, v1, http.StatusCreated, "")
+	v2 := mk(fg, "2026-11-01", bl(m2, "7"))
+	expect(t, v2, http.StatusCreated, "")
+	expect(t, mk(fg, "2026-11-01", bl(m3, "1")), http.StatusConflict, "PRD-001") // 同生效日重複
+	expect(t, mk(fg, "11/01", bl(m3, "1")), http.StatusUnprocessableEntity, "SYS-422")
+
+	// 依日期選用:生效日前用 v1、之後用 v2、最早生效日之前沒有適用的 BOM
+	if got, _ := explodeQty("2026-10-15"); got != itoa(m1)+":5" {
+		t.Fatalf("10/15 應用 v1,得 %s", got)
+	}
+	if got, _ := explodeQty("2026-11-01"); got != itoa(m2)+":7" {
+		t.Fatalf("11/01 應用 v2,得 %s", got)
+	}
+	_, res := explodeQty("2026-08-01")
+	expect(t, res, http.StatusUnprocessableEntity, "SYS-422")
+
+	// 停用 v2 後回頭用 v1
+	v2b := decode[struct {
+		ID      int64 `json:"id"`
+		Version int32 `json:"version"`
+	}](t, v2.Data)
+	body := bomBody(fg, "1", bl(m2, "7"))
+	body["effective_from"], body["is_active"], body["version"] = "2026-11-01", false, v2b.Version
+	expect(t, c.do(http.MethodPut, "/production/boms/"+itoa(v2b.ID), body), http.StatusOK, "")
+	if got, _ := explodeQty("2026-12-01"); got != itoa(m1)+":5" {
+		t.Fatalf("v2 停用後應回到 v1,得 %s", got)
+	}
+
+	// 循環檢查涵蓋所有版本:M2 的 BOM 用到 FG1 → FG1(v2) → M2 → FG1
+	expect(t, mk(m2, "2026-01-01", bl(fg, "1")), http.StatusUnprocessableEntity, "PRD-002")
+	// 修改 v1 時不會丟掉 v2 的關係(仍會被檢查到)
+	v1d := decode[struct {
+		ID      int64 `json:"id"`
+		Version int32 `json:"version"`
+	}](t, v1.Data)
+	body = bomBody(fg, "1", bl(m1, "6"))
+	body["effective_from"], body["version"] = "2026-09-01", v1d.Version
+	expect(t, c.do(http.MethodPut, "/production/boms/"+itoa(v1d.ID), body), http.StatusOK, "")
+	expect(t, mk(m2, "2026-02-01", bl(fg, "1")), http.StatusUnprocessableEntity, "PRD-002")
+
+	// 工單開單依工單日期自動展開(2026-09-10 → v1,已改為用量 6)
+	res = c.do(http.MethodPost, prodWO, woBody(fg, "2", p.wh, "0", nil))
+	expect(t, res, http.StatusCreated, "")
+	wo := decode[struct {
+		Lines []struct {
+			ItemID int64  `json:"item_id"`
+			Qty    string `json:"qty"`
+		} `json:"lines"`
+	}](t, res.Data)
+	if len(wo.Lines) != 1 || wo.Lines[0].ItemID != m1 || wo.Lines[0].Qty != "12" {
+		t.Fatalf("工單領料 = %+v", wo.Lines)
+	}
+}

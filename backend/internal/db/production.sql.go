@@ -66,11 +66,12 @@ func (q *Queries) AddWorkOrderLine(ctx context.Context, arg AddWorkOrderLinePara
 }
 
 const allBomEdges = `-- name: AllBomEdges :many
-SELECT b.item_id AS parent_id, l.item_id AS child_id
+SELECT b.id AS bom_id, b.item_id AS parent_id, l.item_id AS child_id
 FROM boms b JOIN bom_lines l ON l.bom_id = b.id WHERE b.company_id = $1
 `
 
 type AllBomEdgesRow struct {
+	BomID    int64
 	ParentID int64
 	ChildID  int64
 }
@@ -85,7 +86,7 @@ func (q *Queries) AllBomEdges(ctx context.Context, companyID int64) ([]AllBomEdg
 	items := []AllBomEdgesRow{}
 	for rows.Next() {
 		var i AllBomEdgesRow
-		if err := rows.Scan(&i.ParentID, &i.ChildID); err != nil {
+		if err := rows.Scan(&i.BomID, &i.ParentID, &i.ChildID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -150,6 +151,22 @@ func (q *Queries) CountBoms(ctx context.Context, arg CountBomsParams) (int64, er
 	return count, err
 }
 
+const countBomsOfItem = `-- name: CountBomsOfItem :one
+SELECT count(*) FROM boms WHERE company_id = $1 AND item_id = $2
+`
+
+type CountBomsOfItemParams struct {
+	CompanyID int64
+	ItemID    int64
+}
+
+func (q *Queries) CountBomsOfItem(ctx context.Context, arg CountBomsOfItemParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countBomsOfItem, arg.CompanyID, arg.ItemID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countWorkOrders = `-- name: CountWorkOrders :one
 SELECT count(*) FROM work_orders w JOIN items i ON i.id = w.item_id
 WHERE w.company_id = $1
@@ -185,17 +202,18 @@ func (q *Queries) CountWorkOrders(ctx context.Context, arg CountWorkOrdersParams
 }
 
 const createBom = `-- name: CreateBom :one
-INSERT INTO boms (company_id, item_id, yield_qty, is_active, note, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at
+INSERT INTO boms (company_id, item_id, yield_qty, effective_from, is_active, note, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at, effective_from
 `
 
 type CreateBomParams struct {
-	CompanyID int64
-	ItemID    int64
-	YieldQty  decimal.Decimal
-	IsActive  bool
-	Note      string
-	ActorID   *int64
+	CompanyID     int64
+	ItemID        int64
+	YieldQty      decimal.Decimal
+	EffectiveFrom time.Time
+	IsActive      bool
+	Note          string
+	ActorID       *int64
 }
 
 func (q *Queries) CreateBom(ctx context.Context, arg CreateBomParams) (Bom, error) {
@@ -203,6 +221,7 @@ func (q *Queries) CreateBom(ctx context.Context, arg CreateBomParams) (Bom, erro
 		arg.CompanyID,
 		arg.ItemID,
 		arg.YieldQty,
+		arg.EffectiveFrom,
 		arg.IsActive,
 		arg.Note,
 		arg.ActorID,
@@ -220,6 +239,7 @@ func (q *Queries) CreateBom(ctx context.Context, arg CreateBomParams) (Bom, erro
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EffectiveFrom,
 	)
 	return i, err
 }
@@ -334,7 +354,7 @@ func (q *Queries) DeleteWorkOrderLines(ctx context.Context, workOrderID int64) e
 }
 
 const getBom = `-- name: GetBom :one
-SELECT b.id, b.company_id, b.item_id, b.yield_qty, b.is_active, b.note, b.created_by, b.updated_by, b.version, b.created_at, b.updated_at, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+SELECT b.id, b.company_id, b.item_id, b.yield_qty, b.is_active, b.note, b.created_by, b.updated_by, b.version, b.created_at, b.updated_at, b.effective_from, i.code AS item_code, i.name AS item_name, u.name AS unit_name
 FROM boms b JOIN items i ON i.id = b.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE b.id = $1 AND b.company_id = $2
 `
@@ -345,20 +365,21 @@ type GetBomParams struct {
 }
 
 type GetBomRow struct {
-	ID        int64
-	CompanyID int64
-	ItemID    int64
-	YieldQty  decimal.Decimal
-	IsActive  bool
-	Note      string
-	CreatedBy *int64
-	UpdatedBy *int64
-	Version   int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	ItemCode  string
-	ItemName  string
-	UnitName  string
+	ID            int64
+	CompanyID     int64
+	ItemID        int64
+	YieldQty      decimal.Decimal
+	IsActive      bool
+	Note          string
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	EffectiveFrom time.Time
+	ItemCode      string
+	ItemName      string
+	UnitName      string
 }
 
 func (q *Queries) GetBom(ctx context.Context, arg GetBomParams) (GetBomRow, error) {
@@ -376,6 +397,7 @@ func (q *Queries) GetBom(ctx context.Context, arg GetBomParams) (GetBomRow, erro
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EffectiveFrom,
 		&i.ItemCode,
 		&i.ItemName,
 		&i.UnitName,
@@ -383,17 +405,21 @@ func (q *Queries) GetBom(ctx context.Context, arg GetBomParams) (GetBomRow, erro
 	return i, err
 }
 
-const getBomByItem = `-- name: GetBomByItem :one
-SELECT id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at FROM boms WHERE company_id = $1 AND item_id = $2
+const getBomForDate = `-- name: GetBomForDate :one
+SELECT id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at, effective_from FROM boms
+WHERE company_id = $1 AND item_id = $2 AND is_active AND effective_from <= $3
+ORDER BY effective_from DESC LIMIT 1
 `
 
-type GetBomByItemParams struct {
+type GetBomForDateParams struct {
 	CompanyID int64
 	ItemID    int64
+	OnDate    time.Time
 }
 
-func (q *Queries) GetBomByItem(ctx context.Context, arg GetBomByItemParams) (Bom, error) {
-	row := q.db.QueryRow(ctx, getBomByItem, arg.CompanyID, arg.ItemID)
+// 工單日期適用的 BOM:已生效且啟用中,生效日最晚的一份
+func (q *Queries) GetBomForDate(ctx context.Context, arg GetBomForDateParams) (Bom, error) {
+	row := q.db.QueryRow(ctx, getBomForDate, arg.CompanyID, arg.ItemID, arg.OnDate)
 	var i Bom
 	err := row.Scan(
 		&i.ID,
@@ -407,6 +433,7 @@ func (q *Queries) GetBomByItem(ctx context.Context, arg GetBomByItemParams) (Bom
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EffectiveFrom,
 	)
 	return i, err
 }
@@ -581,12 +608,12 @@ func (q *Queries) ListBomLines(ctx context.Context, bomID int64) ([]ListBomLines
 
 const listBoms = `-- name: ListBoms :many
 
-SELECT b.id, b.company_id, b.item_id, b.yield_qty, b.is_active, b.note, b.created_by, b.updated_by, b.version, b.created_at, b.updated_at, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+SELECT b.id, b.company_id, b.item_id, b.yield_qty, b.is_active, b.note, b.created_by, b.updated_by, b.version, b.created_at, b.updated_at, b.effective_from, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        (SELECT count(*) FROM bom_lines l WHERE l.bom_id = b.id)::bigint AS line_count
 FROM boms b JOIN items i ON i.id = b.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE b.company_id = $1
   AND ($2::text IS NULL OR i.code ILIKE '%' || $2 || '%' OR i.name ILIKE '%' || $2 || '%')
-ORDER BY i.code
+ORDER BY i.code, b.effective_from DESC
 LIMIT $4 OFFSET $3
 `
 
@@ -598,21 +625,22 @@ type ListBomsParams struct {
 }
 
 type ListBomsRow struct {
-	ID        int64
-	CompanyID int64
-	ItemID    int64
-	YieldQty  decimal.Decimal
-	IsActive  bool
-	Note      string
-	CreatedBy *int64
-	UpdatedBy *int64
-	Version   int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	ItemCode  string
-	ItemName  string
-	UnitName  string
-	LineCount int64
+	ID            int64
+	CompanyID     int64
+	ItemID        int64
+	YieldQty      decimal.Decimal
+	IsActive      bool
+	Note          string
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	EffectiveFrom time.Time
+	ItemCode      string
+	ItemName      string
+	UnitName      string
+	LineCount     int64
 }
 
 // ======== BOM ========
@@ -642,6 +670,7 @@ func (q *Queries) ListBoms(ctx context.Context, arg ListBomsParams) ([]ListBomsR
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.EffectiveFrom,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,
@@ -1095,23 +1124,25 @@ func (q *Queries) SetWorkOrderStatus(ctx context.Context, arg SetWorkOrderStatus
 }
 
 const updateBom = `-- name: UpdateBom :one
-UPDATE boms SET yield_qty = $1, is_active = $2, note = $3, version = version + 1, updated_by = $4
-WHERE id = $5 AND company_id = $6 AND version = $7 RETURNING id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at
+UPDATE boms SET yield_qty = $1, effective_from = $2, is_active = $3, note = $4, version = version + 1, updated_by = $5
+WHERE id = $6 AND company_id = $7 AND version = $8 RETURNING id, company_id, item_id, yield_qty, is_active, note, created_by, updated_by, version, created_at, updated_at, effective_from
 `
 
 type UpdateBomParams struct {
-	YieldQty  decimal.Decimal
-	IsActive  bool
-	Note      string
-	ActorID   *int64
-	ID        int64
-	CompanyID int64
-	Version   int32
+	YieldQty      decimal.Decimal
+	EffectiveFrom time.Time
+	IsActive      bool
+	Note          string
+	ActorID       *int64
+	ID            int64
+	CompanyID     int64
+	Version       int32
 }
 
 func (q *Queries) UpdateBom(ctx context.Context, arg UpdateBomParams) (Bom, error) {
 	row := q.db.QueryRow(ctx, updateBom,
 		arg.YieldQty,
+		arg.EffectiveFrom,
 		arg.IsActive,
 		arg.Note,
 		arg.ActorID,
@@ -1132,6 +1163,7 @@ func (q *Queries) UpdateBom(ctx context.Context, arg UpdateBomParams) (Bom, erro
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EffectiveFrom,
 	)
 	return i, err
 }

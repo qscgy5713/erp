@@ -50,6 +50,7 @@ const form = reactive({
   item_id: null as number | null,
   item_label: undefined as string | undefined,
   yield_qty: '1',
+  effective_from: '',
   is_active: true,
   note: '',
   lines: [] as FormLine[],
@@ -62,6 +63,7 @@ function openNew() {
     item_id: null,
     item_label: undefined,
     yield_qty: '1',
+    effective_from: '',
     is_active: true,
     note: '',
     lines: [{ item_id: null, qty: '', scrap_pct: '0', note: '' }],
@@ -78,6 +80,7 @@ async function openEdit(row: BomRow) {
       item_id: b.item_id,
       item_label: `${b.item_code} ${b.item_name}`,
       yield_qty: b.yield_qty,
+      effective_from: b.effective_from,
       is_active: b.is_active,
       note: b.note,
       lines: b.lines.map((l) => ({
@@ -100,6 +103,7 @@ async function save() {
   const input = {
     item_id: form.item_id ?? 0,
     yield_qty: form.yield_qty,
+    effective_from: form.effective_from,
     is_active: form.is_active,
     note: form.note,
     lines: form.lines
@@ -172,6 +176,11 @@ onMounted(load)
       <el-table-column label="產出量" width="140" align="right">
         <template #default="{ row }">{{ row.yield_qty }} {{ row.unit_name }}</template>
       </el-table-column>
+      <el-table-column label="生效日" width="120">
+        <template #default="{ row }">{{
+          row.effective_from === '2000-01-01' ? '一直有效' : row.effective_from
+        }}</template>
+      </el-table-column>
       <el-table-column prop="line_count" label="材料數" width="90" align="right" />
       <el-table-column label="狀態" width="90">
         <template #default="{ row }">
@@ -225,6 +234,18 @@ onMounted(load)
             >
           </el-col>
         </el-row>
+        <el-form-item label="生效日" :error="fieldErrors.effective_from">
+          <el-date-picker
+            v-model="form.effective_from"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="空白 = 一直有效"
+            style="width: 200px"
+          />
+          <span class="hint" style="margin-left: 8px"
+            >同一成品可有多份不同生效日的 BOM,工單依工單日期選用生效日最晚的一份</span
+          >
+        </el-form-item>
         <p class="hint">
           下面的材料用量是「產出
           {{ form.yield_qty || '?' }}
