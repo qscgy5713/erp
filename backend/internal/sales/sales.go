@@ -5,6 +5,7 @@ package sales
 
 import (
 	"context"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -93,6 +94,11 @@ type lineInput struct {
 	trade.LineInput
 	SoLineID       *int64 `json:"so_line_id"`       // 出貨:來源訂單明細
 	DeliveryLineID *int64 `json:"delivery_line_id"` // 退回:來源出貨明細
+	// 批號管理料品:出貨可指定批號(空白則先到期先出);銷貨退回須輸入退回的批號(新批號另須效期)
+	LotNo      string  `json:"lot_no"`
+	ExpiryDate *string `json:"expiry_date"`
+
+	expiry *time.Time // 解析後的效期
 }
 
 type pricedLine struct {

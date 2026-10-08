@@ -70,6 +70,17 @@ type deliveryLineDTO struct {
 	DeliveryLineID   *int64          `json:"delivery_line_id"`
 	SourceDeliveryNo *string         `json:"source_delivery_no"`
 	Note             string          `json:"note"`
+	ItemLotControl   string          `json:"item_lot_control"` // none / lot / lot_expiry
+	LotNo            string          `json:"lot_no"`           // 輸入的批號(出貨可空白)
+	ExpiryDate       *string         `json:"expiry_date"`
+	// 已過帳:實際出庫(或退回入庫)的批號,先到期先出可能拆成多個
+	Lots []lotUsedDTO `json:"lots"`
+}
+
+type lotUsedDTO struct {
+	LotNo      string          `json:"lot_no"`
+	ExpiryDate *string         `json:"expiry_date"`
+	Qty        decimal.Decimal `json:"qty"` // 基本單位,正數
 }
 
 type deliveryDTO struct {
@@ -137,6 +148,22 @@ func loadDelivery(ctx context.Context, q *db.Queries, a *authctx.Actor, id int64
 			BaseUnitName: l.BaseUnitName, Qty: l.Qty, Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice,
 			Amount: l.Amount, BaseAmount: l.BaseAmount, SoLineID: l.SoLineID, SoNo: l.SoNo,
 			DeliveryLineID: l.DeliveryLineID, SourceDeliveryNo: l.SourceDeliveryNo, Note: l.Note,
+			ItemLotControl: l.ItemLotControl, LotNo: l.LotNo, ExpiryDate: dateString(l.ExpiryDate), Lots: []lotUsedDTO{},
+		}
+	}
+	if d.Status == "posted" || d.Status == "closed" {
+		used, err := q.ListOpenLotTransactionsBySource(ctx, db.ListOpenLotTransactionsBySourceParams{
+			SourceType: deliveryTypes[d.DocType].source, SourceID: id,
+		})
+		if err != nil {
+			return deliveryDTO{}, err
+		}
+		for _, u := range used {
+			for i := range lines {
+				if u.SourceLineID != nil && *u.SourceLineID == lines[i].ID {
+					lines[i].Lots = append(lines[i].Lots, lotUsedDTO{LotNo: u.LotNo, ExpiryDate: dateString(u.ExpiryDate), Qty: u.Qty.Abs()})
+				}
+			}
 		}
 	}
 	return deliveryDTO{
@@ -406,6 +433,9 @@ func prepareDelivery(ctx context.Context, q *db.Queries, a *authctx.Actor, exclu
 	if err != nil {
 		return p, err
 	}
+	if err := checkDeliveryLots(ctx, q, a.CompanyID, in.DocType, p.lines, errs); err != nil {
+		return p, err
+	}
 	if len(errs) > 0 {
 		fields := map[string]string{}
 		for i, msg := range errs {
@@ -416,6 +446,33 @@ func prepareDelivery(ctx context.Context, q *db.Queries, a *authctx.Actor, exclu
 	return p, nil
 }
 
+// checkDeliveryLots 檢查並整理明細的批號:出貨為出庫(批號可空白,先到期先出),銷貨退回為入庫(批號必填)。
+func checkDeliveryLots(ctx context.Context, q *db.Queries, companyID int64, docType string, lines []pricedLine, errs map[int]string) error {
+	inbound := docType == TypeReturn
+	inputs := make([]inventory.LotInput, len(lines))
+	for i := range lines {
+		exp, err := trade.OptionalInputDate(fmt.Sprintf("lines.%d.expiry_date", i), lines[i].ExpiryDate)
+		if err != nil {
+			errs[i] = "效期格式不正確(YYYY-MM-DD)"
+		}
+		lines[i].expiry = exp
+		inputs[i] = inventory.LotInput{ItemID: lines[i].ItemID, LotNo: lines[i].LotNo, Expiry: lines[i].expiry, Inbound: inbound}
+	}
+	checked, lotErrs, err := inventory.CheckLotInputs(ctx, q, companyID, inputs)
+	if err != nil {
+		return err
+	}
+	for i, msg := range lotErrs {
+		if _, exists := errs[i]; !exists {
+			errs[i] = msg
+		}
+	}
+	for i := range lines {
+		lines[i].LotNo, lines[i].expiry = checked[i].LotNo, checked[i].Expiry
+	}
+	return nil
+}
+
 func saveDeliveryLines(ctx context.Context, q *db.Queries, deliveryID int64, lines []pricedLine) error {
 	if err := q.DeleteDeliveryLines(ctx, deliveryID); err != nil {
 		return err
@@ -424,7 +481,7 @@ func saveDeliveryLines(ctx context.Context, q *db.Queries, deliveryID int64, lin
 		if err := q.AddDeliveryLine(ctx, db.AddDeliveryLineParams{
 			DeliveryID: deliveryID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
 			Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice, Amount: l.Amount, BaseAmount: l.BaseAmount,
-			SoLineID: l.SoLineID, DeliveryLineID: l.DeliveryLineID, Note: l.Note,
+			SoLineID: l.SoLineID, DeliveryLineID: l.DeliveryLineID, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry,
 		}); err != nil {
 			return err
 		}
@@ -824,7 +881,10 @@ func movementsOf(cur db.Delivery, doc deliveryDTO) []inventory.Movement {
 		if cur.DocType == TypeDelivery {
 			qty = qty.Neg()
 		}
-		moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: qty, SourceLineID: &lineID})
+		exp, _ := trade.OptionalInputDate("expiry_date", l.ExpiryDate)
+		// 出貨不可出已過期的批號;銷貨退回是入庫,效期不受限
+		moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: qty, SourceLineID: &lineID,
+			LotNo: l.LotNo, Expiry: exp, AllowExpired: false})
 	}
 	return moves
 }

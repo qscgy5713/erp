@@ -13,9 +13,10 @@ import (
 )
 
 const addStockDocumentLine = `-- name: AddStockDocumentLine :exec
-INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note)
+INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note,
+                                  lot_no, expiry_date)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9)
+        $8, $9, $10, $11)
 `
 
 type AddStockDocumentLineParams struct {
@@ -28,6 +29,8 @@ type AddStockDocumentLineParams struct {
 	BaseQty    *decimal.Decimal
 	SystemQty  *decimal.Decimal
 	Note       string
+	LotNo      string
+	ExpiryDate *time.Time
 }
 
 func (q *Queries) AddStockDocumentLine(ctx context.Context, arg AddStockDocumentLineParams) error {
@@ -41,8 +44,56 @@ func (q *Queries) AddStockDocumentLine(ctx context.Context, arg AddStockDocument
 		arg.BaseQty,
 		arg.SystemQty,
 		arg.Note,
+		arg.LotNo,
+		arg.ExpiryDate,
 	)
 	return err
+}
+
+const countLotSnapshot = `-- name: CountLotSnapshot :many
+SELECT b.item_id, l.lot_no, l.expiry_date, b.qty
+FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
+WHERE b.company_id = $1 AND b.warehouse_id = $2 AND b.item_id = ANY($3::bigint[]) AND b.qty > 0
+ORDER BY b.item_id, l.expiry_date NULLS LAST, l.id
+`
+
+type CountLotSnapshotParams struct {
+	CompanyID   int64
+	WarehouseID int64
+	ItemIds     []int64
+}
+
+type CountLotSnapshotRow struct {
+	ItemID     int64
+	LotNo      string
+	ExpiryDate *time.Time
+	Qty        decimal.Decimal
+}
+
+// 盤點建立時批號管理料品的帳面數量快照:依批號逐筆(有庫存的批號)
+func (q *Queries) CountLotSnapshot(ctx context.Context, arg CountLotSnapshotParams) ([]CountLotSnapshotRow, error) {
+	rows, err := q.db.Query(ctx, countLotSnapshot, arg.CompanyID, arg.WarehouseID, arg.ItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountLotSnapshotRow{}
+	for rows.Next() {
+		var i CountLotSnapshotRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.LotNo,
+			&i.ExpiryDate,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const countSnapshot = `-- name: CountSnapshot :many
@@ -51,7 +102,7 @@ WITH RECURSIVE cats (cat_id) AS (
     UNION ALL
     SELECT item_categories.id FROM item_categories, cats WHERE item_categories.parent_id = cats.cat_id
 )
-SELECT b.item_id, i.base_unit_id, b.qty
+SELECT b.item_id, i.base_unit_id, b.qty, i.lot_control
 FROM inventory_balances b
 JOIN items i ON i.id = b.item_id
 WHERE b.company_id = $1 AND b.warehouse_id = $2 AND i.item_type = 'goods'
@@ -69,6 +120,7 @@ type CountSnapshotRow struct {
 	ItemID     int64
 	BaseUnitID int64
 	Qty        decimal.Decimal
+	LotControl string
 }
 
 // 盤點建立時的帳面數量快照:該倉庫有現有量紀錄的商品(可限分類,含下層)
@@ -81,7 +133,12 @@ func (q *Queries) CountSnapshot(ctx context.Context, arg CountSnapshotParams) ([
 	items := []CountSnapshotRow{}
 	for rows.Next() {
 		var i CountSnapshotRow
-		if err := rows.Scan(&i.ItemID, &i.BaseUnitID, &i.Qty); err != nil {
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.BaseUnitID,
+			&i.Qty,
+			&i.LotControl,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -213,6 +270,32 @@ func (q *Queries) GetBalanceQty(ctx context.Context, arg GetBalanceQtyParams) (d
 	return column_1, err
 }
 
+const getLotBalanceQtyByNo = `-- name: GetLotBalanceQtyByNo :one
+SELECT COALESCE((SELECT b.qty FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
+                 WHERE l.company_id = $1 AND l.item_id = $2 AND l.lot_no = $3
+                   AND b.warehouse_id = $4), 0)::numeric
+`
+
+type GetLotBalanceQtyByNoParams struct {
+	CompanyID   int64
+	ItemID      int64
+	LotNo       string
+	WarehouseID int64
+}
+
+// 某批號在某倉庫的現有量(批號不存在為 0)
+func (q *Queries) GetLotBalanceQtyByNo(ctx context.Context, arg GetLotBalanceQtyByNoParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, getLotBalanceQtyByNo,
+		arg.CompanyID,
+		arg.ItemID,
+		arg.LotNo,
+		arg.WarehouseID,
+	)
+	var column_1 decimal.Decimal
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getStockDocument = `-- name: GetStockDocument :one
 SELECT d.id, d.company_id, d.doc_type, d.doc_no, d.doc_date, d.warehouse_id, d.to_warehouse_id, d.category_id, d.status, d.note, d.submitted_by, d.submitted_at, d.approved_by, d.approved_at, d.posted_by, d.posted_at, d.created_by, d.updated_by, d.version, d.created_at, d.updated_at, w.name AS warehouse_name, tw.name AS to_warehouse_name, c.name AS category_name,
        cu.name AS created_by_name, su.name AS submitted_by_name, au.name AS approved_by_name,
@@ -301,7 +384,7 @@ func (q *Queries) GetStockDocument(ctx context.Context, arg GetStockDocumentPara
 }
 
 const listStockDocumentLines = `-- name: ListStockDocumentLines :many
-SELECT l.id, l.document_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.system_qty, l.note, i.code AS item_code, i.name AS item_name, i.spec AS item_spec,
+SELECT l.id, l.document_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.system_qty, l.note, l.lot_no, l.expiry_date, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name
 FROM stock_document_lines l
 JOIN items i ON i.id = l.item_id
@@ -312,21 +395,24 @@ ORDER BY l.line_no
 `
 
 type ListStockDocumentLinesRow struct {
-	ID           int64
-	DocumentID   int64
-	LineNo       int32
-	ItemID       int64
-	UnitID       int64
-	Qty          *decimal.Decimal
-	Factor       decimal.Decimal
-	BaseQty      *decimal.Decimal
-	SystemQty    *decimal.Decimal
-	Note         string
-	ItemCode     string
-	ItemName     string
-	ItemSpec     string
-	UnitName     string
-	BaseUnitName string
+	ID             int64
+	DocumentID     int64
+	LineNo         int32
+	ItemID         int64
+	UnitID         int64
+	Qty            *decimal.Decimal
+	Factor         decimal.Decimal
+	BaseQty        *decimal.Decimal
+	SystemQty      *decimal.Decimal
+	Note           string
+	LotNo          string
+	ExpiryDate     *time.Time
+	ItemCode       string
+	ItemName       string
+	ItemSpec       string
+	ItemLotControl string
+	UnitName       string
+	BaseUnitName   string
 }
 
 func (q *Queries) ListStockDocumentLines(ctx context.Context, documentID int64) ([]ListStockDocumentLinesRow, error) {
@@ -349,9 +435,12 @@ func (q *Queries) ListStockDocumentLines(ctx context.Context, documentID int64) 
 			&i.BaseQty,
 			&i.SystemQty,
 			&i.Note,
+			&i.LotNo,
+			&i.ExpiryDate,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.ItemSpec,
+			&i.ItemLotControl,
 			&i.UnitName,
 			&i.BaseUnitName,
 		); err != nil {

@@ -477,6 +477,34 @@ func (q *Queries) ListItemCostsRaw(ctx context.Context, closingID int64) ([]Item
 	return items, nil
 }
 
+const lotBalanceMismatches = `-- name: LotBalanceMismatches :one
+SELECT (
+    (SELECT count(*) FROM (
+        SELECT b.lot_id, b.warehouse_id FROM inventory_lot_balances b
+        LEFT JOIN (SELECT t.lot_id, t.warehouse_id, SUM(t.qty) AS q FROM inventory_transactions t
+                   WHERE t.company_id = $1 AND t.lot_id IS NOT NULL GROUP BY t.lot_id, t.warehouse_id) x
+               ON x.lot_id = b.lot_id AND x.warehouse_id = b.warehouse_id
+        WHERE b.company_id = $1 AND b.qty <> COALESCE(x.q, 0)
+    ) a)
+    +
+    (SELECT count(*) FROM (
+        SELECT ib.item_id, ib.warehouse_id FROM inventory_balances ib JOIN items i ON i.id = ib.item_id
+        LEFT JOIN (SELECT lb.item_id, lb.warehouse_id, SUM(lb.qty) AS q FROM inventory_lot_balances lb
+                   WHERE lb.company_id = $1 GROUP BY lb.item_id, lb.warehouse_id) y
+               ON y.item_id = ib.item_id AND y.warehouse_id = ib.warehouse_id
+        WHERE ib.company_id = $1 AND i.lot_control <> 'none' AND ib.qty <> COALESCE(y.q, 0)
+    ) c)
+)::bigint AS mismatches
+`
+
+// 批號現有量的完整性:①各批號現有量 = 流水帳該批號的合計;②批號管理料品各批號合計 = 料品現有量。筆數應為 0
+func (q *Queries) LotBalanceMismatches(ctx context.Context, companyID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lotBalanceMismatches, companyID)
+	var mismatches int64
+	err := row.Scan(&mismatches)
+	return mismatches, err
+}
+
 const payableBaseBalance = `-- name: PayableBaseBalance :one
 SELECT COALESCE(SUM(CASE WHEN amount = 0 THEN 0 ELSE base_amount * (amount - paid_amount) / amount END), 0)::numeric AS balance
 FROM accounts_payable WHERE company_id = $1

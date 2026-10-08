@@ -126,11 +126,11 @@ func (q *Queries) CountItems(ctx context.Context, arg CountItemsParams) (int64, 
 
 const createItem = `-- name: CreateItem :one
 INSERT INTO items (company_id, code, name, spec, category_id, item_type, base_unit_id, barcode,
-                   tax_type_id, default_warehouse_id, safety_stock, list_price, note, created_by, updated_by)
+                   tax_type_id, default_warehouse_id, safety_stock, list_price, note, lot_control, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13,
-        $14, $14)
-RETURNING id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at
+        COALESCE(NULLIF($14::text, ''), 'none'), $15, $15)
+RETURNING id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at, lot_control
 `
 
 type CreateItemParams struct {
@@ -147,6 +147,7 @@ type CreateItemParams struct {
 	SafetyStock        decimal.Decimal
 	ListPrice          decimal.Decimal
 	Note               string
+	LotControl         string
 	CreatedBy          *int64
 }
 
@@ -165,6 +166,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		arg.SafetyStock,
 		arg.ListPrice,
 		arg.Note,
+		arg.LotControl,
 		arg.CreatedBy,
 	)
 	var i Item
@@ -189,6 +191,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LotControl,
 	)
 	return i, err
 }
@@ -203,7 +206,7 @@ func (q *Queries) DeleteItemUnits(ctx context.Context, itemID int64) error {
 }
 
 const getItem = `-- name: GetItem :one
-SELECT id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at FROM items WHERE id = $1 AND company_id = $2
+SELECT id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at, lot_control FROM items WHERE id = $1 AND company_id = $2
 `
 
 type GetItemParams struct {
@@ -235,6 +238,7 @@ func (q *Queries) GetItem(ctx context.Context, arg GetItemParams) (Item, error) 
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LotControl,
 	)
 	return i, err
 }
@@ -289,7 +293,7 @@ WITH RECURSIVE cats (cat_id) AS (
     UNION ALL
     SELECT item_categories.id FROM item_categories, cats WHERE item_categories.parent_id = cats.cat_id
 )
-SELECT i.id, i.company_id, i.code, i.name, i.spec, i.category_id, i.item_type, i.base_unit_id, i.barcode, i.tax_type_id, i.default_warehouse_id, i.safety_stock, i.list_price, i.note, i.is_active, i.created_by, i.updated_by, i.version, i.created_at, i.updated_at, c.name AS category_name, u.name AS base_unit_name
+SELECT i.id, i.company_id, i.code, i.name, i.spec, i.category_id, i.item_type, i.base_unit_id, i.barcode, i.tax_type_id, i.default_warehouse_id, i.safety_stock, i.list_price, i.note, i.is_active, i.created_by, i.updated_by, i.version, i.created_at, i.updated_at, i.lot_control, c.name AS category_name, u.name AS base_unit_name
 FROM items i
 LEFT JOIN item_categories c ON c.id = i.category_id
 JOIN units u ON u.id = i.base_unit_id
@@ -337,6 +341,7 @@ type ListItemsRow struct {
 	Version            int32
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	LotControl         string
 	CategoryName       *string
 	BaseUnitName       string
 }
@@ -380,6 +385,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]ListIte
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LotControl,
 			&i.CategoryName,
 			&i.BaseUnitName,
 		); err != nil {
@@ -398,10 +404,10 @@ UPDATE items
 SET code = $1, name = $2, spec = $3, category_id = $4, item_type = $5,
     base_unit_id = $6, barcode = $7, tax_type_id = $8,
     default_warehouse_id = $9, safety_stock = $10,
-    list_price = $11, note = $12, is_active = $13,
-    version = version + 1, updated_by = $14
-WHERE id = $15 AND company_id = $16 AND version = $17
-RETURNING id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at
+    list_price = $11, note = $12, is_active = $13, lot_control = $14,
+    version = version + 1, updated_by = $15
+WHERE id = $16 AND company_id = $17 AND version = $18
+RETURNING id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at, lot_control
 `
 
 type UpdateItemParams struct {
@@ -418,6 +424,7 @@ type UpdateItemParams struct {
 	ListPrice          decimal.Decimal
 	Note               string
 	IsActive           bool
+	LotControl         string
 	UpdatedBy          *int64
 	ID                 int64
 	CompanyID          int64
@@ -440,6 +447,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		arg.ListPrice,
 		arg.Note,
 		arg.IsActive,
+		arg.LotControl,
 		arg.UpdatedBy,
 		arg.ID,
 		arg.CompanyID,
@@ -467,6 +475,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LotControl,
 	)
 	return i, err
 }

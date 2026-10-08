@@ -279,7 +279,7 @@ WHERE id = @id AND company_id = @company_id AND version = @version
 RETURNING *;
 
 -- name: ListGoodsReceiptLines :many
-SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type,
+SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name,
        po.doc_no AS po_no, src.doc_no AS source_receipt_no
 FROM goods_receipt_lines l
@@ -298,9 +298,13 @@ DELETE FROM goods_receipt_lines WHERE receipt_id = @receipt_id;
 
 -- name: AddGoodsReceiptLine :exec
 INSERT INTO goods_receipt_lines (receipt_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                                 base_amount, po_line_id, receipt_line_id, note)
+                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date)
 VALUES (@receipt_id, @line_no, @item_id, @unit_id, @qty, @factor, @base_qty, @unit_price, @amount, @base_amount,
-        sqlc.narg(po_line_id), sqlc.narg(receipt_line_id), @note);
+        sqlc.narg(po_line_id), sqlc.narg(receipt_line_id), @note, @lot_no, sqlc.narg(expiry_date));
+
+-- name: ReceiptLineLots :many
+-- 進貨退出預設沿用被退進貨明細的批號
+SELECT id, lot_no, expiry_date FROM goods_receipt_lines WHERE id = ANY(@ids::bigint[]);
 
 -- name: PoLineRefs :many
 -- 進貨明細引用的採購明細,以及「其他」已過帳進貨單的已交量

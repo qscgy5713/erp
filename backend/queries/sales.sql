@@ -359,7 +359,7 @@ WHERE id = @id AND company_id = @company_id AND version = @version AND status <>
 RETURNING *;
 
 -- name: ListDeliveryLines :many
-SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type,
+SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name,
        so.doc_no AS so_no, src.doc_no AS source_delivery_no
 FROM delivery_lines l
@@ -378,9 +378,9 @@ DELETE FROM delivery_lines WHERE delivery_id = @delivery_id;
 
 -- name: AddDeliveryLine :exec
 INSERT INTO delivery_lines (delivery_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                            base_amount, so_line_id, delivery_line_id, note)
+                            base_amount, so_line_id, delivery_line_id, note, lot_no, expiry_date)
 VALUES (@delivery_id, @line_no, @item_id, @unit_id, @qty, @factor, @base_qty, @unit_price, @amount, @base_amount,
-        sqlc.narg(so_line_id), sqlc.narg(delivery_line_id), @note);
+        sqlc.narg(so_line_id), sqlc.narg(delivery_line_id), @note, @lot_no, sqlc.narg(expiry_date));
 
 -- name: SoLineRefs :many
 -- 出貨明細引用的訂單明細,以及「其他」已過帳出貨單的已出貨量

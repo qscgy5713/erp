@@ -60,10 +60,10 @@ SELECT
 
 -- name: CreateItem :one
 INSERT INTO items (company_id, code, name, spec, category_id, item_type, base_unit_id, barcode,
-                   tax_type_id, default_warehouse_id, safety_stock, list_price, note, created_by, updated_by)
+                   tax_type_id, default_warehouse_id, safety_stock, list_price, note, lot_control, created_by, updated_by)
 VALUES (@company_id, @code, @name, @spec, sqlc.narg(category_id), @item_type, @base_unit_id, sqlc.narg(barcode),
         sqlc.narg(tax_type_id), sqlc.narg(default_warehouse_id), @safety_stock, @list_price, @note,
-        @created_by, @created_by)
+        COALESCE(NULLIF(@lot_control::text, ''), 'none'), @created_by, @created_by)
 RETURNING *;
 
 -- name: UpdateItem :one
@@ -72,7 +72,7 @@ UPDATE items
 SET code = @code, name = @name, spec = @spec, category_id = sqlc.narg(category_id), item_type = @item_type,
     base_unit_id = @base_unit_id, barcode = sqlc.narg(barcode), tax_type_id = sqlc.narg(tax_type_id),
     default_warehouse_id = sqlc.narg(default_warehouse_id), safety_stock = @safety_stock,
-    list_price = @list_price, note = @note, is_active = @is_active,
+    list_price = @list_price, note = @note, is_active = @is_active, lot_control = @lot_control,
     version = version + 1, updated_by = @updated_by
 WHERE id = @id AND company_id = @company_id AND version = @version
 RETURNING *;

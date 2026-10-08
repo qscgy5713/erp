@@ -78,6 +78,14 @@ export interface ItemUnit {
   barcode: string | null
 }
 
+export type LotControl = 'none' | 'lot' | 'lot_expiry'
+
+export const lotControlLabels: Record<LotControl, string> = {
+  none: '不管理',
+  lot: '管理批號',
+  lot_expiry: '管理批號與效期',
+}
+
 export interface Item {
   id: number
   code: string
@@ -86,6 +94,8 @@ export interface Item {
   category_id: number | null
   category_name?: string | null
   item_type: 'goods' | 'service'
+  /** 批號管理:none 不管理 / lot 批號 / lot_expiry 批號與效期 */
+  lot_control: LotControl
   base_unit_id: number
   base_unit_name?: string
   barcode: string | null

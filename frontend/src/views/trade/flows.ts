@@ -29,6 +29,11 @@ export interface TradeLine {
   /** 訂單類:已交 / 已出貨量與未交量 */
   done_qty?: string
   remaining_qty?: string
+  /** 進貨 / 出貨類:批號管理料品的批號與效期;已過帳的出貨另有實際出庫的批號 */
+  item_lot_control?: string
+  lot_no?: string
+  expiry_date?: string | null
+  lots?: { lot_no: string; expiry_date: string | null; qty: string }[]
 }
 
 export interface TradeDoc {
@@ -214,6 +219,10 @@ function fromReceipt(d: GoodsReceipt): TradeDoc {
       ...line(l),
       ref_id: l.po_line_id ?? l.receipt_line_id,
       ref_no: l.po_no ?? l.source_receipt_no,
+      item_lot_control: l.item_lot_control,
+      lot_no: l.lot_no,
+      expiry_date: l.expiry_date,
+      lots: l.lots,
     })),
   }
 }
@@ -258,6 +267,10 @@ function fromDelivery(d: Delivery): TradeDoc {
       ...line(l),
       ref_id: l.so_line_id ?? l.delivery_line_id,
       ref_no: l.so_no ?? l.source_delivery_no,
+      item_lot_control: l.item_lot_control,
+      lot_no: l.lot_no,
+      expiry_date: l.expiry_date,
+      lots: l.lots,
     })),
   }
 }

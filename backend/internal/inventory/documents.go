@@ -65,6 +65,11 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/balances", read, m.listBalances)
 	g.GET("/movement-summary", read, m.movementSummary)
 	g.GET("/items/:id/ledger", read, m.itemLedger)
+	g.GET("/lots", read, m.listLots)
+	g.GET("/lots/:id/ledger", read, m.lotLedger)
+	// 開單時挑選批號:庫存、進貨、出貨的開單者都需要
+	g.GET("/lot-options", auth.Require(permission.InventoryRead, permission.InventoryWrite, permission.ReceiptWrite,
+		permission.DeliveryWrite, permission.ReceiptRead, permission.DeliveryRead), m.lotOptions)
 	g.GET("/documents", read, m.listDocuments)
 	g.GET("/documents/:id", read, m.getDocument)
 	g.POST("/documents", auth.Require(permission.InventoryWrite), m.createDocument)
@@ -93,6 +98,17 @@ type lineDTO struct {
 	SystemQty    *decimal.Decimal `json:"system_qty"`
 	DiffQty      *decimal.Decimal `json:"diff_qty,omitempty"` // 盤點差異 = 實盤 − 帳面
 	Note         string           `json:"note"`
+	// 批號:批號管理的料品填。調整增加為入庫批號,調整減少 / 調撥可空白(先到期先出),盤點為被盤的批號
+	ItemLotControl string       `json:"item_lot_control"` // none / lot / lot_expiry
+	LotNo          string       `json:"lot_no"`
+	ExpiryDate     *string      `json:"expiry_date"`
+	Lots           []lotUsedDTO `json:"lots"` // 已過帳:實際異動的批號
+}
+
+type lotUsedDTO struct {
+	LotNo      string          `json:"lot_no"`
+	ExpiryDate *string         `json:"expiry_date"`
+	Qty        decimal.Decimal `json:"qty"` // 正數
 }
 
 type documentDTO struct {
@@ -138,12 +154,26 @@ func (m *Module) loadDocument(ctx context.Context, q *db.Queries, companyID, id 
 			ID: r.ID, LineNo: r.LineNo, ItemID: r.ItemID, ItemCode: r.ItemCode, ItemName: r.ItemName,
 			ItemSpec: r.ItemSpec, UnitID: r.UnitID, UnitName: r.UnitName, BaseUnitName: r.BaseUnitName,
 			Qty: r.Qty, Factor: r.Factor, BaseQty: r.BaseQty, SystemQty: r.SystemQty, Note: r.Note,
+			ItemLotControl: r.ItemLotControl, LotNo: r.LotNo, ExpiryDate: dateStr(r.ExpiryDate), Lots: []lotUsedDTO{},
 		}
 		if d.DocType == TypeCount && r.BaseQty != nil && r.SystemQty != nil {
 			diff := r.BaseQty.Sub(*r.SystemQty)
 			l.DiffQty = &diff
 		}
 		lines[i] = l
+	}
+	if d.Status == "posted" || d.Status == "closed" {
+		used, err := q.ListOpenLotTransactionsBySource(ctx, db.ListOpenLotTransactionsBySourceParams{SourceType: docTypes[d.DocType].source, SourceID: id})
+		if err != nil {
+			return documentDTO{}, err
+		}
+		for _, u := range used {
+			for i := range lines {
+				if u.SourceLineID != nil && *u.SourceLineID == lines[i].ID {
+					lines[i].Lots = append(lines[i].Lots, lotUsedDTO{LotNo: u.LotNo, ExpiryDate: dateStr(u.ExpiryDate), Qty: u.Qty.Abs()})
+				}
+			}
+		}
 	}
 	return documentDTO{
 		ID: d.ID, DocType: d.DocType, DocNo: d.DocNo, DocDate: d.DocDate.Format(time.DateOnly),
@@ -251,6 +281,9 @@ type lineInput struct {
 	UnitID int64            `json:"unit_id" binding:"required"`
 	Qty    *decimal.Decimal `json:"qty"` // 盤點未盤可為 null
 	Note   string           `json:"note" binding:"max=255"`
+	// 批號管理的料品:調整增加填批號與效期;減少 / 調撥可空白(先到期先出);盤點為被盤的批號
+	LotNo      string  `json:"lot_no"`
+	ExpiryDate *string `json:"expiry_date"`
 }
 
 type documentInput struct {
@@ -270,6 +303,7 @@ type preparedLine struct {
 	factor    decimal.Decimal
 	baseQty   *decimal.Decimal
 	systemQty *decimal.Decimal
+	expiry    *time.Time
 }
 
 // prepareLines 驗證明細並換算基本單位數量。
@@ -301,7 +335,7 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 
 	fields := map[string]string{}
 	out := make([]preparedLine, len(lines))
-	seenCount := map[int64]bool{}
+	seenCount := map[string]bool{}
 	for i, l := range lines {
 		key := fmt.Sprintf("lines.%d", i)
 		l.Note = strings.TrimSpace(l.Note)
@@ -328,11 +362,12 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 				fields[key] = "盤點請以基本單位輸入"
 				continue
 			}
-			if seenCount[l.ItemID] {
+			dup := fmt.Sprintf("%d/%s", l.ItemID, strings.ToUpper(strings.TrimSpace(l.LotNo)))
+			if seenCount[dup] {
 				fields[key] = it.Code + " 重複"
 				continue
 			}
-			seenCount[l.ItemID] = true
+			seenCount[dup] = true
 		}
 		if l.Qty != nil {
 			qty := *l.Qty
@@ -360,7 +395,31 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 			fields[key] = "請輸入數量"
 			continue
 		}
+		exp, err := optionalInputDate(l.ExpiryDate)
+		if err != nil {
+			fields[key] = "效期格式不正確(YYYY-MM-DD)"
+			continue
+		}
+		p.expiry = exp
 		out[i] = p
+	}
+	if len(fields) == 0 {
+		// 批號:調整增加為入庫(批號必填),減少與調撥為出庫(可空白);盤點須指定被盤的批號
+		inputs := make([]LotInput, len(out))
+		for i, p := range out {
+			inbound := docType == TypeCount || (docType == TypeAdjustment && p.baseQty != nil && p.baseQty.IsPositive())
+			inputs[i] = LotInput{ItemID: p.ItemID, LotNo: p.LotNo, Expiry: p.expiry, Inbound: inbound}
+		}
+		checked, lotErrs, err := CheckLotInputs(ctx, q, companyID, inputs)
+		if err != nil {
+			return nil, err
+		}
+		for i, msg := range lotErrs {
+			fields[fmt.Sprintf("lines.%d", i)] = msg
+		}
+		for i := range out {
+			out[i].LotNo, out[i].expiry = checked[i].LotNo, checked[i].Expiry
+		}
 	}
 	if len(fields) > 0 {
 		return nil, apperr.Validation(fields)
@@ -411,7 +470,7 @@ func saveLines(ctx context.Context, q *db.Queries, docID int64, lines []prepared
 	for i, l := range lines {
 		if err := q.AddStockDocumentLine(ctx, db.AddStockDocumentLineParams{
 			DocumentID: docID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
-			Factor: l.factor, BaseQty: l.baseQty, SystemQty: l.systemQty, Note: l.Note,
+			Factor: l.factor, BaseQty: l.baseQty, SystemQty: l.systemQty, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry,
 		}); err != nil {
 			return err
 		}
@@ -426,7 +485,14 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 			if given[i].systemQty != nil {
 				continue
 			}
-			bal, err := q.GetBalanceQty(ctx, db.GetBalanceQtyParams{ItemID: given[i].ItemID, WarehouseID: warehouseID})
+			var bal decimal.Decimal
+			var err error
+			if given[i].LotNo != "" { // 批號管理的料品:帳面數為該批號的現有量
+				bal, err = q.GetLotBalanceQtyByNo(ctx, db.GetLotBalanceQtyByNoParams{
+					CompanyID: companyID, ItemID: given[i].ItemID, LotNo: given[i].LotNo, WarehouseID: warehouseID})
+			} else {
+				bal, err = q.GetBalanceQty(ctx, db.GetBalanceQtyParams{ItemID: given[i].ItemID, WarehouseID: warehouseID})
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -438,12 +504,39 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 	if err != nil {
 		return nil, err
 	}
-	out := make([]preparedLine, len(snap))
-	for i, s := range snap {
-		sys := s.Qty
-		out[i] = preparedLine{
-			lineInput: lineInput{ItemID: s.ItemID, UnitID: s.BaseUnitID},
-			factor:    decimal.NewFromInt(1), systemQty: &sys,
+	lotItems := []int64{}
+	for _, s := range snap {
+		if s.LotControl != "none" {
+			lotItems = append(lotItems, s.ItemID)
+		}
+	}
+	lotsOf := map[int64][]db.CountLotSnapshotRow{}
+	if len(lotItems) > 0 {
+		rows, err := q.CountLotSnapshot(ctx, db.CountLotSnapshotParams{CompanyID: companyID, WarehouseID: warehouseID, ItemIds: lotItems})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			lotsOf[r.ItemID] = append(lotsOf[r.ItemID], r)
+		}
+	}
+	out := make([]preparedLine, 0, len(snap))
+	for _, s := range snap {
+		if s.LotControl == "none" {
+			sys := s.Qty
+			out = append(out, preparedLine{
+				lineInput: lineInput{ItemID: s.ItemID, UnitID: s.BaseUnitID},
+				factor:    decimal.NewFromInt(1), systemQty: &sys,
+			})
+			continue
+		}
+		// 批號管理的料品:每個有庫存的批號一行
+		for _, l := range lotsOf[s.ItemID] {
+			sys := l.Qty
+			out = append(out, preparedLine{
+				lineInput: lineInput{ItemID: s.ItemID, UnitID: s.BaseUnitID, LotNo: l.LotNo},
+				factor:    decimal.NewFromInt(1), systemQty: &sys, expiry: l.ExpiryDate,
+			})
 		}
 	}
 	return out, nil
@@ -567,22 +660,23 @@ func (m *Module) updateDocument(c *gin.Context) {
 			return err
 		}
 		if in.DocType == TypeCount {
-			// 保留原快照的帳面數;新加入的料品以目前現有量為帳面數
-			snap := map[int64]*decimal.Decimal{}
+			// 保留原快照的帳面數;新加入的料品(批號)以目前現有量為帳面數。批號管理的料品依 (料品, 批號) 對應
+			lineKey := func(item int64, lot string) string { return fmt.Sprintf("%d/%s", item, lot) }
+			snap := map[string]*decimal.Decimal{}
 			for _, l := range before.Lines {
-				snap[l.ItemID] = l.SystemQty
+				snap[lineKey(l.ItemID, l.LotNo)] = l.SystemQty
 			}
-			kept := map[int64]bool{}
+			kept := map[string]bool{}
 			for _, l := range lines {
-				kept[l.ItemID] = true
+				kept[lineKey(l.ItemID, l.LotNo)] = true
 			}
 			for _, l := range before.Lines {
-				if !kept[l.ItemID] {
-					return errCountLineRemoved.WithDetails(map[string]string{"item": l.ItemCode + " " + l.ItemName})
+				if !kept[lineKey(l.ItemID, l.LotNo)] {
+					return errCountLineRemoved.WithDetails(map[string]string{"item": l.ItemCode + " " + l.ItemName + " " + l.LotNo})
 				}
 			}
 			for i := range lines {
-				lines[i].systemQty = snap[lines[i].ItemID]
+				lines[i].systemQty = snap[lineKey(lines[i].ItemID, lines[i].LotNo)]
 			}
 			if lines, err = countLines(ctx, q, a.CompanyID, cur.WarehouseID, nil, lines, false); err != nil {
 				return err
@@ -756,18 +850,39 @@ func movementsOf(cur db.StockDocument, doc documentDTO) []Movement {
 	var moves []Movement
 	for _, l := range doc.Lines {
 		lineID := l.ID
+		exp, _ := optionalInputDate(l.ExpiryDate)
 		switch cur.DocType {
 		case TypeAdjustment:
-			moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.BaseQty, SourceLineID: &lineID})
+			moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.BaseQty, SourceLineID: &lineID,
+				LotNo: l.LotNo, Expiry: exp, AllowExpired: true}) // 調整減少常用於報廢,允許出已過期的批號
 		case TypeTransfer:
-			moves = append(moves,
-				Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: l.BaseQty.Neg(), SourceLineID: &lineID},
-				Movement{ItemID: l.ItemID, WarehouseID: *cur.ToWarehouseID, Qty: *l.BaseQty, SourceLineID: &lineID})
+			moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: l.BaseQty.Neg(), SourceLineID: &lineID,
+				LotNo: l.LotNo, TransferTo: cur.ToWarehouseID, AllowExpired: true})
 		case TypeCount:
 			if l.DiffQty != nil && !l.DiffQty.IsZero() {
-				moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.DiffQty, SourceLineID: &lineID})
+				moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.DiffQty, SourceLineID: &lineID,
+					LotNo: l.LotNo, Expiry: exp, AllowExpired: true})
 			}
 		}
 	}
 	return moves
+}
+
+func optionalInputDate(s *string) (*time.Time, error) {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.DateOnly, strings.TrimSpace(*s))
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func dateStr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.Format(time.DateOnly)
+	return &s
 }

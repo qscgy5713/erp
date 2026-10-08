@@ -138,7 +138,7 @@ func TestMonthlyCostClosing(t *testing.T) {
 			Diff   string `json:"diff"`
 		} `json:"checks"`
 	}](t, c.do(http.MethodGet, "/costing/reconcile", nil).Data)
-	if !rec.OK || len(rec.Checks) != 6 {
+	if !rec.OK || len(rec.Checks) != 7 {
 		t.Fatalf("reconcile = %+v", rec)
 	}
 	for _, ch := range rec.Checks {

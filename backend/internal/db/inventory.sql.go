@@ -105,9 +105,10 @@ func (q *Queries) EnsureBalance(ctx context.Context, arg EnsureBalanceParams) er
 
 const insertInventoryTransaction = `-- name: InsertInventoryTransaction :one
 INSERT INTO inventory_transactions (company_id, item_id, warehouse_id, doc_date, qty, unit_cost, source_type,
-                                    source_id, source_line_id, source_no, reversal_of, created_by)
+                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12)
+        $8, $9, $10, $11, $12,
+        $13)
 RETURNING id
 `
 
@@ -124,6 +125,7 @@ type InsertInventoryTransactionParams struct {
 	SourceNo     string
 	ReversalOf   *int64
 	CreatedBy    *int64
+	LotID        *int64
 }
 
 func (q *Queries) InsertInventoryTransaction(ctx context.Context, arg InsertInventoryTransactionParams) (int64, error) {
@@ -140,6 +142,7 @@ func (q *Queries) InsertInventoryTransaction(ctx context.Context, arg InsertInve
 		arg.SourceNo,
 		arg.ReversalOf,
 		arg.CreatedBy,
+		arg.LotID,
 	)
 	var id int64
 	err := row.Scan(&id)
@@ -387,7 +390,7 @@ func (q *Queries) ListItemUnitFactors(ctx context.Context, itemIds []int64) ([]L
 }
 
 const listOpenTransactionsBySource = `-- name: ListOpenTransactionsBySource :many
-SELECT t.id, t.company_id, t.item_id, t.warehouse_id, t.doc_date, t.qty, t.unit_cost, t.source_type, t.source_id, t.source_line_id, t.source_no, t.reversal_of, t.created_by, t.created_at FROM inventory_transactions t
+SELECT t.id, t.company_id, t.item_id, t.warehouse_id, t.doc_date, t.qty, t.unit_cost, t.source_type, t.source_id, t.source_line_id, t.source_no, t.reversal_of, t.created_by, t.created_at, t.lot_id FROM inventory_transactions t
 WHERE t.source_type = $1 AND t.source_id = $2 AND t.reversal_of IS NULL
   AND NOT EXISTS (SELECT 1 FROM inventory_transactions r WHERE r.reversal_of = t.id)
 ORDER BY t.id
@@ -423,6 +426,7 @@ func (q *Queries) ListOpenTransactionsBySource(ctx context.Context, arg ListOpen
 			&i.ReversalOf,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.LotID,
 		); err != nil {
 			return nil, err
 		}
@@ -435,7 +439,7 @@ func (q *Queries) ListOpenTransactionsBySource(ctx context.Context, arg ListOpen
 }
 
 const listStockItems = `-- name: ListStockItems :many
-SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active
+SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active, i.lot_control
 FROM items i
 WHERE i.company_id = $1 AND i.id = ANY($2::bigint[])
 `
@@ -452,6 +456,7 @@ type ListStockItemsRow struct {
 	ItemType   string
 	BaseUnitID int64
 	IsActive   bool
+	LotControl string
 }
 
 // 過帳 / 開單時驗證料品:須屬同公司
@@ -471,6 +476,7 @@ func (q *Queries) ListStockItems(ctx context.Context, arg ListStockItemsParams) 
 			&i.ItemType,
 			&i.BaseUnitID,
 			&i.IsActive,
+			&i.LotControl,
 		); err != nil {
 			return nil, err
 		}

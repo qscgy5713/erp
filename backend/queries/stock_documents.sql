@@ -80,7 +80,7 @@ WHERE id = @id AND company_id = @company_id AND version = @version
 RETURNING *;
 
 -- name: ListStockDocumentLines :many
-SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec,
+SELECT l.*, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name
 FROM stock_document_lines l
 JOIN items i ON i.id = l.item_id
@@ -93,9 +93,10 @@ ORDER BY l.line_no;
 DELETE FROM stock_document_lines WHERE document_id = @document_id;
 
 -- name: AddStockDocumentLine :exec
-INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note)
+INSERT INTO stock_document_lines (document_id, line_no, item_id, unit_id, qty, factor, base_qty, system_qty, note,
+                                  lot_no, expiry_date)
 VALUES (@document_id, @line_no, @item_id, @unit_id, sqlc.narg(qty), @factor, sqlc.narg(base_qty),
-        sqlc.narg(system_qty), @note);
+        sqlc.narg(system_qty), @note, @lot_no, sqlc.narg(expiry_date));
 
 -- name: CountSnapshot :many
 -- 盤點建立時的帳面數量快照:該倉庫有現有量紀錄的商品(可限分類,含下層)
@@ -104,7 +105,7 @@ WITH RECURSIVE cats (cat_id) AS (
     UNION ALL
     SELECT item_categories.id FROM item_categories, cats WHERE item_categories.parent_id = cats.cat_id
 )
-SELECT b.item_id, i.base_unit_id, b.qty
+SELECT b.item_id, i.base_unit_id, b.qty, i.lot_control
 FROM inventory_balances b
 JOIN items i ON i.id = b.item_id
 WHERE b.company_id = @company_id AND b.warehouse_id = @warehouse_id AND i.item_type = 'goods'
@@ -113,3 +114,16 @@ ORDER BY i.code;
 
 -- name: GetBalanceQty :one
 SELECT COALESCE((SELECT qty FROM inventory_balances WHERE item_id = @item_id AND warehouse_id = @warehouse_id), 0)::numeric;
+
+-- name: CountLotSnapshot :many
+-- 盤點建立時批號管理料品的帳面數量快照:依批號逐筆(有庫存的批號)
+SELECT b.item_id, l.lot_no, l.expiry_date, b.qty
+FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
+WHERE b.company_id = @company_id AND b.warehouse_id = @warehouse_id AND b.item_id = ANY(@item_ids::bigint[]) AND b.qty > 0
+ORDER BY b.item_id, l.expiry_date NULLS LAST, l.id;
+
+-- name: GetLotBalanceQtyByNo :one
+-- 某批號在某倉庫的現有量(批號不存在為 0)
+SELECT COALESCE((SELECT b.qty FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
+                 WHERE l.company_id = @company_id AND l.item_id = @item_id AND l.lot_no = @lot_no
+                   AND b.warehouse_id = @warehouse_id), 0)::numeric;

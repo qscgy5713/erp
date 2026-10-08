@@ -90,3 +90,23 @@ WHERE p.company_id = @company_id AND p.amount <> p.paid_amount;
 
 -- name: DashboardLatestClosing :one
 SELECT c.period FROM cost_closings c WHERE c.company_id = @company_id ORDER BY c.period DESC LIMIT 1;
+
+-- name: DashboardExpiryCounts :one
+-- 有庫存的批號中,已過期與即將到期(today 到 until)的批號數;controlled 表示公司有效期管理的料品
+SELECT
+  count(*) FILTER (WHERE l.expiry_date < @today::date)::bigint AS expired,
+  count(*) FILTER (WHERE l.expiry_date >= @today::date AND l.expiry_date <= @until::date)::bigint AS expiring,
+  EXISTS (SELECT 1 FROM items x WHERE x.company_id = @company_id AND x.lot_control = 'lot_expiry') AS controlled
+FROM (SELECT DISTINCT b.lot_id FROM inventory_lot_balances b WHERE b.company_id = @company_id AND b.qty > 0) s
+JOIN item_lots l ON l.id = s.lot_id;
+
+-- name: DashboardExpiryTop :many
+-- 最早到期的前 5 個有庫存的批號(含已過期)
+SELECT l.id AS lot_id, l.lot_no, l.expiry_date, i.code, i.name, SUM(b.qty)::numeric AS qty
+FROM inventory_lot_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN items i ON i.id = b.item_id
+WHERE b.company_id = @company_id AND b.qty > 0 AND l.expiry_date IS NOT NULL AND l.expiry_date <= @until::date
+GROUP BY l.id, i.code, i.name
+ORDER BY l.expiry_date, i.code
+LIMIT 5;

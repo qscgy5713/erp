@@ -19,6 +19,7 @@ import { formatDateTime } from '@/utils/format'
 import { buildTree } from '@/utils/tree'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
+import LotCell from '@/components/LotCell.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,6 +134,9 @@ function onPickItem(row: LineRow, item: ItemOption | null) {
   row.unit_id = item.base_unit_id
   row.factor = '1'
   row.system_qty = null // 盤點新增料品:帳面數由後端依目前現有量帶入
+  row.item_lot_control = item.lot_control
+  row.lot_no = ''
+  row.expiry_date = null
 }
 
 function addLine() {
@@ -159,6 +163,17 @@ function lineError(uiIndex: number): string | undefined {
   return i < 0 ? undefined : fieldErrors.value[`lines.${i}`]
 }
 
+// ---- 批號與效期 ----
+const lotControlled = (row: LineRow) => !!row.item_lot_control && row.item_lot_control !== 'none'
+const lotColumn = computed(() => form.lines.some(lotControlled))
+/** 入庫(調整增加、盤點)輸入批號與效期;出庫(調整減少、調撥)可指定批號,留空先到期先出 */
+function lotMode(row: LineRow): 'in' | 'out' {
+  if (docType.value === 'count') return 'in'
+  if (docType.value === 'transfer') return 'out'
+  return Number(row.qty) > 0 ? 'in' : 'out'
+}
+
+// 載入既有單據時,料品的批號管理方式已由後端帶回;新增的列由選料品時設定
 function payload() {
   sentIndex.value = form.lines.flatMap((l, i) => (l.item_id !== null ? [i] : []))
   return {
@@ -176,6 +191,8 @@ function payload() {
         unit_id: l.unit_id ?? 0,
         qty: l.qty === '' ? null : l.qty,
         note: l.note,
+        lot_no: lotControlled(l) ? (l.lot_no ?? '') : '',
+        expiry_date: lotControlled(l) ? l.expiry_date || null : null,
       })),
   }
 }
@@ -406,6 +423,21 @@ onMounted(async () => {
             <div v-if="lineError($index)" class="err">
               {{ lineError($index) }}
             </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column v-if="lotColumn" label="批號 / 效期" width="250">
+          <template #default="{ row }">
+            <LotCell
+              v-model:lot-no="row.lot_no"
+              v-model:expiry-date="row.expiry_date"
+              :item-id="row.item_id"
+              :control="row.item_lot_control"
+              :mode="lotMode(row)"
+              :warehouse-id="form.warehouse_id"
+              :editable="editable && !(docType === 'count' && !!row.id)"
+              :lots="row.lots"
+            />
           </template>
         </el-table-column>
 

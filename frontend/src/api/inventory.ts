@@ -1,10 +1,71 @@
 import { http, qs, requestPage } from './http'
-import type { Decimal, ItemUnit } from './masterdata'
+import type { Decimal, ItemUnit, LotControl } from './masterdata'
 
 export type DocStatus = 'draft' | 'pending' | 'approved' | 'posted' | 'closed' | 'voided'
 export type DocAction =
   'submit' | 'reject' | 'approve' | 'unapprove' | 'post' | 'unpost' | 'void' | 'close' | 'reopen'
 export type StockDocType = 'adjustment' | 'transfer' | 'count'
+
+export interface LotUsed {
+  lot_no: string
+  expiry_date: string | null
+  qty: Decimal
+}
+
+export type ExpiryStatus = 'expired' | 'expiring' | 'ok' | 'none'
+
+export const expiryStatusLabels: Record<ExpiryStatus, string> = {
+  expired: '已過期',
+  expiring: '即將到期',
+  ok: '正常',
+  none: '無效期',
+}
+
+export interface LotBalance {
+  lot_id: number
+  lot_no: string
+  expiry_date: string | null
+  expiry_status: ExpiryStatus
+  days_left: number | null
+  item_id: number
+  item_code: string
+  item_name: string
+  item_spec: string
+  unit_name: string
+  warehouse_id: number
+  warehouse_code: string
+  warehouse_name: string
+  qty: Decimal
+}
+
+export interface LotMove {
+  date: string
+  qty: Decimal
+  source_type: string
+  source_id: number
+  source_no: string
+  warehouse_name: string
+  partner: string
+  is_reversal: boolean
+  balance: Decimal
+}
+
+export interface LotLedger {
+  lot_id: number
+  lot_no: string
+  expiry_date: string | null
+  item_id: number
+  item_code: string
+  item_name: string
+  moves: LotMove[]
+}
+
+export interface LotOption {
+  lot_no: string
+  expiry_date: string | null
+  expiry_status: ExpiryStatus
+  qty?: Decimal
+}
 
 export interface StockLine {
   id?: number
@@ -22,6 +83,11 @@ export interface StockLine {
   system_qty?: Decimal | null
   diff_qty?: Decimal | null
   note: string
+  /** 批號管理的料品:輸入的批號與效期;已過帳的單據另有實際異動的批號 */
+  item_lot_control?: LotControl
+  lot_no?: string
+  expiry_date?: string | null
+  lots?: LotUsed[]
 }
 
 export interface StockDocument {
@@ -120,6 +186,7 @@ export interface ItemOption {
   name: string
   spec: string
   item_type: 'goods' | 'service'
+  lot_control: LotControl
   base_unit_id: number
   base_unit_name: string
   units: ItemUnit[]
@@ -128,6 +195,10 @@ export interface ItemOption {
 type Q = Record<string, string | number | boolean | null | undefined>
 
 export const inventoryApi = {
+  lots: (q: Q) => requestPage<LotBalance>(`/inventory/lots${qs(q)}`),
+  lotLedger: (id: number) => http.get<LotLedger>(`/inventory/lots/${id}/ledger`),
+  lotOptions: (item_id: number, warehouse_id?: number | null) =>
+    http.get<LotOption[]>(`/inventory/lot-options${qs({ item_id, warehouse_id })}`),
   documents: (q: Q) => requestPage<StockDocumentRow>(`/inventory/documents${qs(q)}`),
   document: (id: number) => http.get<StockDocument>(`/inventory/documents/${id}`),
   create: (input: StockDocumentInput) => http.post<StockDocument>('/inventory/documents', input),

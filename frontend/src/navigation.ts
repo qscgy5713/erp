@@ -87,6 +87,7 @@ export const navigation: NavItem[] = [
     title: '庫存',
     children: [
       { title: '現有量', path: '/inventory/balances', perm: INVENTORY_ANY },
+      { title: '批號庫存', path: '/inventory/lots', perm: INVENTORY_ANY },
       { title: '收發存', path: '/inventory/movement-summary', perm: INVENTORY_ANY },
       { title: '庫存單據', path: '/inventory/documents', perm: INVENTORY_ANY },
       { title: '月結成本', path: '/costing/closings', perm: ['costing.read', 'costing.close'] },

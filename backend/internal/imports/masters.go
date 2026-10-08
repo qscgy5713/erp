@@ -130,8 +130,9 @@ var itemsImporter = &importer{
 		{"安全庫存", false, "基本單位數量,最多 4 位小數"},
 		{"建議售價", false, "未稅、每基本單位,最多 6 位小數"},
 		{"備註", false, ""},
+		{"批號管理", false, "不管理(空白)/ 批號 / 批號與效期;服務類不可管理批號。匯入期初庫存前先設定好"},
 	},
-	sample: [][]string{{"PEN-01", "原子筆", "藍 0.5mm", "", "商品", "PCS", "4710000000011", "TX5", "100", "15", ""}},
+	sample: [][]string{{"PEN-01", "原子筆", "藍 0.5mm", "", "商品", "PCS", "4710000000011", "TX5", "100", "15", "", ""}, {"MILK-01", "鮮乳 1L", "", "", "商品", "PCS", "", "TX5", "0", "60", "", "批號與效期"}},
 	exec: func(r *run) error {
 		l, err := loadLookups(r)
 		if err != nil {
@@ -207,6 +208,21 @@ var itemsImporter = &importer{
 			tax, c3 := ref(r, row, 7, "稅別代號", l.taxTypes)
 			safety, c4 := nonNegative(r, row, 8, "安全庫存", money.QuantityPlaces)
 			price, c5 := nonNegative(r, row, 9, "建議售價", money.UnitPricePlaces)
+			lotControl := "none"
+			switch row.get(11) {
+			case "", "不管理":
+			case "批號":
+				lotControl = "lot"
+			case "批號與效期":
+				lotControl = "lot_expiry"
+			default:
+				r.fail(row.n, "批號管理", "須為「不管理」、「批號」或「批號與效期」")
+				ok = false
+			}
+			if lotControl != "none" && itemType == "service" {
+				r.fail(row.n, "批號管理", "服務類料品沒有庫存,不能做批號管理")
+				ok = false
+			}
 			if !ok || !c1 || !c2 || !c3 || !c4 || !c5 {
 				continue
 			}
@@ -217,7 +233,7 @@ var itemsImporter = &importer{
 			todo = append(todo, db.CreateItemParams{
 				CompanyID: r.a.CompanyID, Code: code, Name: name, Spec: row.get(2), CategoryID: cat, ItemType: itemType,
 				BaseUnitID: *unit, Barcode: barcode, TaxTypeID: tax, SafetyStock: safety, ListPrice: price,
-				Note: row.get(10), CreatedBy: &r.a.UserID,
+				Note: row.get(10), LotControl: lotControl, CreatedBy: &r.a.UserID,
 			})
 		}
 		if len(r.errs) > 0 {

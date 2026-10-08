@@ -12,9 +12,10 @@ WHERE item_id = @item_id AND warehouse_id = @warehouse_id;
 
 -- name: InsertInventoryTransaction :one
 INSERT INTO inventory_transactions (company_id, item_id, warehouse_id, doc_date, qty, unit_cost, source_type,
-                                    source_id, source_line_id, source_no, reversal_of, created_by)
+                                    source_id, source_line_id, source_no, reversal_of, created_by, lot_id)
 VALUES (@company_id, @item_id, @warehouse_id, @doc_date, @qty, sqlc.narg(unit_cost), @source_type,
-        @source_id, sqlc.narg(source_line_id), @source_no, sqlc.narg(reversal_of), sqlc.narg(created_by))
+        @source_id, sqlc.narg(source_line_id), @source_no, sqlc.narg(reversal_of), sqlc.narg(created_by),
+        sqlc.narg(lot_id))
 RETURNING id;
 
 -- name: ListOpenTransactionsBySource :many
@@ -35,7 +36,7 @@ LIMIT 1;
 
 -- name: ListStockItems :many
 -- 過帳 / 開單時驗證料品:須屬同公司
-SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active
+SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active, i.lot_control
 FROM items i
 WHERE i.company_id = @company_id AND i.id = ANY(@ids::bigint[]);
 

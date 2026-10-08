@@ -118,3 +118,23 @@ SELECT count(*) FROM (
     SELECT DISTINCT to_char(it.doc_date, 'YYYY-MM') AS m FROM inventory_transactions it
     WHERE it.company_id = @company_id AND it.doc_date < sqlc.arg(month_start)::date
 ) x WHERE NOT EXISTS (SELECT 1 FROM cost_closings c WHERE c.company_id = @company_id AND c.period = x.m);
+
+-- name: LotBalanceMismatches :one
+-- 批號現有量的完整性:①各批號現有量 = 流水帳該批號的合計;②批號管理料品各批號合計 = 料品現有量。筆數應為 0
+SELECT (
+    (SELECT count(*) FROM (
+        SELECT b.lot_id, b.warehouse_id FROM inventory_lot_balances b
+        LEFT JOIN (SELECT t.lot_id, t.warehouse_id, SUM(t.qty) AS q FROM inventory_transactions t
+                   WHERE t.company_id = @company_id AND t.lot_id IS NOT NULL GROUP BY t.lot_id, t.warehouse_id) x
+               ON x.lot_id = b.lot_id AND x.warehouse_id = b.warehouse_id
+        WHERE b.company_id = @company_id AND b.qty <> COALESCE(x.q, 0)
+    ) a)
+    +
+    (SELECT count(*) FROM (
+        SELECT ib.item_id, ib.warehouse_id FROM inventory_balances ib JOIN items i ON i.id = ib.item_id
+        LEFT JOIN (SELECT lb.item_id, lb.warehouse_id, SUM(lb.qty) AS q FROM inventory_lot_balances lb
+                   WHERE lb.company_id = @company_id GROUP BY lb.item_id, lb.warehouse_id) y
+               ON y.item_id = ib.item_id AND y.warehouse_id = ib.warehouse_id
+        WHERE ib.company_id = @company_id AND i.lot_control <> 'none' AND ib.qty <> COALESCE(y.q, 0)
+    ) c)
+)::bigint AS mismatches;

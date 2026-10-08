@@ -22,7 +22,7 @@ import (
 var (
 	errItemCodeDup    = apperr.Conflict("ITEM-001", "料號已存在")
 	errItemBarcodeDup = apperr.Conflict("ITEM-002", "條碼已被其他料品使用")
-	errItemInUse      = apperr.Conflict("ITEM-003", "此料品已有庫存異動,不可修改基本單位或類型")
+	errItemInUse      = apperr.Conflict("ITEM-003", "此料品已有庫存異動,不可修改基本單位、類型或批號管理")
 )
 
 const maxItemUnits = 10
@@ -43,6 +43,7 @@ type itemDTO struct {
 	CategoryID         *int64          `json:"category_id"`
 	CategoryName       *string         `json:"category_name,omitempty"`
 	ItemType           string          `json:"item_type"`
+	LotControl         string          `json:"lot_control"` // none / lot / lot_expiry
 	BaseUnitID         int64           `json:"base_unit_id"`
 	BaseUnitName       string          `json:"base_unit_name,omitempty"`
 	Barcode            *string         `json:"barcode"`
@@ -63,7 +64,7 @@ func toItemDTO(i db.Item, units []itemUnitDTO) itemDTO {
 	}
 	return itemDTO{
 		ID: i.ID, Code: i.Code, Name: i.Name, Spec: i.Spec, CategoryID: i.CategoryID, ItemType: i.ItemType,
-		BaseUnitID: i.BaseUnitID, Barcode: i.Barcode, TaxTypeID: i.TaxTypeID, DefaultWarehouseID: i.DefaultWarehouseID,
+		LotControl: i.LotControl, BaseUnitID: i.BaseUnitID, Barcode: i.Barcode, TaxTypeID: i.TaxTypeID, DefaultWarehouseID: i.DefaultWarehouseID,
 		SafetyStock: i.SafetyStock, ListPrice: i.ListPrice, Note: i.Note, IsActive: i.IsActive, Units: units,
 		Version: i.Version, UpdatedAt: i.UpdatedAt,
 	}
@@ -127,7 +128,7 @@ func (m *Module) listItems(c *gin.Context) {
 	for i, r := range rows {
 		dto := toItemDTO(db.Item{
 			ID: r.ID, Code: r.Code, Name: r.Name, Spec: r.Spec, CategoryID: r.CategoryID, ItemType: r.ItemType,
-			BaseUnitID: r.BaseUnitID, Barcode: r.Barcode, TaxTypeID: r.TaxTypeID, DefaultWarehouseID: r.DefaultWarehouseID,
+			LotControl: r.LotControl, BaseUnitID: r.BaseUnitID, Barcode: r.Barcode, TaxTypeID: r.TaxTypeID, DefaultWarehouseID: r.DefaultWarehouseID,
 			SafetyStock: r.SafetyStock, ListPrice: r.ListPrice, Note: r.Note, IsActive: r.IsActive,
 			Version: r.Version, UpdatedAt: r.UpdatedAt,
 		}, units[r.ID])
@@ -164,6 +165,7 @@ type itemInput struct {
 	Spec               string          `json:"spec" binding:"max=255"`
 	CategoryID         *int64          `json:"category_id"`
 	ItemType           string          `json:"item_type" binding:"required,oneof=goods service"`
+	LotControl         string          `json:"lot_control" binding:"omitempty,oneof=none lot lot_expiry"`
 	BaseUnitID         int64           `json:"base_unit_id" binding:"required"`
 	Barcode            *string         `json:"barcode" binding:"omitempty,max=50"`
 	TaxTypeID          *int64          `json:"tax_type_id"`
@@ -183,7 +185,13 @@ func (in *itemInput) normalize() error {
 	in.Note = strings.TrimSpace(in.Note)
 	in.Barcode = trimPtr(in.Barcode)
 
+	if in.LotControl == "" {
+		in.LotControl = "none"
+	}
 	fields := map[string]string{}
+	if in.ItemType == "service" && in.LotControl != "none" {
+		fields["lot_control"] = "服務類料品沒有庫存,不能做批號管理"
+	}
 	if in.SafetyStock.IsNegative() || in.SafetyStock.Exponent() < -money.QuantityPlaces {
 		fields["safety_stock"] = fmt.Sprintf("須 ≥ 0,最多 %d 位小數", money.QuantityPlaces)
 	}
@@ -307,7 +315,7 @@ func (m *Module) createItem(c *gin.Context) {
 			CompanyID: a.CompanyID, Code: in.Code, Name: in.Name, Spec: in.Spec, CategoryID: in.CategoryID,
 			ItemType: in.ItemType, BaseUnitID: in.BaseUnitID, Barcode: in.Barcode, TaxTypeID: in.TaxTypeID,
 			DefaultWarehouseID: in.DefaultWarehouseID, SafetyStock: in.SafetyStock, ListPrice: in.ListPrice,
-			Note: in.Note, CreatedBy: &a.UserID,
+			Note: in.Note, LotControl: in.LotControl, CreatedBy: &a.UserID,
 		})
 		if err != nil {
 			return itemWriteErr(err)
@@ -354,7 +362,8 @@ func (m *Module) updateItem(c *gin.Context) {
 			return err
 		}
 		// D24:已有庫存異動時,改基本單位或類型會讓歷史數量失真
-		if in.BaseUnitID != before.BaseUnitID || in.ItemType != before.ItemType {
+		// D63:批號管理方式同樣不可在有異動後改變(舊的異動沒有批號)
+		if in.BaseUnitID != before.BaseUnitID || in.ItemType != before.ItemType || in.LotControl != before.LotControl {
 			used, err := q.ItemHasTransactions(ctx, id)
 			if err != nil {
 				return err
@@ -367,7 +376,7 @@ func (m *Module) updateItem(c *gin.Context) {
 			ID: id, CompanyID: a.CompanyID, Code: in.Code, Name: in.Name, Spec: in.Spec, CategoryID: in.CategoryID,
 			ItemType: in.ItemType, BaseUnitID: in.BaseUnitID, Barcode: in.Barcode, TaxTypeID: in.TaxTypeID,
 			DefaultWarehouseID: in.DefaultWarehouseID, SafetyStock: in.SafetyStock, ListPrice: in.ListPrice,
-			Note: in.Note, IsActive: in.IsActive, Version: in.Version, UpdatedBy: &a.UserID,
+			Note: in.Note, IsActive: in.IsActive, LotControl: in.LotControl, Version: in.Version, UpdatedBy: &a.UserID,
 		})
 		if err != nil {
 			return itemWriteErr(versionConflictOr(err))
@@ -392,6 +401,7 @@ type itemOptionDTO struct {
 	Name         string        `json:"name"`
 	Spec         string        `json:"spec"`
 	ItemType     string        `json:"item_type"`
+	LotControl   string        `json:"lot_control"`
 	BaseUnitID   int64         `json:"base_unit_id"`
 	BaseUnitName string        `json:"base_unit_name"`
 	Units        []itemUnitDTO `json:"units"`
@@ -425,7 +435,7 @@ func (m *Module) itemOptions(c *gin.Context) {
 			us = []itemUnitDTO{}
 		}
 		out[i] = itemOptionDTO{
-			ID: r.ID, Code: r.Code, Name: r.Name, Spec: r.Spec, ItemType: r.ItemType,
+			ID: r.ID, Code: r.Code, Name: r.Name, Spec: r.Spec, ItemType: r.ItemType, LotControl: r.LotControl,
 			BaseUnitID: r.BaseUnitID, BaseUnitName: r.BaseUnitName, Units: us,
 		}
 	}

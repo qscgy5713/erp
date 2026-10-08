@@ -93,6 +93,11 @@ const router = createRouter({
       meta: { title: '現有量', perm: INVENTORY_ANY },
     },
     {
+      path: '/inventory/lots',
+      component: () => import('@/views/inventory/LotsView.vue'),
+      meta: { title: '批號庫存', perm: INVENTORY_ANY },
+    },
+    {
       path: '/inventory/movement-summary',
       component: () => import('@/views/inventory/MovementSummaryView.vue'),
       meta: { title: '收發存', perm: INVENTORY_ANY },

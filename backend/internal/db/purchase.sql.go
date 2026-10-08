@@ -14,9 +14,9 @@ import (
 
 const addGoodsReceiptLine = `-- name: AddGoodsReceiptLine :exec
 INSERT INTO goods_receipt_lines (receipt_id, line_no, item_id, unit_id, qty, factor, base_qty, unit_price, amount,
-                                 base_amount, po_line_id, receipt_line_id, note)
+                                 base_amount, po_line_id, receipt_line_id, note, lot_no, expiry_date)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13)
+        $11, $12, $13, $14, $15)
 `
 
 type AddGoodsReceiptLineParams struct {
@@ -33,6 +33,8 @@ type AddGoodsReceiptLineParams struct {
 	PoLineID      *int64
 	ReceiptLineID *int64
 	Note          string
+	LotNo         string
+	ExpiryDate    *time.Time
 }
 
 func (q *Queries) AddGoodsReceiptLine(ctx context.Context, arg AddGoodsReceiptLineParams) error {
@@ -50,6 +52,8 @@ func (q *Queries) AddGoodsReceiptLine(ctx context.Context, arg AddGoodsReceiptLi
 		arg.PoLineID,
 		arg.ReceiptLineID,
 		arg.Note,
+		arg.LotNo,
+		arg.ExpiryDate,
 	)
 	return err
 }
@@ -718,7 +722,7 @@ func (q *Queries) InsertPayable(ctx context.Context, arg InsertPayableParams) er
 }
 
 const listGoodsReceiptLines = `-- name: ListGoodsReceiptLines :many
-SELECT l.id, l.receipt_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.po_line_id, l.receipt_line_id, l.note, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type,
+SELECT l.id, l.receipt_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.base_amount, l.po_line_id, l.receipt_line_id, l.note, l.lot_no, l.expiry_date, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type, i.lot_control AS item_lot_control,
        u.name AS unit_name, bu.name AS base_unit_name,
        po.doc_no AS po_no, src.doc_no AS source_receipt_no
 FROM goods_receipt_lines l
@@ -748,10 +752,13 @@ type ListGoodsReceiptLinesRow struct {
 	PoLineID        *int64
 	ReceiptLineID   *int64
 	Note            string
+	LotNo           string
+	ExpiryDate      *time.Time
 	ItemCode        string
 	ItemName        string
 	ItemSpec        string
 	ItemType        string
+	ItemLotControl  string
 	UnitName        string
 	BaseUnitName    string
 	PoNo            *string
@@ -782,10 +789,13 @@ func (q *Queries) ListGoodsReceiptLines(ctx context.Context, receiptID int64) ([
 			&i.PoLineID,
 			&i.ReceiptLineID,
 			&i.Note,
+			&i.LotNo,
+			&i.ExpiryDate,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.ItemSpec,
 			&i.ItemType,
+			&i.ItemLotControl,
 			&i.UnitName,
 			&i.BaseUnitName,
 			&i.PoNo,
@@ -1582,6 +1592,37 @@ func (q *Queries) PurchaseOrderReceiptNo(ctx context.Context, orderID int64) (st
 	var doc_no string
 	err := row.Scan(&doc_no)
 	return doc_no, err
+}
+
+const receiptLineLots = `-- name: ReceiptLineLots :many
+SELECT id, lot_no, expiry_date FROM goods_receipt_lines WHERE id = ANY($1::bigint[])
+`
+
+type ReceiptLineLotsRow struct {
+	ID         int64
+	LotNo      string
+	ExpiryDate *time.Time
+}
+
+// 進貨退出預設沿用被退進貨明細的批號
+func (q *Queries) ReceiptLineLots(ctx context.Context, ids []int64) ([]ReceiptLineLotsRow, error) {
+	rows, err := q.db.Query(ctx, receiptLineLots, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReceiptLineLotsRow{}
+	for rows.Next() {
+		var i ReceiptLineLotsRow
+		if err := rows.Scan(&i.ID, &i.LotNo, &i.ExpiryDate); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const receiptLineRefs = `-- name: ReceiptLineRefs :many

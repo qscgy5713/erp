@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  lotControlLabels,
   masterdataApi,
   type Item,
   type ItemCategory,
@@ -70,6 +71,7 @@ interface ItemForm {
   spec: string
   category_id: number | null
   item_type: Item['item_type']
+  lot_control: Item['lot_control']
   base_unit_id: number | null
   barcode: string
   tax_type_id: number | null
@@ -104,6 +106,7 @@ const dlg = useFormDialog<ItemForm, Item>({
     spec: '',
     category_id: null,
     item_type: 'goods',
+    lot_control: 'none',
     base_unit_id: null,
     barcode: '',
     tax_type_id: taxTypes.value.find((t) => t.code === 'TX5')?.id ?? null,
@@ -120,6 +123,7 @@ const dlg = useFormDialog<ItemForm, Item>({
     spec: r.spec,
     category_id: r.category_id,
     item_type: r.item_type,
+    lot_control: r.lot_control ?? 'none',
     base_unit_id: r.base_unit_id,
     barcode: r.barcode ?? '',
     tax_type_id: r.tax_type_id,
@@ -360,6 +364,16 @@ onMounted(async () => {
                 </el-form-item>
               </el-col>
             </el-row>
+            <el-form-item label="批號管理" :error="fieldErrors.lot_control">
+              <el-radio-group v-model="form.lot_control" :disabled="form.item_type === 'service'">
+                <el-radio v-for="(label, v) in lotControlLabels" :key="v" :value="v">{{
+                  label
+                }}</el-radio>
+              </el-radio-group>
+              <div class="hint">
+                有庫存異動後不能再改。批號管理的料品入庫要輸入批號,出貨預設先到期先出。
+              </div>
+            </el-form-item>
             <el-form-item label="預設倉庫" :error="fieldErrors.default_warehouse_id">
               <el-select
                 v-model="form.default_warehouse_id"

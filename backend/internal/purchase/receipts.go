@@ -70,6 +70,9 @@ type receiptLineDTO struct {
 	ReceiptLineID   *int64          `json:"receipt_line_id"`
 	SourceReceiptNo *string         `json:"source_receipt_no"`
 	Note            string          `json:"note"`
+	ItemLotControl  string          `json:"item_lot_control"` // none / lot / lot_expiry
+	LotNo           string          `json:"lot_no"`
+	ExpiryDate      *string         `json:"expiry_date"`
 }
 
 type receiptDTO struct {
@@ -132,6 +135,7 @@ func loadReceipt(ctx context.Context, q *db.Queries, companyID, id int64) (recei
 			BaseUnitName: l.BaseUnitName, Qty: l.Qty, Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice,
 			Amount: l.Amount, BaseAmount: l.BaseAmount, PoLineID: l.PoLineID, PoNo: l.PoNo,
 			ReceiptLineID: l.ReceiptLineID, SourceReceiptNo: l.SourceReceiptNo, Note: l.Note,
+			ItemLotControl: l.ItemLotControl, LotNo: l.LotNo, ExpiryDate: trade.DateString(l.ExpiryDate),
 		}
 	}
 	return receiptDTO{
@@ -424,6 +428,9 @@ func prepareReceipt(ctx context.Context, q *db.Queries, companyID, excludeID int
 	if err != nil {
 		return h, nil, t, err
 	}
+	if err := checkReceiptLots(ctx, q, companyID, in.DocType, lines, errs); err != nil {
+		return h, nil, t, err
+	}
 	if len(errs) > 0 {
 		fields := map[string]string{}
 		for i, msg := range errs {
@@ -434,6 +441,44 @@ func prepareReceipt(ctx context.Context, q *db.Queries, companyID, excludeID int
 	return h, lines, t, nil
 }
 
+// checkReceiptLots 檢查並整理明細的批號:進貨為入庫(批號必填),退出為出庫(可空白,預設沿用被退進貨明細的批號)。
+// 錯誤依行索引寫入 errs。
+func checkReceiptLots(ctx context.Context, q *db.Queries, companyID int64, docType string, lines []pricedLine, errs map[int]string) error {
+	inbound := docType == TypeReceipt
+	inputs := make([]inventory.LotInput, len(lines))
+	for i := range lines {
+		exp, err := trade.OptionalInputDate(fmt.Sprintf("lines.%d.expiry_date", i), lines[i].ExpiryDate)
+		if err != nil {
+			errs[i] = "效期格式不正確(YYYY-MM-DD)"
+		}
+		lines[i].expiry = exp
+		if !inbound && strings.TrimSpace(lines[i].LotNo) == "" && lines[i].ReceiptLineID != nil {
+			// 退出沒指定批號:沿用被退進貨明細的批號
+			orig, err := q.ReceiptLineLots(ctx, []int64{*lines[i].ReceiptLineID})
+			if err != nil {
+				return err
+			}
+			if len(orig) == 1 {
+				lines[i].LotNo = orig[0].LotNo
+			}
+		}
+		inputs[i] = inventory.LotInput{ItemID: lines[i].ItemID, LotNo: lines[i].LotNo, Expiry: lines[i].expiry, Inbound: inbound}
+	}
+	checked, lotErrs, err := inventory.CheckLotInputs(ctx, q, companyID, inputs)
+	if err != nil {
+		return err
+	}
+	for i, msg := range lotErrs {
+		if _, exists := errs[i]; !exists {
+			errs[i] = msg
+		}
+	}
+	for i := range lines {
+		lines[i].LotNo, lines[i].expiry = checked[i].LotNo, checked[i].Expiry
+	}
+	return nil
+}
+
 func saveReceiptLines(ctx context.Context, q *db.Queries, receiptID int64, lines []pricedLine) error {
 	if err := q.DeleteGoodsReceiptLines(ctx, receiptID); err != nil {
 		return err
@@ -442,7 +487,7 @@ func saveReceiptLines(ctx context.Context, q *db.Queries, receiptID int64, lines
 		if err := q.AddGoodsReceiptLine(ctx, db.AddGoodsReceiptLineParams{
 			ReceiptID: receiptID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
 			Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice, Amount: l.Amount, BaseAmount: l.BaseAmount,
-			PoLineID: l.PoLineID, ReceiptLineID: l.ReceiptLineID, Note: l.Note,
+			PoLineID: l.PoLineID, ReceiptLineID: l.ReceiptLineID, Note: l.Note, LotNo: l.LotNo, ExpiryDate: l.expiry,
 		}); err != nil {
 			return err
 		}
@@ -759,8 +804,10 @@ func movementsOf(cur db.GoodsReceipt, doc receiptDTO) []inventory.Movement {
 		if cur.DocType == TypeReturn {
 			qty = qty.Neg()
 		}
+		exp, _ := trade.OptionalInputDate("expiry_date", l.ExpiryDate)
 		moves = append(moves, inventory.Movement{
 			ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: qty, UnitCost: &cost, SourceLineID: &lineID,
+			LotNo: l.LotNo, Expiry: exp, AllowExpired: true, // 退回供應商不受效期限制
 		})
 	}
 	return moves

@@ -37,8 +37,10 @@ var openingStockImporter = &importer{
 		{"數量", true, "基本單位數量,須大於 0,最多 4 位小數"},
 		{"單位成本", true, "每基本單位、未稅、本位幣,最多 6 位小數;月結成本以此計算期初金額"},
 		{"備註", false, ""},
+		{"批號", false, "批號管理的料品必填,其他料品留空;同一倉庫、同一料品有多個批號就分多列"},
+		{"效期", false, "批號與效期管理的料品必填(YYYY-MM-DD)"},
 	},
-	sample: [][]string{{"MAIN", "PEN-01", "500", "8.5", "期初盤點"}},
+	sample: [][]string{{"MAIN", "PEN-01", "500", "8.5", "期初盤點", "", ""}, {"MAIN", "MILK-01", "120", "32", "", "L20260901", "2027-03-01"}},
 	exec: func(r *run) error {
 		whs, err := r.q.ListWarehouses(r.ctx, r.a.CompanyID)
 		if err != nil {
@@ -55,14 +57,15 @@ var openingStockImporter = &importer{
 			return err
 		}
 		type itemInfo struct {
-			id      int64
-			isGoods bool
+			id         int64
+			isGoods    bool
+			lotControl string
 		}
 		items := map[string]itemInfo{}
 		for _, it := range its {
-			items[strings.ToUpper(it.Code)] = itemInfo{it.ID, it.ItemType == "goods"}
+			items[strings.ToUpper(it.Code)] = itemInfo{it.ID, it.ItemType == "goods", it.LotControl}
 		}
-		seen := map[[2]int64]bool{}
+		seen := map[string]bool{}
 		hasTx := map[int64]bool{}
 		var moves []inventory.Movement
 		total := decimal.Zero
@@ -107,15 +110,44 @@ var openingStockImporter = &importer{
 				r.fail(row.n, "單位成本", "必填(沒有成本資料請填 0)")
 				c2 = false
 			}
-			if ok && c1 && c2 {
-				key := [2]int64{w, it.id}
+			// 批號與效期(D63)
+			lotNo, lotErr := "", false
+			var expiry *time.Time
+			if found && it.isGoods {
+				raw := strings.TrimSpace(row.get(5))
+				switch {
+				case it.lotControl == "none" && raw != "":
+					r.fail(row.n, "批號", "「%s」沒有啟用批號管理,批號請留空", row.get(1))
+					lotErr = true
+				case it.lotControl != "none" && raw == "":
+					r.fail(row.n, "批號", "「%s」是批號管理的料品,批號必填", row.get(1))
+					lotErr = true
+				case raw != "":
+					no, err := inventory.NormalizeLotNo(raw)
+					if err != nil {
+						r.fail(row.n, "批號", "批號不可含空白,最多 40 個字元")
+						lotErr = true
+					}
+					lotNo = no
+				}
+				if it.lotControl == "lot_expiry" && !lotErr {
+					if t, err := parseDate(strings.TrimSpace(row.get(6))); err != nil {
+						r.fail(row.n, "效期", "「%s」是效期管理的料品,效期必填(YYYY-MM-DD)", row.get(1))
+						lotErr = true
+					} else {
+						expiry = &t
+					}
+				}
+			}
+			if ok && c1 && c2 && !lotErr {
+				key := fmt.Sprintf("%d/%d/%s", w, it.id, lotNo)
 				if seen[key] {
-					r.fail(row.n, "料號", "同一倉庫的「%s」在檔內重複", row.get(1))
+					r.fail(row.n, "料號", "同一倉庫的「%s」(批號 %s)在檔內重複", row.get(1), lotNo)
 					continue
 				}
 				seen[key] = true
 				c := cost
-				moves = append(moves, inventory.Movement{ItemID: it.id, WarehouseID: w, Qty: qty, UnitCost: &c})
+				moves = append(moves, inventory.Movement{ItemID: it.id, WarehouseID: w, Qty: qty, UnitCost: &c, LotNo: lotNo, Expiry: expiry})
 				total = total.Add(qty.Mul(cost))
 			}
 		}

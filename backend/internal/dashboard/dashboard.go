@@ -57,6 +57,24 @@ type lowStockItem struct {
 	Total       decimal.Decimal `json:"total"`
 }
 
+type expiryItem struct {
+	LotID      int64           `json:"lot_id"`
+	LotNo      string          `json:"lot_no"`
+	ExpiryDate string          `json:"expiry_date"`
+	ItemCode   string          `json:"item_code"`
+	ItemName   string          `json:"item_name"`
+	Qty        decimal.Decimal `json:"qty"`
+	Expired    bool            `json:"expired"`
+}
+
+// expiryCard 效期警示:有庫存的批號中已過期與 30 天內到期的數量,以及最早到期的幾個。
+type expiryCard struct {
+	Expired  int64        `json:"expired"`
+	Expiring int64        `json:"expiring"`
+	Days     int          `json:"days"`
+	Items    []expiryItem `json:"items"`
+}
+
 type lowStockCard struct {
 	Count int64          `json:"count"`
 	Items []lowStockItem `json:"items"`
@@ -167,6 +185,28 @@ func (m *Module) get(c *gin.Context) {
 			card.Items[i] = lowStockItem{ID: r.ID, Code: r.Code, Name: r.Name, UnitName: r.UnitName, SafetyStock: r.SafetyStock, Total: r.Total}
 		}
 		out["low_stock"] = card
+
+		// 效期警示:公司有效期管理的料品或已有即將到期 / 過期的批號時才顯示
+		const expiryDays = 30
+		until := today.AddDate(0, 0, expiryDays)
+		ec, err := q.DashboardExpiryCounts(ctx, db.DashboardExpiryCountsParams{CompanyID: a.CompanyID, Today: today, Until: until})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		if ec.Controlled || ec.Expired+ec.Expiring > 0 {
+			top, err := q.DashboardExpiryTop(ctx, db.DashboardExpiryTopParams{CompanyID: a.CompanyID, Until: until})
+			if err != nil {
+				response.Error(c, err)
+				return
+			}
+			card := expiryCard{Expired: ec.Expired, Expiring: ec.Expiring, Days: expiryDays, Items: make([]expiryItem, len(top))}
+			for i, r := range top {
+				card.Items[i] = expiryItem{LotID: r.LotID, LotNo: r.LotNo, ExpiryDate: r.ExpiryDate.Format(time.DateOnly),
+					ItemCode: r.Code, ItemName: r.Name, Qty: r.Qty, Expired: r.ExpiryDate.Before(today)}
+			}
+			out["expiry"] = card
+		}
 	}
 
 	if a.Can(permission.ReceivableRead) {

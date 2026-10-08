@@ -42,6 +42,7 @@ watch(
           name: props.label,
           spec: '',
           item_type: 'goods',
+          lot_control: 'none',
           base_unit_id: 0,
           base_unit_name: '',
           units: [],

@@ -12,6 +12,88 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const dashboardExpiryCounts = `-- name: DashboardExpiryCounts :one
+SELECT
+  count(*) FILTER (WHERE l.expiry_date < $1::date)::bigint AS expired,
+  count(*) FILTER (WHERE l.expiry_date >= $1::date AND l.expiry_date <= $2::date)::bigint AS expiring,
+  EXISTS (SELECT 1 FROM items x WHERE x.company_id = $3 AND x.lot_control = 'lot_expiry') AS controlled
+FROM (SELECT DISTINCT b.lot_id FROM inventory_lot_balances b WHERE b.company_id = $3 AND b.qty > 0) s
+JOIN item_lots l ON l.id = s.lot_id
+`
+
+type DashboardExpiryCountsParams struct {
+	Today     time.Time
+	Until     time.Time
+	CompanyID int64
+}
+
+type DashboardExpiryCountsRow struct {
+	Expired    int64
+	Expiring   int64
+	Controlled bool
+}
+
+// 有庫存的批號中,已過期與即將到期(today 到 until)的批號數;controlled 表示公司有效期管理的料品
+func (q *Queries) DashboardExpiryCounts(ctx context.Context, arg DashboardExpiryCountsParams) (DashboardExpiryCountsRow, error) {
+	row := q.db.QueryRow(ctx, dashboardExpiryCounts, arg.Today, arg.Until, arg.CompanyID)
+	var i DashboardExpiryCountsRow
+	err := row.Scan(&i.Expired, &i.Expiring, &i.Controlled)
+	return i, err
+}
+
+const dashboardExpiryTop = `-- name: DashboardExpiryTop :many
+SELECT l.id AS lot_id, l.lot_no, l.expiry_date, i.code, i.name, SUM(b.qty)::numeric AS qty
+FROM inventory_lot_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN items i ON i.id = b.item_id
+WHERE b.company_id = $1 AND b.qty > 0 AND l.expiry_date IS NOT NULL AND l.expiry_date <= $2::date
+GROUP BY l.id, i.code, i.name
+ORDER BY l.expiry_date, i.code
+LIMIT 5
+`
+
+type DashboardExpiryTopParams struct {
+	CompanyID int64
+	Until     time.Time
+}
+
+type DashboardExpiryTopRow struct {
+	LotID      int64
+	LotNo      string
+	ExpiryDate *time.Time
+	Code       string
+	Name       string
+	Qty        decimal.Decimal
+}
+
+// 最早到期的前 5 個有庫存的批號(含已過期)
+func (q *Queries) DashboardExpiryTop(ctx context.Context, arg DashboardExpiryTopParams) ([]DashboardExpiryTopRow, error) {
+	rows, err := q.db.Query(ctx, dashboardExpiryTop, arg.CompanyID, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DashboardExpiryTopRow{}
+	for rows.Next() {
+		var i DashboardExpiryTopRow
+		if err := rows.Scan(
+			&i.LotID,
+			&i.LotNo,
+			&i.ExpiryDate,
+			&i.Code,
+			&i.Name,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const dashboardLatestClosing = `-- name: DashboardLatestClosing :one
 SELECT c.period FROM cost_closings c WHERE c.company_id = $1 ORDER BY c.period DESC LIMIT 1
 `

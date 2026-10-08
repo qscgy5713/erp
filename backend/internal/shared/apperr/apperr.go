@@ -29,6 +29,13 @@ func (e *Error) WithDetails(details any) *Error {
 	return &cp
 }
 
+// WithMessage 回傳換了訊息(例如補上具體料品與數量)的複本。
+func (e *Error) WithMessage(msg string) *Error {
+	cp := *e
+	cp.Message = msg
+	return &cp
+}
+
 func BadRequest(code, message string) *Error   { return New(http.StatusBadRequest, code, message) }
 func Unauthorized(code, message string) *Error { return New(http.StatusUnauthorized, code, message) }
 func Forbidden(code, message string) *Error    { return New(http.StatusForbidden, code, message) }

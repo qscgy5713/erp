@@ -1,6 +1,6 @@
 import { http, qs, requestPage } from './http'
-import type { DocAction, DocStatus } from './inventory'
-import type { Decimal } from './masterdata'
+import type { DocAction, DocStatus, LotUsed } from './inventory'
+import type { Decimal, LotControl } from './masterdata'
 
 export type ReceiptDocType = 'receipt' | 'return'
 export type ReceiptState = 'none' | 'partial' | 'full'
@@ -68,6 +68,10 @@ export interface PurchaseOrder extends PurchaseHeader {
 }
 
 export interface ReceiptLine extends PurchaseLine {
+  item_lot_control: LotControl
+  lot_no: string
+  expiry_date: string | null
+  lots?: LotUsed[]
   base_amount: Decimal
   po_line_id: number | null
   po_no: string | null

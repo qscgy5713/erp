@@ -26,6 +26,13 @@ var (
 	errNothingToPost    = apperr.New(http.StatusUnprocessableEntity, "INV-004", "沒有可過帳的庫存異動")
 	errItemNotFound     = apperr.New(http.StatusUnprocessableEntity, "INV-006", "料品不存在")
 	ErrNothingToReverse = apperr.New(http.StatusConflict, "INV-007", "找不到可沖銷的庫存分錄")
+	errLotRequired      = apperr.New(http.StatusUnprocessableEntity, "INV-009", "批號管理的料品須輸入批號")
+	errExpiryRequired   = apperr.New(http.StatusUnprocessableEntity, "INV-010", "效期管理的料品須輸入效期")
+	errLotExpiryClash   = apperr.New(http.StatusConflict, "INV-011", "批號已存在,效期與輸入不同")
+	errLotShort         = apperr.New(http.StatusUnprocessableEntity, "INV-012", "批號庫存不足")
+	errLotExpired       = apperr.New(http.StatusUnprocessableEntity, "INV-013", "批號已過期,不可出庫")
+	errLotUnknown       = apperr.New(http.StatusUnprocessableEntity, "INV-014", "找不到這個批號")
+	errLotBadFormat     = apperr.New(http.StatusUnprocessableEntity, "INV-015", "批號不可含空白,最多 40 個字元")
 )
 
 // Source 異動來源單據。
@@ -43,7 +50,18 @@ type Movement struct {
 	Qty          decimal.Decimal
 	UnitCost     *decimal.Decimal
 	SourceLineID *int64
-	reversalOf   *int64
+
+	// 批號管理的料品:入庫須填批號(效期管理的料品另須填效期);出庫可指定批號,
+	// 空白則依「先到期先出」自動分配,可能拆成多筆分錄。非批號管理的料品忽略這兩個欄位。
+	LotNo  string
+	Expiry *time.Time
+	// TransferTo 調撥:出庫量(Qty 須為負)同時入到這個倉庫,沿用相同批號。
+	TransferTo *int64
+	// AllowExpired 允許出庫已過期的批號(報廢、調整、調撥、沖銷);出貨不允許。
+	AllowExpired bool
+
+	reversalOf *int64
+	lotID      *int64 // 沖銷時沿用原分錄的批號
 }
 
 // Options 過帳選項。
@@ -77,7 +95,7 @@ func Reverse(ctx context.Context, q *db.Queries, opt Options, src Source) error 
 	for i, t := range txs {
 		moves[i] = Movement{
 			ItemID: t.ItemID, WarehouseID: t.WarehouseID, Qty: t.Qty.Neg(), UnitCost: t.UnitCost,
-			SourceLineID: t.SourceLineID, reversalOf: &t.ID,
+			SourceLineID: t.SourceLineID, reversalOf: &t.ID, lotID: t.LotID, AllowExpired: true,
 		}
 	}
 	// 沖銷分錄沿用原單據日期,收發存報表才會在同一期間互相抵銷
@@ -106,6 +124,14 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 		whIDs[m.WarehouseID] = true
 		k := balanceKey{m.ItemID, m.WarehouseID}
 		net[k] = net[k].Add(m.Qty)
+		if m.TransferTo != nil { // 調撥:目的倉同時增加
+			if !m.Qty.IsNegative() {
+				return fmt.Errorf("inventory: 調撥異動的數量必須為負")
+			}
+			whIDs[*m.TransferTo] = true
+			kt := balanceKey{m.ItemID, *m.TransferTo}
+			net[kt] = net[kt].Sub(m.Qty)
+		}
 	}
 	if len(net) == 0 {
 		return errNothingToPost
@@ -188,19 +214,26 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 		return apperr.New(http.StatusUnprocessableEntity, "INV-001", "庫存不足:"+strings.Join(shortages, ";")).WithDetails(details)
 	}
 
+	// 批號:展開成逐批號的分錄(先到期先出、調撥沿用批號),再更新批號現有量。
+	// (料品, 倉庫) 的鎖已取得,批號列的鎖在其後取得,上鎖順序一致
+	posts, err := expand(ctx, q, opt, src, moves, itemByID, whByID)
+	if err != nil {
+		return err
+	}
+	if err := applyLotBalances(ctx, q, opt, posts, itemByID, whByID); err != nil {
+		return err
+	}
+
 	for _, k := range ordered {
 		if err := q.SetBalance(ctx, db.SetBalanceParams{Qty: newQty[k], ItemID: k.item, WarehouseID: k.warehouse}); err != nil {
 			return err
 		}
 	}
-	for _, m := range moves {
-		if m.Qty.IsZero() {
-			continue
-		}
+	for _, p := range posts {
 		if _, err := q.InsertInventoryTransaction(ctx, db.InsertInventoryTransactionParams{
-			CompanyID: opt.CompanyID, ItemID: m.ItemID, WarehouseID: m.WarehouseID, DocDate: src.DocDate,
-			Qty: m.Qty, UnitCost: m.UnitCost, SourceType: src.Type, SourceID: src.ID,
-			SourceLineID: m.SourceLineID, SourceNo: src.No, ReversalOf: m.reversalOf, CreatedBy: opt.ActorID,
+			CompanyID: opt.CompanyID, ItemID: p.item, WarehouseID: p.wh, DocDate: src.DocDate,
+			Qty: p.qty, UnitCost: p.cost, SourceType: src.Type, SourceID: src.ID,
+			SourceLineID: p.line, SourceNo: src.No, ReversalOf: p.reversalOf, CreatedBy: opt.ActorID, LotID: p.lotID,
 		}); err != nil {
 			return err
 		}

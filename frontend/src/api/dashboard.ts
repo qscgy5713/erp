@@ -23,6 +23,21 @@ export interface Dashboard {
       total: Decimal
     }[]
   }
+  /** 效期警示:有庫存的批號中已過期與即將到期的數量,以及最早到期的幾個 */
+  expiry?: {
+    expired: number
+    expiring: number
+    days: number
+    items: {
+      lot_id: number
+      lot_no: string
+      expiry_date: string
+      item_code: string
+      item_name: string
+      qty: Decimal
+      expired: boolean
+    }[]
+  }
   receivable?: { open_amount: Decimal; overdue_amount: Decimal; overdue_count: number }
   payable?: {
     open_amount: Decimal

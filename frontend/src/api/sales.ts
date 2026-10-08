@@ -1,6 +1,6 @@
 import { http, qs, requestPage } from './http'
-import type { DocAction, DocStatus } from './inventory'
-import type { Decimal } from './masterdata'
+import type { DocAction, DocStatus, LotUsed } from './inventory'
+import type { Decimal, LotControl } from './masterdata'
 
 export type SalesOrderType = 'quotation' | 'order'
 export type DeliveryDocType = 'delivery' | 'return'
@@ -75,6 +75,10 @@ export interface SalesOrder extends SalesHeader {
 }
 
 export interface DeliveryLine extends SalesLine {
+  item_lot_control: LotControl
+  lot_no: string
+  expiry_date: string | null
+  lots?: LotUsed[]
   base_amount: Decimal
   so_line_id: number | null
   so_no: string | null

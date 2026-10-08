@@ -162,7 +162,7 @@ func (q *Queries) AllCustomerCodes(ctx context.Context, companyID int64) ([]AllC
 }
 
 const allItemCodes = `-- name: AllItemCodes :many
-SELECT id, code, item_type, base_unit_id FROM items WHERE company_id = $1
+SELECT id, code, item_type, base_unit_id, lot_control FROM items WHERE company_id = $1
 `
 
 type AllItemCodesRow struct {
@@ -170,6 +170,7 @@ type AllItemCodesRow struct {
 	Code       string
 	ItemType   string
 	BaseUnitID int64
+	LotControl string
 }
 
 func (q *Queries) AllItemCodes(ctx context.Context, companyID int64) ([]AllItemCodesRow, error) {
@@ -186,6 +187,7 @@ func (q *Queries) AllItemCodes(ctx context.Context, companyID int64) ([]AllItemC
 			&i.Code,
 			&i.ItemType,
 			&i.BaseUnitID,
+			&i.LotControl,
 		); err != nil {
 			return nil, err
 		}

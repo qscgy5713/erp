@@ -44,6 +44,7 @@ const hasAnyCard = computed(
     (!!data.value.sales ||
       data.value.pending.length > 0 ||
       !!data.value.low_stock ||
+      !!data.value.expiry ||
       !!data.value.receivable ||
       !!data.value.payable),
 )
@@ -209,6 +210,36 @@ const go = (path: string) => router.push(path)
             link
             type="primary"
             @click="go('/inventory/balances?below_safety=true')"
+          >
+            查看全部
+          </el-button>
+        </el-card>
+      </el-col>
+
+      <el-col v-if="data.expiry" :xs="24" :md="12">
+        <el-card shadow="never" class="mb">
+          <template #header>
+            效期警示<span class="hint"
+              >已過期 {{ data.expiry.expired }} 批、{{ data.expiry.days }} 天內到期
+              {{ data.expiry.expiring }} 批</span
+            >
+          </template>
+          <el-empty
+            v-if="!data.expiry.items.length"
+            :image-size="48"
+            description="沒有即將到期或已過期的批號"
+          />
+          <div v-for="i in data.expiry.items" :key="i.lot_id" class="row">
+            <span>{{ i.item_code }} {{ i.item_name }} · {{ i.lot_no }}</span>
+            <span :class="{ bad: i.expired }">
+              {{ i.expiry_date }} {{ i.expired ? '已過期' : '' }} · {{ qty(i.qty) }}
+            </span>
+          </div>
+          <el-button
+            v-if="data.expiry.items.length"
+            link
+            type="primary"
+            @click="go(`/inventory/lots?expiry=${data.expiry.expired ? 'expired' : 'expiring'}`)"
           >
             查看全部
           </el-button>

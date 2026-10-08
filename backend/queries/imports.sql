@@ -8,7 +8,7 @@ SELECT b.*, u.name AS created_by_name FROM import_batches b LEFT JOIN users u ON
 WHERE b.company_id = @company_id ORDER BY b.id DESC LIMIT 50;
 
 -- name: AllItemCodes :many
-SELECT id, code, item_type, base_unit_id FROM items WHERE company_id = @company_id;
+SELECT id, code, item_type, base_unit_id, lot_control FROM items WHERE company_id = @company_id;
 
 -- name: AllCustomerCodes :many
 SELECT id, code FROM customers WHERE company_id = @company_id;

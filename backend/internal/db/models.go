@@ -231,6 +231,8 @@ type DeliveryLine struct {
 	SoLineID       *int64
 	DeliveryLineID *int64
 	Note           string
+	LotNo          string
+	ExpiryDate     *time.Time
 }
 
 type Department struct {
@@ -345,6 +347,8 @@ type GoodsReceiptLine struct {
 	PoLineID      *int64
 	ReceiptLineID *int64
 	Note          string
+	LotNo         string
+	ExpiryDate    *time.Time
 }
 
 type ImportBatch struct {
@@ -368,6 +372,15 @@ type InventoryBalance struct {
 	UpdatedAt   time.Time
 }
 
+type InventoryLotBalance struct {
+	CompanyID   int64
+	ItemID      int64
+	WarehouseID int64
+	LotID       int64
+	Qty         decimal.Decimal
+	UpdatedAt   time.Time
+}
+
 type InventoryTransaction struct {
 	ID           int64
 	CompanyID    int64
@@ -383,6 +396,7 @@ type InventoryTransaction struct {
 	ReversalOf   *int64
 	CreatedBy    *int64
 	CreatedAt    time.Time
+	LotID        *int64
 }
 
 type Item struct {
@@ -406,6 +420,7 @@ type Item struct {
 	Version            int32
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	LotControl         string
 }
 
 type ItemCategory struct {
@@ -437,6 +452,15 @@ type ItemCost struct {
 	AdjustAmount  decimal.Decimal
 	ClosingQty    decimal.Decimal
 	ClosingValue  decimal.Decimal
+}
+
+type ItemLot struct {
+	ID         int64
+	CompanyID  int64
+	ItemID     int64
+	LotNo      string
+	ExpiryDate *time.Time
+	CreatedAt  time.Time
 }
 
 type ItemUnit struct {
@@ -660,6 +684,8 @@ type StockDocumentLine struct {
 	BaseQty    *decimal.Decimal
 	SystemQty  *decimal.Decimal
 	Note       string
+	LotNo      string
+	ExpiryDate *time.Time
 }
 
 type Supplier struct {

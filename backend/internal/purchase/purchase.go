@@ -5,6 +5,7 @@ package purchase
 
 import (
 	"context"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -75,6 +76,11 @@ type lineInput struct {
 	trade.LineInput
 	PoLineID      *int64 `json:"po_line_id"`      // 進貨:來源採購明細
 	ReceiptLineID *int64 `json:"receipt_line_id"` // 退出:來源進貨明細
+	// 批號管理料品:進貨填批號與效期;退出可空白(預設沿用被退進貨明細的批號)
+	LotNo      string  `json:"lot_no"`
+	ExpiryDate *string `json:"expiry_date"`
+
+	expiry *time.Time // 解析後的效期
 }
 
 // pricedLine 已驗證並計算金額的明細。

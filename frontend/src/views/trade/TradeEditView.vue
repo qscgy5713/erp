@@ -22,6 +22,7 @@ import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import PartnerPicker, { type PartnerOption } from '@/components/PartnerPicker.vue'
 import ApprovalProgress from '@/components/ApprovalProgress.vue'
+import LotCell from '@/components/LotCell.vue'
 import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
 import { flows, type FlowKind, type ImportRow, type TradeDoc } from './flows'
 
@@ -83,6 +84,11 @@ interface LineRow {
   available?: string
   done_qty?: string
   remaining_qty?: string
+  /** 批號管理的料品:批號與效期(進貨 / 出貨類);已過帳的單據另有實際出庫的批號 */
+  item_lot_control?: string
+  lot_no?: string
+  expiry_date?: string | null
+  lots?: { lot_no: string; expiry_date: string | null; qty: string }[]
 }
 
 const form = reactive({
@@ -218,6 +224,9 @@ function onPickItem(row: LineRow, item: ItemOption | null) {
   row.item_code = item.code
   row.item_name = item.name
   row.item_type = item.item_type
+  row.item_lot_control = item.lot_control
+  row.lot_no = ''
+  row.expiry_date = null
   row.base_unit_name = item.base_unit_name
   row.unitOptions = unitOptionsOf(item)
   row.unit_id = item.base_unit_id
@@ -458,6 +467,43 @@ async function prefill(fromKind: FlowKind, fromId: number) {
 
 // ---- 儲存 ----
 
+// ---- 批號與效期(進貨 / 出貨類) ----
+
+/** 入庫類(進貨、銷貨退回)要輸入批號與效期;出庫類(出貨、進貨退出)可留空,系統先到期先出 */
+const lotInbound = computed(
+  () =>
+    (flow.kind === 'receipt' && docType.value === 'receipt') ||
+    (flow.kind === 'delivery' && docType.value === 'return'),
+)
+const lotControlled = (row: LineRow) => !!row.item_lot_control && row.item_lot_control !== 'none'
+const lotColumn = computed(
+  () => (flow.kind === 'receipt' || flow.kind === 'delivery') && form.lines.some(lotControlled),
+)
+
+// 匯入來源明細、載入既有單據時,料品的批號管理方式不在明細資料裡,依料號補查一次
+const lotControlLoading = new Set<number>()
+async function fillLotControl() {
+  if (flow.kind !== 'receipt' && flow.kind !== 'delivery') return
+  for (const row of form.lines) {
+    if (!row.item_id || !row.item_code || row.item_lot_control !== undefined) continue
+    if (lotControlLoading.has(row.item_id)) continue
+    lotControlLoading.add(row.item_id)
+    try {
+      const found = (await inventoryApi.itemOptions(row.item_code)).find(
+        (o) => o.id === row.item_id,
+      )
+      for (const r of form.lines) {
+        if (r.item_id === row.item_id) r.item_lot_control = found?.lot_control ?? 'none'
+      }
+    } catch {
+      row.item_lot_control = 'none'
+    } finally {
+      lotControlLoading.delete(row.item_id)
+    }
+  }
+}
+watch(() => form.lines.map((l) => `${l.item_id}:${l.item_lot_control}`).join(','), fillLotControl)
+
 // 後端錯誤以「送出的明細序號」標示;空白列送出前會被略過,需對應回畫面上的列
 const sentIndex = ref<number[]>([])
 
@@ -477,6 +523,12 @@ function payload(): Record<string, unknown> {
       unit_price: l.unit_price === '' ? '0' : l.unit_price,
       note: l.note,
       ...(refKey.value ? { [refKey.value]: l.ref_id ?? null } : {}),
+      ...(flow.kind === 'receipt' || flow.kind === 'delivery'
+        ? {
+            lot_no: lotControlled(l) ? (l.lot_no ?? '') : '',
+            expiry_date: lotControlled(l) ? l.expiry_date || null : null,
+          }
+        : {}),
     }))
   const p: Record<string, unknown> = {
     doc_date: form.doc_date,
@@ -966,6 +1018,20 @@ onMounted(async () => {
             <div v-if="editable && row.available" class="hint">
               剩餘 {{ fmt(row.available, 0) }}
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="lotColumn" label="批號 / 效期" width="250">
+          <template #default="{ row }">
+            <LotCell
+              v-model:lot-no="row.lot_no"
+              v-model:expiry-date="row.expiry_date"
+              :item-id="row.item_id"
+              :control="row.item_lot_control"
+              :mode="lotInbound ? 'in' : 'out'"
+              :warehouse-id="form.warehouse_id"
+              :editable="editable"
+              :lots="row.lots"
+            />
           </template>
         </el-table-column>
         <el-table-column
