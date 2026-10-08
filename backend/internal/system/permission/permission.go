@@ -48,6 +48,15 @@ const (
 	DeliveryWrite     = "sales.delivery.write" // 含登錄發票號碼
 	DeliveryApprove   = "sales.delivery.approve"
 	DeliveryPost      = "sales.delivery.post"
+	// 會計
+	AccountRead  = "gl.account.read" // 科目表、拋轉規則
+	AccountWrite = "gl.account.write"
+	VoucherRead  = "gl.voucher.read"
+	VoucherWrite = "gl.voucher.write" // 建立/修改草稿、作廢草稿
+	VoucherPost  = "gl.voucher.post"  // 傳票過帳、沖銷
+	PeriodRead   = "gl.period.read"
+	PeriodClose  = "gl.period.close" // 關帳 / 重開
+	ReportRead   = "gl.report.read"  // 試算表、總分類帳、日記帳
 	// 應收應付
 	PayableRead    = "finance.payable.read"    // 應付帳款、付款對帳單、應付帳齡
 	ReceivableRead = "finance.receivable.read" // 應收帳款、收款對帳單、應收帳齡
@@ -100,6 +109,10 @@ var Groups = []Group{
 	{"銷售", "出貨單與銷貨退回單", []Permission{
 		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
 	}},
+	{"會計", "會計科目與拋轉規則", []Permission{{AccountRead, "檢視"}, {AccountWrite, "新增/修改"}}},
+	{"會計", "傳票", []Permission{{VoucherRead, "檢視"}, {VoucherWrite, "開單"}, {VoucherPost, "過帳/沖銷"}}},
+	{"會計", "會計期間", []Permission{{PeriodRead, "檢視"}, {PeriodClose, "關帳/重開"}}},
+	{"會計", "會計報表", []Permission{{ReportRead, "試算表/總分類帳/日記帳"}}},
 	{"應收應付", "應收帳款(含對帳單、帳齡)", []Permission{{ReceivableRead, "檢視"}}},
 	{"應收應付", "應付帳款(含對帳單、帳齡)", []Permission{{PayableRead, "檢視"}}},
 	{"應收應付", "收款單", []Permission{

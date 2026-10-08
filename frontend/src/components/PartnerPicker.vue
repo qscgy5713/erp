@@ -20,6 +20,7 @@ const props = defineProps<{
   /** 已選對象的顯示文字(編輯既有單據時,選項尚未載入) */
   label?: string
   disabled?: boolean
+  clearable?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: number | null]
@@ -58,6 +59,8 @@ watch(
 )
 
 function onChange(id: number | null) {
+  // 清除時 el-select 傳回 undefined / ''
+  id = id || null
   emit('update:modelValue', id)
   emit('select', options.value.find((o) => o.id === id) ?? null)
 }
@@ -71,6 +74,7 @@ function onChange(id: number | null) {
     :remote-method="search"
     :loading="loading"
     :disabled="disabled"
+    :clearable="clearable"
     :placeholder="kind === 'supplier' ? '供應商代號 / 名稱' : '客戶代號 / 名稱'"
     style="width: 100%"
     @update:model-value="onChange"

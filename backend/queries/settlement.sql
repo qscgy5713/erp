@@ -107,13 +107,13 @@ VALUES (@settlement_id, @line_no, sqlc.narg(receivable_id), sqlc.narg(payable_id
 
 -- name: LockReceivables :many
 -- 過帳 / 反過帳時依 id 順序鎖定要沖的應收;同時用於開單驗證(不鎖也可讀)
-SELECT id, customer_id, currency, amount, paid_amount, source_no FROM accounts_receivable
+SELECT id, customer_id, currency, amount, base_amount, paid_amount, source_no FROM accounts_receivable
 WHERE company_id = @company_id AND id = ANY(@ids::bigint[])
 ORDER BY id
 FOR UPDATE;
 
 -- name: LockPayables :many
-SELECT id, supplier_id, currency, amount, paid_amount, source_no FROM accounts_payable
+SELECT id, supplier_id, currency, amount, base_amount, paid_amount, source_no FROM accounts_payable
 WHERE company_id = @company_id AND id = ANY(@ids::bigint[])
 ORDER BY id
 FOR UPDATE;

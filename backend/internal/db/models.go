@@ -11,6 +11,40 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type Account struct {
+	ID         int64
+	CompanyID  int64
+	Code       string
+	Name       string
+	AcctType   string
+	ParentID   *int64
+	IsPostable bool
+	IsActive   bool
+	Note       string
+	CreatedBy  *int64
+	UpdatedBy  *int64
+	Version    int32
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AccountMapping struct {
+	CompanyID int64
+	MapKey    string
+	AccountID int64
+	UpdatedBy *int64
+	UpdatedAt time.Time
+}
+
+type AccountingPeriod struct {
+	CompanyID int64
+	Period    string
+	Status    string
+	ClosedBy  *int64
+	ClosedAt  *time.Time
+	UpdatedAt time.Time
+}
+
 type AccountsPayable struct {
 	ID           int64
 	CompanyID    int64
@@ -631,6 +665,40 @@ type User struct {
 type UserRole struct {
 	UserID int64
 	RoleID int64
+}
+
+type Voucher struct {
+	ID          int64
+	CompanyID   int64
+	DocNo       string
+	VoucherDate time.Time
+	SourceType  string
+	SourceID    *int64
+	SourceNo    string
+	Description string
+	Status      string
+	ReversalOf  *int64
+	TotalAmount decimal.Decimal
+	PostedBy    *int64
+	PostedAt    *time.Time
+	CreatedBy   *int64
+	UpdatedBy   *int64
+	Version     int32
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type VoucherLine struct {
+	ID           int64
+	VoucherID    int64
+	LineNo       int32
+	AccountID    int64
+	Debit        decimal.Decimal
+	Credit       decimal.Decimal
+	Description  string
+	CustomerID   *int64
+	SupplierID   *int64
+	DepartmentID *int64
 }
 
 type Warehouse struct {

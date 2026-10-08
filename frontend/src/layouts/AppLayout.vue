@@ -65,7 +65,11 @@ async function onCommand(cmd: string) {
         <RouterView v-slot="{ Component, route: r }">
           <component
             :is="Component"
-            :key="r.meta.kind || r.meta.settle || r.meta.ledger ? r.path : ''"
+            :key="
+              r.meta.kind || r.meta.settle || r.meta.ledger || r.path.startsWith('/gl/vouchers')
+                ? r.path
+                : ''
+            "
           />
         </RouterView>
       </el-main>

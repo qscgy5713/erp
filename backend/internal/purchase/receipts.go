@@ -14,6 +14,7 @@ import (
 
 	"erp/internal/db"
 	"erp/internal/finance"
+	"erp/internal/gl"
 	"erp/internal/inventory"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
@@ -623,6 +624,7 @@ func applyReceiptAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cu
 	typ := receiptTypes[cur.DocType]
 	src := inventory.Source{Type: typ.source, ID: cur.ID, No: cur.DocNo, DocDate: cur.DocDate}
 	opt := inventory.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}
+	glOpt := gl.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}
 	switch action {
 	case docstate.Submit:
 		if len(doc.Lines) == 0 {
@@ -664,11 +666,14 @@ func applyReceiptAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cu
 		if cur.DocType == TypeReturn {
 			amount, baseAmount = amount.Neg(), baseAmount.Neg()
 		}
-		return finance.CreatePayable(ctx, q, db.InsertPayableParams{
+		if err := finance.CreatePayable(ctx, q, db.InsertPayableParams{
 			CompanyID: a.CompanyID, SupplierID: cur.SupplierID, SourceType: typ.source, SourceID: cur.ID,
 			SourceNo: cur.DocNo, DocDate: cur.DocDate, DueDate: due, Currency: cur.Currency,
 			ExchangeRate: cur.ExchangeRate, Amount: amount, BaseAmount: baseAmount, CreatedBy: &a.UserID,
-		})
+		}); err != nil {
+			return err
+		}
+		return gl.PostSource(ctx, q, glOpt, glSource(cur, typ.label), glEntries(cur, doc))
 	case docstate.Unpost:
 		if cur.DocType == TypeReceipt {
 			no, err := q.ReceiptReturnNo(ctx, cur.ID)
@@ -680,6 +685,9 @@ func applyReceiptAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cu
 			}
 		}
 		if err := finance.RemovePayable(ctx, q, typ.source, cur.ID); err != nil {
+			return err
+		}
+		if err := gl.ReverseSource(ctx, q, glOpt, typ.source, cur.ID); err != nil {
 			return err
 		}
 		err := inventory.Reverse(ctx, q, opt, src)
@@ -763,4 +771,35 @@ func (m *Module) returnableLines(c *gin.Context) {
 		}
 	}
 	response.OK(c, out)
+}
+
+func glSource(cur db.GoodsReceipt, label string) gl.Source {
+	return gl.Source{Type: receiptTypes[cur.DocType].source, ID: cur.ID, No: cur.DocNo, Date: cur.DocDate, Desc: label + " " + cur.DocNo}
+}
+
+// glEntries 進貨:借 存貨(商品類)/ 費用(服務類)/ 進項稅額,貸 應付帳款;退出相反。金額為本位幣(D36)。
+func glEntries(cur db.GoodsReceipt, doc receiptDTO) []gl.Entry {
+	goods, service := decimal.Zero, decimal.Zero
+	for _, l := range doc.Lines {
+		if l.ItemType == "goods" {
+			goods = goods.Add(l.BaseAmount)
+		} else {
+			service = service.Add(l.BaseAmount)
+		}
+	}
+	sup := &cur.SupplierID
+	if cur.DocType == TypeReturn {
+		return []gl.Entry{
+			{Key: "purchase.payable", Debit: cur.BaseTotal, SupplierID: sup},
+			{Key: "purchase.inventory", Credit: goods},
+			{Key: "purchase.expense", Credit: service},
+			{Key: "purchase.input_tax", Credit: cur.BaseTax},
+		}
+	}
+	return []gl.Entry{
+		{Key: "purchase.inventory", Debit: goods},
+		{Key: "purchase.expense", Debit: service},
+		{Key: "purchase.input_tax", Debit: cur.BaseTax},
+		{Key: "purchase.payable", Credit: cur.BaseTotal, SupplierID: sup},
+	}
 }

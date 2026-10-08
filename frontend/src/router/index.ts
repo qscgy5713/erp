@@ -8,6 +8,7 @@ import {
   PAYMENT_ANY,
   RECEIPT_ANY,
   SALES_ORDER_ANY,
+  VOUCHER_ANY,
 } from '@/navigation'
 
 declare module 'vue-router' {
@@ -261,6 +262,44 @@ const router = createRouter({
       path: '/finance/payables',
       component: () => import('@/views/finance/LedgerView.vue'),
       meta: { title: '應付帳款', perm: ['finance.payable.read'], ledger: 'payable' },
+    },
+    {
+      path: '/gl/vouchers',
+      name: 'gl-vouchers',
+      component: () => import('@/views/gl/VouchersView.vue'),
+      meta: { title: '傳票', perm: VOUCHER_ANY },
+    },
+    {
+      path: '/gl/vouchers/new',
+      name: 'gl-voucher-new',
+      component: () => import('@/views/gl/VoucherEditView.vue'),
+      meta: { title: '新增傳票', perm: ['gl.voucher.write'] },
+    },
+    {
+      path: '/gl/vouchers/:id(\\d+)',
+      name: 'gl-voucher',
+      component: () => import('@/views/gl/VoucherEditView.vue'),
+      meta: { title: '傳票', perm: VOUCHER_ANY },
+    },
+    {
+      path: '/gl/reports',
+      component: () => import('@/views/gl/ReportsView.vue'),
+      meta: { title: '會計報表', perm: ['gl.report.read'] },
+    },
+    {
+      path: '/gl/periods',
+      component: () => import('@/views/gl/PeriodsView.vue'),
+      meta: { title: '會計期間', perm: ['gl.period.read', 'gl.period.close'] },
+    },
+    {
+      path: '/gl/accounts',
+      component: () => import('@/views/gl/AccountsView.vue'),
+      meta: { title: '會計科目', perm: ['gl.account.read', 'gl.account.write'] },
+    },
+    {
+      path: '/gl/mappings',
+      component: () => import('@/views/gl/MappingsView.vue'),
+      meta: { title: '拋轉規則', perm: ['gl.account.read', 'gl.account.write'] },
     },
     {
       path: '/system/departments',

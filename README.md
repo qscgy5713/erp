@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M5 應收應付完成**。下一步 M6 會計總帳。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M6 會計總帳完成**。下一步 M7 月結與上線。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -58,8 +58,17 @@
 - 收款單、應收、對帳單與帳齡依客戶負責業務套用資料範圍
 - 應收 / 應付帳款頁的合計改為「未沖餘額」
 
+### 已完成(M6 會計總帳)
+- **會計科目**:預載台灣常用科目(資產 / 負債 / 權益 / 收入 / 成本 / 費用),可自訂、可設彙總科目與上層;已有分錄的科目不可改類別
+- **自動拋轉傳票**:進貨、進貨退出、出貨、銷貨退回、收款、付款過帳時,**同一交易內**產生已過帳傳票(進貨:借存貨 / 進項稅額、貸應付帳款;出貨:借應收帳款、貸銷貨收入 / 銷項稅額;收付款依現金 / 銀行);反過帳自動產生沖銷傳票
+- **拋轉規則**:各分錄使用的科目可在畫面調整
+- **手動傳票**:草稿 → 過帳(借貸須平衡)→ 沖銷;已過帳的傳票由資料庫禁止修改,更正以沖銷傳票;支援客戶、供應商輔助核算
+- **期間關帳**:關帳後該期不可過帳 / 反過帳單據或新增傳票,重開後恢復
+- **報表**:試算表(期初、本期借貸、期末,附借貸平衡核對)、總分類帳(含累計餘額)、日記帳
+- 銷貨成本與庫存調整 / 盤點的傳票於 M7 月結後拋轉;M6 之前已過帳的單據不補傳票
+
 ### 規劃中(第一期)
-會計總帳 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+月結與上線 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -175,6 +184,10 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `/finance/collections`、`/finance/payments`、`POST …/{id}/actions/{…\|post\|unpost}` | 收款單 / 付款單(沖帳) |
 | `GET /finance/statements?side=receivable\|payable&partner_id=&currency=&from=&to=` | 對帳單 |
 | `GET /finance/aging?side=receivable\|payable&as_of=` | 帳齡分析 |
+| `/gl/accounts`、`GET /gl/account-options`、`/gl/mappings` | 會計科目、開傳票選科目(只需有會計權限)、拋轉規則 |
+| `/gl/vouchers`、`POST /gl/vouchers/{id}/actions/{post\|void\|reverse}` | 傳票與動作 |
+| `GET /gl/periods`、`POST /gl/periods/{YYYY-MM}/{close\|reopen}` | 會計期間關帳 / 重開 |
+| `GET /gl/reports/{trial-balance\|ledger\|journal}` | 試算表、總分類帳、日記帳 |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
 ## 目錄結構
@@ -199,7 +212,8 @@ erp/
 │   │   ├── purchase/        # 採購單、進貨 / 退出單(過帳呼叫 inventory.Post 與 finance.CreatePayable)
 │   │   ├── sales/           # 報價 / 訂單、出貨 / 退回(過帳呼叫 inventory.Post 與 finance.CreateReceivable)
 │   │   ├── trade/           # 採購與銷售共用:單頭驗證、計價、訂單狀態轉換
-│   │   ├── finance/         # 應收應付(目前:應收 / 應付帳款產生與查詢)
+│   │   ├── finance/         # 應收應付:帳款、收付款沖帳、對帳單、帳齡
+│   │   ├── gl/              # 會計總帳:科目、拋轉(PostSource / ReverseSource)、傳票、期間關帳、報表
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
 │   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid
@@ -214,7 +228,7 @@ erp/
     │   ├── stores/          # Pinia(auth)
     │   ├── router/          # 路由與權限守衛
     │   ├── layouts/
-    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、sales/、trade/ 共用單據編輯頁、finance/)
+    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、sales/、trade/ 共用單據編輯頁、finance/、gl/)
     │   ├── components/
     │   ├── composables/
     │   ├── utils/

@@ -15,6 +15,7 @@ import (
 
 	"erp/internal/db"
 	"erp/internal/finance"
+	"erp/internal/gl"
 	"erp/internal/inventory"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
@@ -721,6 +722,7 @@ func applyDeliveryAction(ctx context.Context, q *db.Queries, a *authctx.Actor, c
 	typ := deliveryTypes[cur.DocType]
 	src := inventory.Source{Type: typ.source, ID: cur.ID, No: cur.DocNo, DocDate: cur.DocDate}
 	opt := inventory.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}
+	glOpt := gl.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}
 	switch action {
 	case docstate.Submit:
 		if len(doc.Lines) == 0 {
@@ -762,11 +764,17 @@ func applyDeliveryAction(ctx context.Context, q *db.Queries, a *authctx.Actor, c
 		if cur.DocType == TypeReturn {
 			amount, baseAmount = amount.Neg(), baseAmount.Neg()
 		}
-		return finance.CreateReceivable(ctx, q, db.InsertReceivableParams{
+		if err := finance.CreateReceivable(ctx, q, db.InsertReceivableParams{
 			CompanyID: a.CompanyID, CustomerID: cur.CustomerID, SourceType: typ.source, SourceID: cur.ID,
 			SourceNo: cur.DocNo, DocDate: cur.DocDate, DueDate: due, Currency: cur.Currency,
 			ExchangeRate: cur.ExchangeRate, Amount: amount, BaseAmount: baseAmount, CreatedBy: &a.UserID,
-		})
+		}); err != nil {
+			return err
+		}
+		// 銷貨成本於月結計算(M7),此處只拋收入與稅額
+		return gl.PostSource(ctx, q, glOpt, gl.Source{
+			Type: typ.source, ID: cur.ID, No: cur.DocNo, Date: cur.DocDate, Desc: typ.label + " " + cur.DocNo,
+		}, glEntries(cur))
 	case docstate.Unpost:
 		if cur.DocType == TypeDelivery {
 			no, err := q.DeliveryReturnNo(ctx, cur.ID)
@@ -778,6 +786,9 @@ func applyDeliveryAction(ctx context.Context, q *db.Queries, a *authctx.Actor, c
 			}
 		}
 		if err := finance.RemoveReceivable(ctx, q, typ.source, cur.ID); err != nil {
+			return err
+		}
+		if err := gl.ReverseSource(ctx, q, glOpt, typ.source, cur.ID); err != nil {
 			return err
 		}
 		err := inventory.Reverse(ctx, q, opt, src)
@@ -867,4 +878,21 @@ func (m *Module) returnableLines(c *gin.Context) {
 		}
 	}
 	response.OK(c, out)
+}
+
+// glEntries 出貨:借 應收帳款,貸 銷貨收入 / 銷項稅額;銷貨退回:借 銷貨退回及折讓 / 銷項稅額,貸 應收帳款。金額為本位幣。
+func glEntries(cur db.Delivery) []gl.Entry {
+	cust := &cur.CustomerID
+	if cur.DocType == TypeReturn {
+		return []gl.Entry{
+			{Key: "sales.return", Debit: cur.BaseUntaxed},
+			{Key: "sales.output_tax", Debit: cur.BaseTax},
+			{Key: "sales.receivable", Credit: cur.BaseTotal, CustomerID: cust},
+		}
+	}
+	return []gl.Entry{
+		{Key: "sales.receivable", Debit: cur.BaseTotal, CustomerID: cust},
+		{Key: "sales.revenue", Credit: cur.BaseUntaxed},
+		{Key: "sales.output_tax", Credit: cur.BaseTax},
+	}
 }

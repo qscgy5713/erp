@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"erp/internal/db"
+	"erp/internal/gl"
 	"erp/internal/platform/database"
 	"erp/internal/shared/apperr"
 )
@@ -84,6 +85,10 @@ func Reverse(ctx context.Context, q *db.Queries, opt Options, src Source) error 
 }
 
 func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []Movement) error {
+	// 會計期間已關帳時不可異動庫存(與單據的傳票拋轉共用同一規則)
+	if err := gl.CheckPeriodOpen(ctx, q, opt.CompanyID, src.DocDate); err != nil {
+		return err
+	}
 	itemIDs, whIDs := map[int64]bool{}, map[int64]bool{}
 	net := map[balanceKey]decimal.Decimal{}
 	for _, m := range moves {

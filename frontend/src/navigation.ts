@@ -26,6 +26,7 @@ export const PAYMENT_ANY = [
   'finance.payment.approve',
   'finance.payment.post',
 ]
+export const VOUCHER_ANY = ['gl.voucher.read', 'gl.voucher.write', 'gl.voucher.post']
 export const SALES_ORDER_ANY = ['sales.order.read', 'sales.order.write', 'sales.order.approve']
 export const DELIVERY_ANY = [
   'sales.delivery.read',
@@ -107,7 +108,16 @@ export const navigation: NavItem[] = [
       { title: '應付帳齡', path: '/finance/aging/payable', perm: ['finance.payable.read'] },
     ],
   },
-  { title: '會計', path: '/accounting', disabled: true },
+  {
+    title: '會計',
+    children: [
+      { title: '傳票', path: '/gl/vouchers', perm: VOUCHER_ANY },
+      { title: '會計報表', path: '/gl/reports', perm: ['gl.report.read'] },
+      { title: '會計期間', path: '/gl/periods', perm: ['gl.period.read', 'gl.period.close'] },
+      { title: '會計科目', path: '/gl/accounts', perm: ['gl.account.read', 'gl.account.write'] },
+      { title: '拋轉規則', path: '/gl/mappings', perm: ['gl.account.read', 'gl.account.write'] },
+    ],
+  },
   {
     title: '系統管理',
     children: [

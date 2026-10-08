@@ -13,12 +13,14 @@ import (
 
 	"erp/internal/auth"
 	"erp/internal/db"
+	"erp/internal/gl"
 	"erp/internal/masterdata"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
 	"erp/internal/shared/apperr"
 	"erp/internal/shared/authctx"
 	"erp/internal/shared/docstate"
+	"erp/internal/shared/money"
 	"erp/internal/shared/page"
 	"erp/internal/shared/response"
 	"erp/internal/system/audit"
@@ -265,12 +267,13 @@ type settlementInput struct {
 
 // target 沖帳目標(應收或應付)的共同欄位。
 type target struct {
-	id        int64
-	partnerID int64
-	currency  string
-	amount    decimal.Decimal
-	paid      decimal.Decimal
-	sourceNo  string
+	id         int64
+	partnerID  int64
+	currency   string
+	amount     decimal.Decimal
+	baseAmount decimal.Decimal
+	paid       decimal.Decimal
+	sourceNo   string
 }
 
 func (t target) balance() decimal.Decimal { return t.amount.Sub(t.paid) }
@@ -285,7 +288,7 @@ func lockTargets(ctx context.Context, q *db.Queries, cfg sideCfg, companyID int6
 			return nil, err
 		}
 		for _, r := range rows {
-			out[r.ID] = target{r.ID, r.CustomerID, r.Currency, r.Amount, r.PaidAmount, r.SourceNo}
+			out[r.ID] = target{r.ID, r.CustomerID, r.Currency, r.Amount, r.BaseAmount, r.PaidAmount, r.SourceNo}
 		}
 		return out, nil
 	}
@@ -294,7 +297,7 @@ func lockTargets(ctx context.Context, q *db.Queries, cfg sideCfg, companyID int6
 		return nil, err
 	}
 	for _, r := range rows {
-		out[r.ID] = target{r.ID, r.SupplierID, r.Currency, r.Amount, r.PaidAmount, r.SourceNo}
+		out[r.ID] = target{r.ID, r.SupplierID, r.Currency, r.Amount, r.BaseAmount, r.PaidAmount, r.SourceNo}
 	}
 	return out, nil
 }
@@ -302,14 +305,14 @@ func lockTargets(ctx context.Context, q *db.Queries, cfg sideCfg, companyID int6
 // checkLines 驗證沖帳明細並回傳合計:目標存在、屬於同一對象與幣別、不重複;
 // 金額非 0、與該筆未沖餘額同號(負數的退回 / 退出可與正數互抵)、不超過餘額、小數位不超過幣別。
 // 錯誤依明細索引回報(lines.N);過帳時以同一函式在鎖定後重新檢查。
-func checkLines(ctx context.Context, q *db.Queries, cfg sideCfg, companyID, partnerID int64, currency string, decimals int32, lines []lineInput) (decimal.Decimal, map[int]string, error) {
-	total := decimal.Zero
+func checkLines(ctx context.Context, q *db.Queries, cfg sideCfg, companyID, partnerID int64, currency string, decimals int32, lines []lineInput) (decimal.Decimal, decimal.Decimal, map[int]string, error) {
+	total, base := decimal.Zero, decimal.Zero
 	errs := map[int]string{}
 	if len(lines) == 0 {
-		return total, errs, fieldErr("lines", "請選擇要沖帳的明細")
+		return total, base, errs, fieldErr("lines", "請選擇要沖帳的明細")
 	}
 	if len(lines) > trade.MaxLines {
-		return total, errs, fieldErr("lines", fmt.Sprintf("明細最多 %d 筆", trade.MaxLines))
+		return total, base, errs, fieldErr("lines", fmt.Sprintf("明細最多 %d 筆", trade.MaxLines))
 	}
 	ids := make([]int64, len(lines))
 	for i, l := range lines {
@@ -317,7 +320,7 @@ func checkLines(ctx context.Context, q *db.Queries, cfg sideCfg, companyID, part
 	}
 	targets, err := lockTargets(ctx, q, cfg, companyID, ids)
 	if err != nil {
-		return total, errs, err
+		return total, base, errs, err
 	}
 	seen := map[int64]bool{}
 	for i, l := range lines {
@@ -342,10 +345,14 @@ func checkLines(ctx context.Context, q *db.Queries, cfg sideCfg, companyID, part
 			errs[i] = fmt.Sprintf("超過 %s 的未沖餘額 %s", t.sourceNo, bal.String())
 		default:
 			total = total.Add(l.Amount)
+			// 本位幣沖帳金額 = 原幣沖帳 × 該筆帳款的本位幣 / 原幣比例(沖帳不計匯兌損益,D45)
+			if !t.amount.IsZero() {
+				base = base.Add(money.Amount(l.Amount.Mul(t.baseAmount).Div(t.amount)))
+			}
 		}
 		seen[l.TargetID] = true
 	}
-	return total, errs, nil
+	return total, base, errs, nil
 }
 
 func lineErrors(errs map[int]string) *apperr.Error {
@@ -399,7 +406,7 @@ func prepareSettlement(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg
 		}
 		p.supplierID = &in.PartnerID
 	}
-	total, errs, err := checkLines(ctx, q, cfg, a.CompanyID, in.PartnerID, in.Currency, int32(cur.Decimals), in.Lines)
+	total, _, errs, err := checkLines(ctx, q, cfg, a.CompanyID, in.PartnerID, in.Currency, int32(cur.Decimals), in.Lines)
 	if err != nil {
 		return p, err
 	}
@@ -668,7 +675,7 @@ func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor,
 			lines[i] = lineInput{TargetID: l.TargetID, Amount: l.Amount}
 		}
 		// 鎖定帳款後重新檢查餘額(草稿期間可能已被其他收付款沖掉)
-		_, errs, err := checkLines(ctx, q, cfg, a.CompanyID, doc.PartnerID, cur.Currency, int32(cu.Decimals), lines)
+		_, base, errs, err := checkLines(ctx, q, cfg, a.CompanyID, doc.PartnerID, cur.Currency, int32(cu.Decimals), lines)
 		if err != nil {
 			return err
 		}
@@ -683,7 +690,12 @@ func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor,
 			}
 			return apperr.New(http.StatusUnprocessableEntity, errSettlementCannotPost, "無法過帳:"+strings.Join(msgs, ";")).WithDetails(details)
 		}
-		return addPaid(ctx, q, cfg, doc.Lines, 1)
+		if err := addPaid(ctx, q, cfg, doc.Lines, 1); err != nil {
+			return err
+		}
+		return gl.PostSource(ctx, q, gl.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}, gl.Source{
+			Type: glSourceType(cfg), ID: cur.ID, No: cur.DocNo, Date: cur.DocDate, Desc: cfg.label + " " + cur.DocNo,
+		}, settleEntries(cfg, cur, base))
 	case docstate.Unpost:
 		ids := make([]int64, len(doc.Lines))
 		for i, l := range doc.Lines {
@@ -692,7 +704,10 @@ func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor,
 		if _, err := lockTargets(ctx, q, cfg, a.CompanyID, ids); err != nil {
 			return err
 		}
-		return addPaid(ctx, q, cfg, doc.Lines, -1)
+		if err := addPaid(ctx, q, cfg, doc.Lines, -1); err != nil {
+			return err
+		}
+		return gl.ReverseSource(ctx, q, gl.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}, glSourceType(cfg), cur.ID)
 	}
 	return nil
 }
@@ -706,4 +721,27 @@ func (m *Module) registerSettlements(g *gin.RouterGroup, path string, cfg sideCf
 	g.POST(path, auth.Require(cfg.write), m.createSettlement(cfg))
 	g.PUT(path+"/:id", auth.Require(cfg.write), m.updateSettlement(cfg))
 	g.POST(path+"/:id/actions/:action", read, m.settlementAction(cfg))
+}
+
+func glSourceType(cfg sideCfg) string {
+	if cfg.side == SideReceipt {
+		return "collection"
+	}
+	return "payment"
+}
+
+// settleEntries 收款:借 現金 / 銀行存款,貸 應收帳款;付款:借 應付帳款,貸 現金 / 銀行存款。
+// 金額為所沖帳款的本位幣金額(不計匯兌損益),淨額為 0 時不產生傳票。
+func settleEntries(cfg sideCfg, cur db.Settlement, base decimal.Decimal) []gl.Entry {
+	cash := gl.SettleKey(cur.Method)
+	if cfg.side == SideReceipt {
+		return []gl.Entry{
+			{Key: cash, Debit: base},
+			{Key: "sales.receivable", Credit: base, CustomerID: cur.CustomerID},
+		}
+	}
+	return []gl.Entry{
+		{Key: "purchase.payable", Debit: base, SupplierID: cur.SupplierID},
+		{Key: cash, Credit: base},
+	}
 }

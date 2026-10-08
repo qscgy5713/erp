@@ -471,7 +471,7 @@ func (q *Queries) ListSettlements(ctx context.Context, arg ListSettlementsParams
 }
 
 const lockPayables = `-- name: LockPayables :many
-SELECT id, supplier_id, currency, amount, paid_amount, source_no FROM accounts_payable
+SELECT id, supplier_id, currency, amount, base_amount, paid_amount, source_no FROM accounts_payable
 WHERE company_id = $1 AND id = ANY($2::bigint[])
 ORDER BY id
 FOR UPDATE
@@ -487,6 +487,7 @@ type LockPayablesRow struct {
 	SupplierID int64
 	Currency   string
 	Amount     decimal.Decimal
+	BaseAmount decimal.Decimal
 	PaidAmount decimal.Decimal
 	SourceNo   string
 }
@@ -505,6 +506,7 @@ func (q *Queries) LockPayables(ctx context.Context, arg LockPayablesParams) ([]L
 			&i.SupplierID,
 			&i.Currency,
 			&i.Amount,
+			&i.BaseAmount,
 			&i.PaidAmount,
 			&i.SourceNo,
 		); err != nil {
@@ -519,7 +521,7 @@ func (q *Queries) LockPayables(ctx context.Context, arg LockPayablesParams) ([]L
 }
 
 const lockReceivables = `-- name: LockReceivables :many
-SELECT id, customer_id, currency, amount, paid_amount, source_no FROM accounts_receivable
+SELECT id, customer_id, currency, amount, base_amount, paid_amount, source_no FROM accounts_receivable
 WHERE company_id = $1 AND id = ANY($2::bigint[])
 ORDER BY id
 FOR UPDATE
@@ -535,6 +537,7 @@ type LockReceivablesRow struct {
 	CustomerID int64
 	Currency   string
 	Amount     decimal.Decimal
+	BaseAmount decimal.Decimal
 	PaidAmount decimal.Decimal
 	SourceNo   string
 }
@@ -554,6 +557,7 @@ func (q *Queries) LockReceivables(ctx context.Context, arg LockReceivablesParams
 			&i.CustomerID,
 			&i.Currency,
 			&i.Amount,
+			&i.BaseAmount,
 			&i.PaidAmount,
 			&i.SourceNo,
 		); err != nil {
