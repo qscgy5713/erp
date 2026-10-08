@@ -63,6 +63,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/items", auth.Require(p.ItemWrite), m.createItem)
 	g.PUT("/items/:id", auth.Require(p.ItemWrite), m.updateItem)
 
+	// 開單選客戶用:只需登入,依資料範圍過濾
+	g.GET("/customer-options", m.customerOptions)
 	g.GET("/customers", auth.Require(p.CustomerRead), m.listCustomers)
 	g.GET("/customers/:id", auth.Require(p.CustomerRead), m.getCustomer)
 	g.POST("/customers", auth.Require(p.CustomerWrite), m.createCustomer)

@@ -980,54 +980,6 @@ func (q *Queries) ListPayables(ctx context.Context, arg ListPayablesParams) ([]L
 	return items, nil
 }
 
-const listPurchaseItems = `-- name: ListPurchaseItems :many
-SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active
-FROM items i
-WHERE i.company_id = $1 AND i.id = ANY($2::bigint[])
-`
-
-type ListPurchaseItemsParams struct {
-	CompanyID int64
-	Ids       []int64
-}
-
-type ListPurchaseItemsRow struct {
-	ID         int64
-	Code       string
-	Name       string
-	ItemType   string
-	BaseUnitID int64
-	IsActive   bool
-}
-
-// 開單驗證料品(商品與服務皆可採購)
-func (q *Queries) ListPurchaseItems(ctx context.Context, arg ListPurchaseItemsParams) ([]ListPurchaseItemsRow, error) {
-	rows, err := q.db.Query(ctx, listPurchaseItems, arg.CompanyID, arg.Ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListPurchaseItemsRow{}
-	for rows.Next() {
-		var i ListPurchaseItemsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Code,
-			&i.Name,
-			&i.ItemType,
-			&i.BaseUnitID,
-			&i.IsActive,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listPurchaseOrderLines = `-- name: ListPurchaseOrderLines :many
 SELECT l.id, l.order_id, l.line_no, l.item_id, l.unit_id, l.qty, l.factor, l.base_qty, l.unit_price, l.amount, l.note, i.code AS item_code, i.name AS item_name, i.spec AS item_spec, i.item_type,
        u.name AS unit_name, bu.name AS base_unit_name,
@@ -2009,28 +1961,6 @@ func (q *Queries) SupplierOptions(ctx context.Context, arg SupplierOptionsParams
 		return nil, err
 	}
 	return items, nil
-}
-
-const taxTypeForDoc = `-- name: TaxTypeForDoc :one
-SELECT id, rate, is_active FROM tax_types WHERE id = $1 AND company_id = $2
-`
-
-type TaxTypeForDocParams struct {
-	ID        int64
-	CompanyID int64
-}
-
-type TaxTypeForDocRow struct {
-	ID       int64
-	Rate     decimal.Decimal
-	IsActive bool
-}
-
-func (q *Queries) TaxTypeForDoc(ctx context.Context, arg TaxTypeForDocParams) (TaxTypeForDocRow, error) {
-	row := q.db.QueryRow(ctx, taxTypeForDoc, arg.ID, arg.CompanyID)
-	var i TaxTypeForDocRow
-	err := row.Scan(&i.ID, &i.Rate, &i.IsActive)
-	return i, err
 }
 
 const updateGoodsReceiptHeader = `-- name: UpdateGoodsReceiptHeader :one

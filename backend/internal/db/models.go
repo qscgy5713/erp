@@ -30,6 +30,25 @@ type AccountsPayable struct {
 	UpdatedAt    time.Time
 }
 
+type AccountsReceivable struct {
+	ID           int64
+	CompanyID    int64
+	CustomerID   int64
+	SourceType   string
+	SourceID     int64
+	SourceNo     string
+	DocDate      time.Time
+	DueDate      time.Time
+	Currency     string
+	ExchangeRate decimal.Decimal
+	Amount       decimal.Decimal
+	BaseAmount   decimal.Decimal
+	PaidAmount   decimal.Decimal
+	CreatedBy    *int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type AuditLog struct {
 	ID         int64
 	CompanyID  int64
@@ -91,6 +110,60 @@ type Customer struct {
 	Version       int32
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type Delivery struct {
+	ID            int64
+	CompanyID     int64
+	DocType       string
+	DocNo         string
+	DocDate       time.Time
+	CustomerID    int64
+	SalesUserID   *int64
+	WarehouseID   int64
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	TaxTypeID     int64
+	TaxRate       decimal.Decimal
+	PaymentTermID *int64
+	InvoiceNo     string
+	InvoiceDate   *time.Time
+	UntaxedAmount decimal.Decimal
+	TaxAmount     decimal.Decimal
+	TotalAmount   decimal.Decimal
+	BaseUntaxed   decimal.Decimal
+	BaseTax       decimal.Decimal
+	BaseTotal     decimal.Decimal
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	PostedBy      *int64
+	PostedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type DeliveryLine struct {
+	ID             int64
+	DeliveryID     int64
+	LineNo         int32
+	ItemID         int64
+	UnitID         int64
+	Qty            decimal.Decimal
+	Factor         decimal.Decimal
+	BaseQty        decimal.Decimal
+	UnitPrice      decimal.Decimal
+	Amount         decimal.Decimal
+	BaseAmount     decimal.Decimal
+	SoLineID       *int64
+	DeliveryLineID *int64
+	Note           string
 }
 
 type Department struct {
@@ -353,6 +426,56 @@ type Role struct {
 type RolePermission struct {
 	RoleID     int64
 	Permission string
+}
+
+type SalesOrder struct {
+	ID            int64
+	CompanyID     int64
+	DocType       string
+	DocNo         string
+	DocDate       time.Time
+	CustomerID    int64
+	SalesUserID   *int64
+	WarehouseID   int64
+	QuotationID   *int64
+	ValidUntil    *time.Time
+	DeliveryDate  *time.Time
+	CustomerPoNo  string
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	TaxTypeID     int64
+	TaxRate       decimal.Decimal
+	PaymentTermID *int64
+	UntaxedAmount decimal.Decimal
+	TaxAmount     decimal.Decimal
+	TotalAmount   decimal.Decimal
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	ClosedBy      *int64
+	ClosedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type SalesOrderLine struct {
+	ID        int64
+	OrderID   int64
+	LineNo    int32
+	ItemID    int64
+	UnitID    int64
+	Qty       decimal.Decimal
+	Factor    decimal.Decimal
+	BaseQty   decimal.Decimal
+	UnitPrice decimal.Decimal
+	Amount    decimal.Decimal
+	Note      string
 }
 
 type StockDocument struct {

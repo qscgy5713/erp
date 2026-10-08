@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M3 採購完成**。下一步 M4 銷售。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M4 銷售完成**。下一步 M5 應收應付。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -40,8 +40,17 @@
 - **應付帳款**查詢(未沖餘額、本位幣合計)、**未交貨清單**(可只看逾期)
 - 服務 / 費用類料品可採購,不入庫但計入應付
 
+### 已完成(M4 銷售)
+- **報價單 → 訂單 → 出貨單 → 銷貨退回單**:報價核准後可「轉訂單」,訂單核准後可「轉出貨單」或在出貨單「從訂單帶入」;支援部分出貨,不可超出未出貨量 / 可退量
+- **可用量**:開單時顯示「現有量 − 其他訂單保留量」,不足以紅字提示(允許缺貨接單,出貨過帳時才擋負庫存)
+- **信用額度**:訂單核准時檢查未沖應收 + 未出貨訂單 + 本單是否超過額度
+- **過帳**:出貨扣庫存、退回加回庫存,同時產生應收帳款(退回為負數)
+- **發票號碼登錄**:出貨後可隨時登錄 / 修改,檢查格式與重複
+- **資料範圍**:業務只看得到自己(或本部門)客戶的單據與應收
+- **應收帳款**查詢、**未出貨清單**(可只看逾期)
+
 ### 規劃中(第一期)
-銷售 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+應收應付沖帳 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -149,6 +158,11 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `/purchase/receipts`、`POST /purchase/receipts/{id}/actions/{…\|post\|unpost}` | 進貨單 / 進貨退出單(`doc_type` receipt / return) |
 | `GET /purchase/outstanding-lines`、`GET /purchase/returnable-lines` | 未交貨明細、可退貨明細 |
 | `GET /masterdata/supplier-options?keyword=` | 開單選供應商(只需登入) |
+| `/sales/orders`、`POST /sales/orders/{id}/actions/{…\|close\|reopen}` | 報價單 / 訂單(`doc_type` quotation / order) |
+| `/sales/deliveries`、`POST /sales/deliveries/{id}/actions/{…\|post\|unpost}`、`PUT /sales/deliveries/{id}/invoice` | 出貨單 / 銷貨退回單(`doc_type` delivery / return)、登錄發票 |
+| `GET /sales/availability?warehouse_id=&item_ids=`、`/sales/unshipped-lines`、`/sales/returnable-lines` | 可用量、未出貨明細、可退回明細 |
+| `GET /masterdata/customer-options?keyword=` | 開單選客戶(只需登入,依資料範圍) |
+| `GET /finance/receivables` | 應收帳款(依資料範圍) |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
 ## 目錄結構
@@ -171,7 +185,9 @@ erp/
 │   │   ├── masterdata/      # 基本資料 API(料品、客戶、供應商、倉庫、財務設定)
 │   │   ├── inventory/       # 庫存核心:ledger.go(Post/Reverse,供各模組過帳)、庫存單據、報表
 │   │   ├── purchase/        # 採購單、進貨 / 退出單(過帳呼叫 inventory.Post 與 finance.CreatePayable)
-│   │   ├── finance/         # 應收應付(目前:應付帳款產生與查詢)
+│   │   ├── sales/           # 報價 / 訂單、出貨 / 退回(過帳呼叫 inventory.Post 與 finance.CreateReceivable)
+│   │   ├── trade/           # 採購與銷售共用:單頭驗證、計價、訂單狀態轉換
+│   │   ├── finance/         # 應收應付(目前:應收 / 應付帳款產生與查詢)
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
 │   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid
@@ -186,7 +202,7 @@ erp/
     │   ├── stores/          # Pinia(auth)
     │   ├── router/          # 路由與權限守衛
     │   ├── layouts/
-    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、finance/)
+    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、sales/、trade/ 共用單據編輯頁、finance/)
     │   ├── components/
     │   ├── composables/
     │   ├── utils/

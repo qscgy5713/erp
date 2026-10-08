@@ -61,9 +61,9 @@ async function onCommand(cmd: string) {
         </el-dropdown>
       </el-header>
       <el-main>
-        <!-- 採購單與進貨單共用編輯頁:切換單據種類(例如採購單「轉進貨單」)時要重建元件 -->
+        <!-- 採購 / 銷售單據共用編輯頁:換單據(轉單、開來源單)時要重建元件,不能沿用前一張的狀態 -->
         <RouterView v-slot="{ Component, route: r }">
-          <component :is="Component" :key="String(r.meta.kind ?? '')" />
+          <component :is="Component" :key="r.meta.kind ? r.path : ''" />
         </RouterView>
       </el-main>
     </el-container>

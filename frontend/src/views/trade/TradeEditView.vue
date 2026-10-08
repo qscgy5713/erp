@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// 採購單、進貨單、進貨退出單共用的編輯頁:route meta.kind 區分採購單(order)與進貨 / 退出(receipt)
+// 採購 / 銷售單據共用編輯頁:route meta.kind 決定流程(採購單、進貨 / 退出、報價 / 訂單、出貨 / 退回),
+// 差異集中在 flows.ts。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { DocAction, ItemOption } from '@/api/inventory'
-import { inventoryApi } from '@/api/inventory'
+import { inventoryApi, type DocAction, type ItemOption } from '@/api/inventory'
 import {
   masterdataApi,
   type Currency,
@@ -13,23 +13,15 @@ import {
   type TaxType,
   type Warehouse,
 } from '@/api/masterdata'
-import {
-  purchaseApi,
-  type GoodsReceipt,
-  type LineInput,
-  type OutstandingLine,
-  type PurchaseOrder,
-  type ReceiptDocType,
-  type ReturnableLine,
-  type SupplierOption,
-} from '@/api/purchase'
+import { salesApi, type Availability } from '@/api/sales'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 import { actionLabels, allowedActions, confirmActions } from '@/utils/docstate'
 import { formatDateTime } from '@/utils/format'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
-import SupplierPicker from '@/components/SupplierPicker.vue'
+import PartnerPicker, { type PartnerOption } from '@/components/PartnerPicker.vue'
+import { flows, type FlowKind, type ImportRow, type TradeDoc } from './flows'
 
 const BASE_CURRENCY = 'TWD'
 
@@ -38,23 +30,21 @@ const router = useRouter()
 const auth = useAuthStore()
 const { fieldErrors, handle, reset } = useApiError()
 
-const isOrder = route.meta.kind === 'order'
-const perm = isOrder ? 'purchase.order' : 'purchase.receipt'
-const listRoute = isOrder ? 'purchase-orders' : 'purchase-receipts'
-const docRoute = isOrder ? 'purchase-order' : 'purchase-receipt'
+const flow = flows[route.meta.kind as FlowKind]
 
-const order = ref<PurchaseOrder | null>(null)
-const receipt = ref<GoodsReceipt | null>(null)
-const doc = computed(() => order.value ?? receipt.value)
+const doc = ref<TradeDoc | null>(null)
 const isNew = computed(() => !doc.value)
-const docType = computed<ReceiptDocType>(
-  () => receipt.value?.doc_type ?? (route.query.type === 'return' ? 'return' : 'receipt'),
-)
-const title = computed(() =>
-  isOrder ? '採購單' : docType.value === 'return' ? '進貨退出單' : '進貨單',
-)
+const docType = computed<string>(() => {
+  if (doc.value) return doc.value.doc_type
+  const t = String(route.query.type ?? '')
+  return flow.docTypes.includes(t) ? t : flow.docTypes[0]!
+})
+const title = computed(() => flow.titles[docType.value] ?? '')
+const refKey = computed(() => flow.refKey[docType.value])
+const importer = computed(() => flow.importers[docType.value])
+const isQuotation = computed(() => docType.value === 'quotation')
 const editable = computed(
-  () => auth.can(`${perm}.write`) && (isNew.value || doc.value?.status === 'draft'),
+  () => auth.can([`${flow.perm}.write`]) && (isNew.value || doc.value?.status === 'draft'),
 )
 const loading = ref(false)
 const saving = ref(false)
@@ -81,24 +71,29 @@ interface LineRow {
   item_name?: string
   item_type?: string
   base_unit_name?: string
+  unit_name?: string
+  amount?: string
   /** 前端用:此料品可選的單位 */
   unitOptions: { id: number; name: string; factor: string }[]
-  po_line_id?: number | null
-  po_no?: string | null
-  receipt_line_id?: number | null
-  source_receipt_no?: string | null
-  /** 引用來源時的剩餘量(帶入時的提示,以後端為準) */
+  ref_id?: number | null
+  ref_no?: string | null
+  /** 帶入來源時的剩餘量(提示用,以後端為準) */
   available?: string
-  received_qty?: string
+  done_qty?: string
   remaining_qty?: string
 }
 
 const form = reactive({
   doc_date: today(),
-  supplier_id: null as number | null,
-  supplier_label: '',
+  partner_id: null as number | null,
+  partner_label: '',
+  sales_user_name: null as string | null,
   warehouse_id: null as number | null,
   expected_date: null as string | null,
+  valid_until: null as string | null,
+  customer_po_no: '',
+  quotation_id: null as number | null,
+  quotation_no: null as string | null,
   currency: BASE_CURRENCY,
   exchange_rate: '1',
   tax_type_id: null as number | null,
@@ -124,20 +119,24 @@ function unitOptionsOf(item: ItemOption): LineRow['unitOptions'] {
   ]
 }
 
-function applyDoc(d: PurchaseOrder | GoodsReceipt) {
-  if (isOrder) order.value = d as PurchaseOrder
-  else receipt.value = d as GoodsReceipt
+function applyDoc(d: TradeDoc) {
+  doc.value = d
   Object.assign(form, {
     doc_date: d.doc_date,
-    supplier_id: d.supplier_id,
-    supplier_label: `${d.supplier_code} ${d.supplier_name}`,
+    partner_id: d.partner_id,
+    partner_label: d.partner_label,
+    sales_user_name: d.sales_user_name,
     warehouse_id: d.warehouse_id,
-    expected_date: isOrder ? (d as PurchaseOrder).expected_date : null,
+    expected_date: d.expected_date,
+    valid_until: d.valid_until,
+    customer_po_no: d.customer_po_no,
+    quotation_id: d.quotation_id,
+    quotation_no: d.quotation_no,
     currency: d.currency,
     exchange_rate: d.exchange_rate,
     tax_type_id: d.tax_type_id,
     payment_term_id: d.payment_term_id,
-    invoice_no: isOrder ? '' : (d as GoodsReceipt).invoice_no,
+    invoice_no: d.invoice_no,
     note: d.note,
     lines: d.lines.map((l) => ({
       ...l,
@@ -155,7 +154,7 @@ async function load() {
   if (!id) return
   loading.value = true
   try {
-    applyDoc(isOrder ? await purchaseApi.order(id) : await purchaseApi.receipt(id))
+    applyDoc(await flow.load(id))
   } catch (e) {
     handle(e)
   } finally {
@@ -165,14 +164,15 @@ async function load() {
 
 // ---- 單頭連動 ----
 
-/** 選供應商時帶入預設幣別、稅別、付款條件 */
-function onPickSupplier(s: SupplierOption | null) {
-  if (!s) return
-  form.supplier_label = `${s.code} ${s.name}`
-  if (s.tax_type_id) form.tax_type_id = s.tax_type_id
-  form.payment_term_id = s.payment_term_id
-  if (s.currency && s.currency !== form.currency) {
-    form.currency = s.currency
+/** 選往來對象時帶入預設幣別、稅別、付款條件(客戶另帶出負責業務) */
+function onPickPartner(p: PartnerOption | null) {
+  if (!p) return
+  form.partner_label = `${p.code} ${p.name}`
+  form.sales_user_name = p.sales_user_name ?? null
+  if (p.tax_type_id) form.tax_type_id = p.tax_type_id
+  form.payment_term_id = p.payment_term_id
+  if (p.currency && p.currency !== form.currency) {
+    form.currency = p.currency
     lookupRate()
   }
 }
@@ -229,7 +229,7 @@ function addLine() {
 }
 
 /** 有引用來源的明細:料品與單位跟著來源,不可修改 */
-const linked = (row: LineRow) => !!(row.po_line_id || row.receipt_line_id)
+const linked = (row: LineRow) => !!row.ref_id
 
 function round(n: number, places: number): number {
   const f = 10 ** places
@@ -262,33 +262,68 @@ const fmt = (v: number | string | null | undefined, places = decimals.value) =>
         maximumFractionDigits: Math.max(places, 6),
       })
 
+// ---- 可用量(銷售):訂單 / 報價看「現有 − 其他訂單保留」,出貨單看現有量 ----
+
+const stockMode = computed<'available' | 'on_hand' | null>(() => {
+  if (flow.side !== 'sales' || docType.value === 'return') return null
+  if (doc.value && !['draft', 'pending', 'approved'].includes(doc.value.status)) return null
+  return flow.kind === 'delivery' ? 'on_hand' : 'available'
+})
+const stock = ref<Record<number, Availability>>({})
+const stockKey = computed(() =>
+  stockMode.value && form.warehouse_id
+    ? `${form.warehouse_id}:${[...new Set(form.lines.map((l) => l.item_id).filter(Boolean))].join(',')}`
+    : '',
+)
+
+watch(stockKey, async (key) => {
+  const ids = [...new Set(form.lines.flatMap((l) => (l.item_id ? [l.item_id] : [])))]
+  if (!key || ids.length === 0 || !form.warehouse_id) {
+    stock.value = {}
+    return
+  }
+  try {
+    const rows = await salesApi.availability(
+      form.warehouse_id,
+      ids,
+      flow.kind === 'sales-order' && doc.value?.doc_type === 'order' ? doc.value.id : undefined,
+    )
+    if (key === stockKey.value) stock.value = Object.fromEntries(rows.map((r) => [r.item_id, r]))
+  } catch (e) {
+    handle(e)
+  }
+})
+
+function stockOf(row: LineRow): string | undefined {
+  const s = row.item_id ? stock.value[row.item_id] : undefined
+  return s && (stockMode.value === 'on_hand' ? s.on_hand : s.available)
+}
+
+/** 數量換算成基本單位後是否超過可用量 / 現有量 */
+function short(row: LineRow): boolean {
+  const s = stockOf(row)
+  if (s === undefined || row.qty === '') return false
+  const factor = row.unitOptions.find((u) => u.id === row.unit_id)?.factor || '1'
+  return Number(row.qty) * Number(factor) > Number(s)
+}
+
 // ---- 從來源單據帶入 ----
 
 const importVisible = ref(false)
 const importKeyword = ref('')
 const importLoading = ref(false)
-const importRows = ref<(OutstandingLine | ReturnableLine)[]>([])
-const importSelected = ref<(OutstandingLine | ReturnableLine)[]>([])
+const importRows = ref<ImportRow[]>([])
+const importSelected = ref<ImportRow[]>([])
 
 async function searchImport() {
-  if (!form.supplier_id) return
+  if (!form.partner_id || !importer.value) return
   importLoading.value = true
   try {
-    importRows.value =
-      docType.value === 'receipt'
-        ? (
-            await purchaseApi.outstanding({
-              supplier_id: form.supplier_id,
-              currency: form.currency,
-              keyword: importKeyword.value.trim(),
-              size: 100,
-            })
-          ).items
-        : await purchaseApi.returnable({
-            supplier_id: form.supplier_id,
-            currency: form.currency,
-            keyword: importKeyword.value.trim(),
-          })
+    importRows.value = await importer.value.fetch(
+      form.partner_id,
+      form.currency,
+      importKeyword.value.trim(),
+    )
   } catch (e) {
     handle(e)
   } finally {
@@ -297,8 +332,8 @@ async function searchImport() {
 }
 
 function openImport() {
-  if (!form.supplier_id) {
-    fieldErrors.value = { supplier_id: '請先選擇供應商' }
+  if (!form.partner_id) {
+    fieldErrors.value = { partner_id: `請先選擇${flow.partnerLabel}` }
     return
   }
   importKeyword.value = ''
@@ -307,17 +342,12 @@ function openImport() {
   searchImport()
 }
 
-function refOf(r: OutstandingLine | ReturnableLine): number {
-  return 'po_line_id' in r ? r.po_line_id : r.receipt_line_id
-}
-
-function applyImport(rows: (OutstandingLine | ReturnableLine)[]) {
-  const existing = new Set(form.lines.map((l) => l.po_line_id ?? l.receipt_line_id))
+function applyImport(rows: ImportRow[]) {
+  const existing = new Set(form.lines.map((l) => l.ref_id))
   // 先移除空白列,再接上帶入的明細
   form.lines = form.lines.filter((l) => l.item_id !== null)
   for (const r of rows) {
-    if (existing.has(refOf(r))) continue
-    const isPo = 'po_line_id' in r
+    if (existing.has(r.ref_id)) continue
     form.lines.push({
       item_id: r.item_id,
       unit_id: r.unit_id,
@@ -327,10 +357,8 @@ function applyImport(rows: (OutstandingLine | ReturnableLine)[]) {
       item_code: r.item_code,
       item_name: r.item_name,
       unitOptions: [{ id: r.unit_id, name: r.unit_name, factor: '' }],
-      po_line_id: isPo ? r.po_line_id : null,
-      po_no: isPo ? r.doc_no : null,
-      receipt_line_id: isPo ? null : r.receipt_line_id,
-      source_receipt_no: isPo ? null : r.doc_no,
+      ref_id: r.ref_id,
+      ref_no: r.doc_no,
       available: r.remaining_qty,
     })
   }
@@ -338,44 +366,83 @@ function applyImport(rows: (OutstandingLine | ReturnableLine)[]) {
   importVisible.value = false
 }
 
-/** 採購單「轉進貨」:帶入該單的未交明細 */
-async function prefillFromOrder(orderId: number) {
+// ---- 轉單:採購單 → 進貨單、報價單 → 訂單、訂單 → 出貨單 ----
+
+const conversion = computed(() => {
+  const d = doc.value
+  if (!d || d.status !== 'approved') return null
+  const hasRemaining = d.lines.some((l) => Number(l.remaining_qty) > 0)
+  if (flow.kind === 'purchase-order' && hasRemaining && auth.can(['purchase.receipt.write']))
+    return { label: '轉進貨單', to: { name: 'purchase-receipt-new', query: {} } }
+  if (flow.kind === 'sales-order' && d.doc_type === 'quotation' && auth.can(['sales.order.write']))
+    return { label: '轉訂單', to: { name: 'sales-order-new', query: { type: 'order' } } }
+  if (
+    flow.kind === 'sales-order' &&
+    d.doc_type === 'order' &&
+    hasRemaining &&
+    auth.can(['sales.delivery.write'])
+  )
+    return { label: '轉出貨單', to: { name: 'sales-delivery-new', query: {} } }
+  return null
+})
+
+function convert() {
+  const c = conversion.value
+  if (!c || !doc.value) return
+  router.push({
+    name: c.to.name,
+    query: { ...c.to.query, from_kind: flow.kind, from_id: doc.value.id },
+  })
+}
+
+/** 依轉單來源預填:報價單整張複製(記錄來源報價單);訂單類帶入未交明細並引用來源 */
+async function prefill(fromKind: FlowKind, fromId: number) {
   try {
-    const po = await purchaseApi.order(orderId)
+    const src = await flows[fromKind].load(fromId)
     Object.assign(form, {
-      supplier_id: po.supplier_id,
-      supplier_label: `${po.supplier_code} ${po.supplier_name}`,
-      warehouse_id: po.warehouse_id,
-      currency: po.currency,
-      tax_type_id: po.tax_type_id,
-      payment_term_id: po.payment_term_id,
+      partner_id: src.partner_id,
+      partner_label: src.partner_label,
+      sales_user_name: src.sales_user_name,
+      warehouse_id: src.warehouse_id,
+      currency: src.currency,
+      tax_type_id: src.tax_type_id,
+      payment_term_id: src.payment_term_id,
+      customer_po_no: src.customer_po_no,
     })
     if (isForeign.value) await lookupRate()
+    if (src.doc_type === 'quotation') {
+      form.quotation_id = src.id
+      form.quotation_no = src.doc_no
+      form.lines = src.lines.map((l) => ({
+        item_id: l.item_id,
+        unit_id: l.unit_id,
+        qty: l.qty,
+        unit_price: l.unit_price,
+        note: l.note,
+        item_code: l.item_code,
+        item_name: l.item_name,
+        item_type: l.item_type,
+        base_unit_name: l.base_unit_name,
+        unitOptions: [{ id: l.unit_id, name: l.unit_name, factor: l.factor }],
+      }))
+      return
+    }
     applyImport(
-      po.lines
+      src.lines
         .filter((l) => Number(l.remaining_qty) > 0)
         .map((l) => ({
-          po_line_id: l.id,
-          order_id: po.id,
-          doc_no: po.doc_no,
-          doc_date: po.doc_date,
-          expected_date: po.expected_date,
-          supplier_id: po.supplier_id,
-          supplier_code: po.supplier_code,
-          supplier_name: po.supplier_name,
-          currency: po.currency,
-          warehouse_id: po.warehouse_id,
-          line_no: l.line_no,
+          ref_id: l.id,
+          doc_no: src.doc_no,
+          doc_date: src.doc_date,
+          warehouse_id: src.warehouse_id,
           item_id: l.item_id,
           item_code: l.item_code,
           item_name: l.item_name,
-          item_spec: l.item_spec,
           unit_id: l.unit_id,
           unit_name: l.unit_name,
           qty: l.qty,
           unit_price: l.unit_price,
-          received_qty: l.received_qty,
-          remaining_qty: l.remaining_qty,
+          remaining_qty: l.remaining_qty ?? l.qty,
         })),
     )
   } catch (e) {
@@ -393,35 +460,53 @@ function lineError(uiIndex: number): string | undefined {
   return i < 0 ? undefined : fieldErrors.value[`lines.${i}`]
 }
 
-function payload() {
+function payload(): Record<string, unknown> {
   sentIndex.value = form.lines.flatMap((l, i) => (l.item_id !== null ? [i] : []))
-  const lines: LineInput[] = form.lines
+  const lines = form.lines
     .filter((l): l is LineRow & { item_id: number } => l.item_id !== null)
     .map((l) => ({
       item_id: l.item_id,
       unit_id: l.unit_id ?? 0,
       qty: l.qty === '' ? '0' : l.qty,
       unit_price: l.unit_price === '' ? '0' : l.unit_price,
-      po_line_id: l.po_line_id ?? null,
-      receipt_line_id: l.receipt_line_id ?? null,
       note: l.note,
+      ...(refKey.value ? { [refKey.value]: l.ref_id ?? null } : {}),
     }))
-  return {
+  const p: Record<string, unknown> = {
     doc_date: form.doc_date,
-    supplier_id: form.supplier_id!,
-    warehouse_id: form.warehouse_id!,
+    [flow.partner === 'supplier' ? 'supplier_id' : 'customer_id']: form.partner_id,
+    warehouse_id: form.warehouse_id,
     currency: form.currency,
     exchange_rate: isForeign.value && form.exchange_rate !== '' ? form.exchange_rate : null,
-    tax_type_id: form.tax_type_id!,
+    tax_type_id: form.tax_type_id,
     payment_term_id: form.payment_term_id,
     note: form.note,
     lines,
+    version: doc.value?.version,
   }
+  if (flow.kind !== 'purchase-order') p.doc_type = docType.value
+  switch (flow.kind) {
+    case 'purchase-order':
+      p.expected_date = form.expected_date || null
+      break
+    case 'receipt':
+      p.invoice_no = form.invoice_no
+      break
+    case 'sales-order':
+      p.customer_po_no = form.customer_po_no
+      if (isQuotation.value) p.valid_until = form.valid_until || null
+      else {
+        p.delivery_date = form.expected_date || null
+        p.quotation_id = form.quotation_id
+      }
+      break
+  }
+  return p
 }
 
 async function save(): Promise<boolean> {
   const missing: Record<string, string> = {}
-  if (!form.supplier_id) missing.supplier_id = '請選擇供應商'
+  if (!form.partner_id) missing.partner_id = `請選擇${flow.partnerLabel}`
   if (!form.warehouse_id) missing.warehouse_id = '請選擇倉庫'
   if (!form.tax_type_id) missing.tax_type_id = '請選擇稅別'
   if (Object.keys(missing).length) {
@@ -430,23 +515,12 @@ async function save(): Promise<boolean> {
   }
   saving.value = true
   try {
-    const base = payload()
-    const version = doc.value?.version
-    let saved: PurchaseOrder | GoodsReceipt
-    if (isOrder) {
-      const input = { ...base, expected_date: form.expected_date || null, version }
-      saved = order.value
-        ? await purchaseApi.updateOrder(order.value.id, input)
-        : await purchaseApi.createOrder(input)
-    } else {
-      const input = { ...base, doc_type: docType.value, invoice_no: form.invoice_no, version }
-      saved = receipt.value
-        ? await purchaseApi.updateReceipt(receipt.value.id, input)
-        : await purchaseApi.createReceipt(input)
-    }
+    const saved = await flow.save(doc.value?.id ?? null, payload())
     applyDoc(saved)
     ElMessage.success('已儲存')
-    if (route.name !== docRoute) router.replace({ name: docRoute, params: { id: saved.id } })
+    if (route.name !== flow.routes.doc) {
+      router.replace({ name: flow.routes.doc, params: { id: saved.id } })
+    }
     return true
   } catch (e) {
     handle(e)
@@ -456,29 +530,39 @@ async function save(): Promise<boolean> {
   }
 }
 
+/** 後端以 supplier_id / customer_id 回報錯誤,畫面上統一顯示在往來對象欄位 */
+const partnerError = computed(
+  () =>
+    fieldErrors.value.partner_id ?? fieldErrors.value.supplier_id ?? fieldErrors.value.customer_id,
+)
+
 // ---- 狀態動作 ----
 
 function canDo(action: DocAction): boolean {
   if (!doc.value) return false
   switch (action) {
     case 'submit':
-      return auth.can(`${perm}.write`)
+      return auth.can([`${flow.perm}.write`])
     case 'approve':
     case 'reject':
     case 'unapprove':
     case 'close':
     case 'reopen':
-      return auth.can(`${perm}.approve`)
+      return auth.can([`${flow.perm}.approve`])
     case 'post':
     case 'unpost':
-      return auth.can('purchase.receipt.post')
+      return auth.can([`${flow.perm}.post`])
     case 'void':
-      return doc.value.status === 'draft' ? auth.can(`${perm}.write`) : auth.can(`${perm}.approve`)
+      return doc.value.status === 'draft'
+        ? auth.can([`${flow.perm}.write`])
+        : auth.can([`${flow.perm}.approve`])
   }
 }
 
 const actions = computed(() =>
-  doc.value ? allowedActions(doc.value.status, isOrder ? 'order' : 'posting').filter(canDo) : [],
+  doc.value
+    ? allowedActions(doc.value.status, flow.posting ? 'posting' : 'order').filter(canDo)
+    : [],
 )
 const acting = ref<DocAction | null>(null)
 
@@ -498,13 +582,7 @@ async function runAction(action: DocAction) {
   if (dirty.value && editable.value && !(await save())) return
   acting.value = action
   try {
-    const id = doc.value.id
-    const v = doc.value.version
-    applyDoc(
-      isOrder
-        ? await purchaseApi.orderAction(id, action, v)
-        : await purchaseApi.receiptAction(id, action, v),
-    )
+    applyDoc(await flow.action(doc.value.id, action, doc.value.version))
     ElMessage.success(`已${actionLabels[action]}`)
   } catch (e) {
     handle(e)
@@ -513,13 +591,45 @@ async function runAction(action: DocAction) {
   }
 }
 
-const canConvert = computed(
+// ---- 發票登錄(出貨單:任何未作廢狀態皆可) ----
+
+const canInvoice = computed(
   () =>
-    isOrder &&
-    order.value?.status === 'approved' &&
-    order.value.lines.some((l) => Number(l.remaining_qty) > 0) &&
-    auth.can('purchase.receipt.write'),
+    flow.kind === 'delivery' &&
+    docType.value === 'delivery' &&
+    !!doc.value &&
+    doc.value.status !== 'voided' &&
+    auth.can(['sales.delivery.write']),
 )
+const invoiceVisible = ref(false)
+const invoiceSaving = ref(false)
+const invoiceForm = reactive({ invoice_no: '', invoice_date: null as string | null })
+
+function openInvoice() {
+  invoiceForm.invoice_no = doc.value?.invoice_no ?? ''
+  invoiceForm.invoice_date = doc.value?.invoice_date ?? doc.value?.doc_date ?? null
+  reset()
+  invoiceVisible.value = true
+}
+
+async function saveInvoice() {
+  if (!doc.value) return
+  invoiceSaving.value = true
+  try {
+    const d = await salesApi.setInvoice(doc.value.id, {
+      invoice_no: invoiceForm.invoice_no.trim().toUpperCase(),
+      invoice_date: invoiceForm.invoice_no.trim() ? invoiceForm.invoice_date : null,
+      version: doc.value.version,
+    })
+    applyDoc(await flow.load(d.id))
+    invoiceVisible.value = false
+    ElMessage.success('已登錄發票')
+  } catch (e) {
+    handle(e)
+  } finally {
+    invoiceSaving.value = false
+  }
+}
 
 onMounted(async () => {
   loading.value = true
@@ -538,8 +648,9 @@ onMounted(async () => {
   await load()
   if (isNew.value) {
     form.tax_type_id = taxTypes.value.find((t) => t.is_active && t.code === 'TX5')?.id ?? null
-    const fromPo = Number(route.query.from_po)
-    if (!isOrder && fromPo) await prefillFromOrder(fromPo)
+    const fromKind = route.query.from_kind as FlowKind | undefined
+    const fromId = Number(route.query.from_id)
+    if (fromKind && flows[fromKind] && fromId) await prefill(fromKind, fromId)
     if (form.lines.length === 0) addLine()
   }
   setTimeout(() => (dirty.value = false))
@@ -550,7 +661,7 @@ onMounted(async () => {
   <div v-loading="loading">
     <div class="doc-header">
       <div class="title">
-        <el-button link @click="router.push({ name: listRoute })">← 返回列表</el-button>
+        <el-button link @click="router.push({ name: flow.routes.list })">← 返回列表</el-button>
         <h2>{{ title }} {{ doc?.doc_no ?? '(新單據)' }}</h2>
         <DocStatusTag v-if="doc" :status="doc.status" />
         <el-tag v-if="dirty && editable && doc" type="warning" effect="plain">未儲存</el-tag>
@@ -572,14 +683,10 @@ onMounted(async () => {
         >
           {{ actionLabels[a] }}
         </el-button>
-        <el-button
-          v-if="canConvert"
-          type="primary"
-          plain
-          @click="router.push({ name: 'purchase-receipt-new', query: { from_po: order!.id } })"
-        >
-          轉進貨單
+        <el-button v-if="conversion" type="primary" plain @click="convert">
+          {{ conversion.label }}
         </el-button>
+        <el-button v-if="canInvoice" @click="openInvoice">登錄發票</el-button>
       </div>
     </div>
 
@@ -598,18 +705,27 @@ onMounted(async () => {
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="6">
-            <el-form-item label="供應商" :error="fieldErrors.supplier_id">
-              <SupplierPicker
-                v-model="form.supplier_id"
-                :label="form.supplier_label"
+            <el-form-item :label="flow.partnerLabel" :error="partnerError">
+              <PartnerPicker
+                v-model="form.partner_id"
+                :kind="flow.partner"
+                :label="form.partner_label"
                 :disabled="!editable"
-                @select="onPickSupplier"
+                @select="onPickPartner"
               />
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="6">
             <el-form-item
-              :label="isOrder ? '預定入庫倉' : docType === 'return' ? '出庫倉' : '入庫倉'"
+              :label="
+                flow.side === 'purchase'
+                  ? docType === 'return'
+                    ? '出庫倉'
+                    : '入庫倉'
+                  : docType === 'return'
+                    ? '入庫倉'
+                    : '出貨倉'
+              "
               :error="fieldErrors.warehouse_id"
             >
               <el-select v-model="form.warehouse_id" style="width: 100%">
@@ -622,7 +738,7 @@ onMounted(async () => {
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col v-if="isOrder" :xs="24" :sm="12" :md="6">
+          <el-col v-if="flow.kind === 'purchase-order'" :xs="24" :sm="12" :md="6">
             <el-form-item label="預定交貨日" :error="fieldErrors.expected_date">
               <el-date-picker
                 v-model="form.expected_date"
@@ -631,9 +747,33 @@ onMounted(async () => {
               />
             </el-form-item>
           </el-col>
-          <el-col v-else :xs="24" :sm="12" :md="6">
+          <el-col v-else-if="flow.kind === 'receipt'" :xs="24" :sm="12" :md="6">
             <el-form-item label="發票號碼" :error="fieldErrors.invoice_no">
               <el-input v-model="form.invoice_no" maxlength="20" />
+            </el-form-item>
+          </el-col>
+          <el-col v-else-if="isQuotation" :xs="24" :sm="12" :md="6">
+            <el-form-item label="有效期限" :error="fieldErrors.valid_until">
+              <el-date-picker
+                v-model="form.valid_until"
+                value-format="YYYY-MM-DD"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col v-else-if="flow.kind === 'sales-order'" :xs="24" :sm="12" :md="6">
+            <el-form-item label="預定出貨日" :error="fieldErrors.delivery_date">
+              <el-date-picker
+                v-model="form.expected_date"
+                value-format="YYYY-MM-DD"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col v-else :xs="24" :sm="12" :md="6">
+            <el-form-item label="發票">
+              <span v-if="doc?.invoice_no">{{ doc.invoice_no }}({{ doc.invoice_date }})</span>
+              <span v-else class="hint">尚未登錄</span>
             </el-form-item>
           </el-col>
         </el-row>
@@ -668,7 +808,10 @@ onMounted(async () => {
             </el-form-item>
           </el-col>
           <el-col :xs="24" :sm="12" :md="6">
-            <el-form-item label="付款條件" :error="fieldErrors.payment_term_id">
+            <el-form-item
+              :label="flow.side === 'purchase' ? '付款條件' : '收款條件'"
+              :error="fieldErrors.payment_term_id"
+            >
               <el-select v-model="form.payment_term_id" clearable style="width: 100%">
                 <el-option
                   v-for="t in paymentTerms.filter(
@@ -679,6 +822,26 @@ onMounted(async () => {
                   :value="t.id"
                 />
               </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row v-if="flow.side === 'sales'" :gutter="16">
+          <el-col :xs="24" :sm="12" :md="6">
+            <el-form-item label="負責業務">
+              <span>{{ form.sales_user_name ?? '(未指定)' }}</span>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="flow.kind === 'sales-order'" :xs="24" :sm="12" :md="6">
+            <el-form-item label="客戶單號" :error="fieldErrors.customer_po_no">
+              <el-input v-model="form.customer_po_no" maxlength="50" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="form.quotation_no" :xs="24" :sm="12" :md="6">
+            <el-form-item label="來源報價" :error="fieldErrors.quotation_id">
+              <!-- 表單停用時 el-button 也會被停用,改用連結 -->
+              <RouterLink :to="{ name: 'sales-order', params: { id: form.quotation_id } }">
+                {{ form.quotation_no }}
+              </RouterLink>
             </el-form-item>
           </el-col>
         </el-row>
@@ -695,15 +858,15 @@ onMounted(async () => {
             明細({{ form.lines.filter((l) => l.item_id).length }} 筆)
             <span v-if="fieldErrors.lines" class="err">{{ fieldErrors.lines }}</span>
           </span>
-          <el-button v-if="editable && !isOrder" size="small" @click="openImport">
-            {{ docType === 'receipt' ? '從採購單帶入' : '從進貨單帶入' }}
+          <el-button v-if="editable && importer" size="small" @click="openImport">
+            {{ importer.button }}
           </el-button>
         </div>
       </template>
       <el-table :data="form.lines" border size="small">
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column v-if="!isOrder" label="來源" width="140">
-          <template #default="{ row }">{{ row.po_no ?? row.source_receipt_no ?? '' }}</template>
+        <el-table-column v-if="refKey" label="來源" width="140">
+          <template #default="{ row }">{{ row.ref_no ?? '' }}</template>
         </el-table-column>
         <el-table-column label="料品" min-width="240">
           <template #default="{ row, $index }">
@@ -741,6 +904,17 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
+        <el-table-column
+          v-if="stockMode"
+          :label="stockMode === 'on_hand' ? '現有量' : '可用量'"
+          width="100"
+          align="right"
+        >
+          <template #default="{ row }">
+            <span :class="{ neg: short(row) }">{{ fmt(stockOf(row), 0) }}</span>
+            <span v-if="stockOf(row) !== undefined" class="hint"> {{ row.base_unit_name }}</span>
+          </template>
+        </el-table-column>
         <el-table-column :label="`單價(${form.currency},未稅)`" width="150">
           <template #default="{ row }">
             <el-input v-if="editable" v-model="row.unit_price" size="small" />
@@ -752,11 +926,11 @@ onMounted(async () => {
             {{ fmt(editable ? amountOf(row) : row.amount) }}
           </template>
         </el-table-column>
-        <template v-if="isOrder && doc && doc.status !== 'draft'">
-          <el-table-column label="已交" width="90" align="right">
-            <template #default="{ row }">{{ fmt(row.received_qty, 0) }}</template>
+        <template v-if="flow.doneLabel && docType !== 'quotation' && doc && doc.status !== 'draft'">
+          <el-table-column :label="flow.doneLabel" width="90" align="right">
+            <template #default="{ row }">{{ fmt(row.done_qty, 0) }}</template>
           </el-table-column>
-          <el-table-column label="未交" width="90" align="right">
+          <el-table-column :label="flow.remainLabel" width="90" align="right">
             <template #default="{ row }">{{ fmt(row.remaining_qty, 0) }}</template>
           </el-table-column>
         </template>
@@ -781,8 +955,8 @@ onMounted(async () => {
           <strong>
             合計 {{ form.currency }} {{ fmt(editable ? preview.total : doc?.total_amount) }}
           </strong>
-          <span v-if="receipt && isForeign" class="base">
-            (本位幣 TWD {{ fmt(receipt.base_total, 0) }})
+          <span v-if="doc?.base_total && isForeign" class="base">
+            (本位幣 TWD {{ fmt(doc.base_total, 0) }})
           </span>
         </div>
       </div>
@@ -796,17 +970,18 @@ onMounted(async () => {
       <el-descriptions-item label="核准">
         {{ doc.approved_by_name }} {{ formatDateTime(doc.approved_at) }}
       </el-descriptions-item>
-      <el-descriptions-item v-if="order" label="結案">
-        {{ order.closed_by_name }} {{ formatDateTime(order.closed_at) }}
+      <el-descriptions-item v-if="flow.posting" label="過帳">
+        {{ doc.posted_by_name }} {{ formatDateTime(doc.posted_at) }}
       </el-descriptions-item>
-      <el-descriptions-item v-if="receipt" label="過帳">
-        {{ receipt.posted_by_name }} {{ formatDateTime(receipt.posted_at) }}
+      <el-descriptions-item v-else label="結案">
+        {{ doc.closed_by_name }} {{ formatDateTime(doc.closed_at) }}
       </el-descriptions-item>
     </el-descriptions>
 
     <el-dialog
+      v-if="importer"
       v-model="importVisible"
-      :title="docType === 'receipt' ? '從採購單帶入(未交明細)' : '從進貨單帶入(可退明細)'"
+      :title="importer.title"
       width="860px"
       :close-on-click-modal="false"
     >
@@ -820,7 +995,7 @@ onMounted(async () => {
           @clear="searchImport"
         />
         <el-button @click="searchImport">查詢</el-button>
-        <span class="hint">只列出 {{ form.currency }} 且供應商相同的單據</span>
+        <span class="hint">只列出 {{ form.currency }} 且{{ flow.partnerLabel }}相同的單據</span>
       </div>
       <el-table
         v-loading="importLoading"
@@ -828,22 +1003,22 @@ onMounted(async () => {
         border
         size="small"
         max-height="420"
-        @selection-change="(rows: (OutstandingLine | ReturnableLine)[]) => (importSelected = rows)"
+        @selection-change="(rows: ImportRow[]) => (importSelected = rows)"
       >
         <el-table-column type="selection" width="40" />
         <el-table-column prop="doc_no" label="單號" width="150" />
         <el-table-column prop="doc_date" label="日期" width="100" />
-        <el-table-column label="料品" min-width="200">
+        <el-table-column label="料品" min-width="180">
           <template #default="{ row }">{{ row.item_code }} {{ row.item_name }}</template>
         </el-table-column>
         <el-table-column prop="unit_name" label="單位" width="70" />
-        <el-table-column label="數量" width="90" align="right">
+        <el-table-column label="數量" width="80" align="right">
           <template #default="{ row }">{{ fmt(row.qty, 0) }}</template>
         </el-table-column>
-        <el-table-column :label="docType === 'receipt' ? '未交' : '可退'" width="90" align="right">
+        <el-table-column :label="importer.remainLabel" width="80" align="right">
           <template #default="{ row }">{{ fmt(row.remaining_qty, 0) }}</template>
         </el-table-column>
-        <el-table-column label="單價" width="100" align="right">
+        <el-table-column label="單價" width="90" align="right">
           <template #default="{ row }">{{ fmt(row.unit_price, 0) }}</template>
         </el-table-column>
       </el-table>
@@ -856,6 +1031,31 @@ onMounted(async () => {
         >
           帶入 {{ importSelected.length }} 筆
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="invoiceVisible"
+      title="登錄發票"
+      width="420px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="90px">
+        <el-form-item label="發票號碼" :error="fieldErrors.invoice_no">
+          <el-input v-model="invoiceForm.invoice_no" maxlength="10" placeholder="AB12345678" />
+        </el-form-item>
+        <el-form-item label="發票日期" :error="fieldErrors.invoice_date">
+          <el-date-picker
+            v-model="invoiceForm.invoice_date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <div class="hint">清空發票號碼即取消登錄。</div>
+      </el-form>
+      <template #footer>
+        <el-button @click="invoiceVisible = false">取消</el-button>
+        <el-button type="primary" :loading="invoiceSaving" @click="saveInvoice">儲存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -900,6 +1100,10 @@ onMounted(async () => {
 .hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.neg {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 .footer {
   display: flex;

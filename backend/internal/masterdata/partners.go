@@ -202,8 +202,8 @@ func toCustomerDTO(c db.Customer) customerDTO {
 	}
 }
 
-// customerVisible 依資料範圍判斷能否存取此客戶(以負責業務及其部門判斷)。
-func customerVisible(a *authctx.Actor, salesUserID, salesDeptID *int64) bool {
+// CustomerVisible 依資料範圍判斷能否存取此客戶(以負責業務及其部門判斷);銷售單據也沿用此規則。
+func CustomerVisible(a *authctx.Actor, salesUserID, salesDeptID *int64) bool {
 	deptID, userID := a.ScopeFilter()
 	switch {
 	case deptID == nil && userID == nil:
@@ -249,7 +249,7 @@ func loadCustomer(ctx context.Context, q *db.Queries, a *authctx.Actor, id int64
 	if err != nil {
 		return row, notFoundOr(err)
 	}
-	if !customerVisible(a, row.SalesUserID, row.SalesDepartmentID) {
+	if !CustomerVisible(a, row.SalesUserID, row.SalesDepartmentID) {
 		return row, apperr.ErrNotFound
 	}
 	return row, nil
@@ -603,6 +603,36 @@ func (m *Module) supplierOptions(c *gin.Context) {
 		out[i] = supplierOptionDTO{
 			ID: r.ID, Code: r.Code, Name: r.Name, ShortName: r.ShortName, Currency: r.Currency,
 			TaxTypeID: r.TaxTypeID, PaymentTermID: r.PaymentTermID,
+		}
+	}
+	reply(c, http.StatusOK, out, err)
+}
+
+type customerOptionDTO struct {
+	ID            int64   `json:"id"`
+	Code          string  `json:"code"`
+	Name          string  `json:"name"`
+	ShortName     string  `json:"short_name"`
+	Currency      string  `json:"currency"`
+	TaxTypeID     *int64  `json:"tax_type_id"`
+	PaymentTermID *int64  `json:"payment_term_id"`
+	SalesUserID   *int64  `json:"sales_user_id"`
+	SalesUserName *string `json:"sales_user_name"`
+}
+
+// customerOptions 開單選客戶(最多 20 筆),依資料範圍過濾,附預設幣別、稅別、付款條件與負責業務。
+func (m *Module) customerOptions(c *gin.Context) {
+	a := actor(c)
+	deptID, userID := a.ScopeFilter()
+	rows, err := m.store.CustomerOptions(c.Request.Context(), db.CustomerOptionsParams{
+		CompanyID: a.CompanyID, Keyword: httpx.QueryString(c, "keyword"), ScopeUserID: userID, ScopeDeptID: deptID,
+	})
+	out := make([]customerOptionDTO, len(rows))
+	for i, r := range rows {
+		out[i] = customerOptionDTO{
+			ID: r.ID, Code: r.Code, Name: r.Name, ShortName: r.ShortName, Currency: r.Currency,
+			TaxTypeID: r.TaxTypeID, PaymentTermID: r.PaymentTermID, SalesUserID: r.SalesUserID,
+			SalesUserName: r.SalesUserName,
 		}
 	}
 	reply(c, http.StatusOK, out, err)

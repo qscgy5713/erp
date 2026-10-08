@@ -348,17 +348,8 @@ WHERE r.company_id = @company_id AND r.doc_type = 'receipt' AND r.status = 'post
 ORDER BY r.doc_date DESC, r.doc_no DESC, l.line_no
 LIMIT 200;
 
--- name: ListPurchaseItems :many
--- 開單驗證料品(商品與服務皆可採購)
-SELECT i.id, i.code, i.name, i.item_type, i.base_unit_id, i.is_active
-FROM items i
-WHERE i.company_id = @company_id AND i.id = ANY(@ids::bigint[]);
-
 -- name: SupplierForDoc :one
 SELECT id, code, name, is_active FROM suppliers WHERE id = @id AND company_id = @company_id;
-
--- name: TaxTypeForDoc :one
-SELECT id, rate, is_active FROM tax_types WHERE id = @id AND company_id = @company_id;
 
 -- name: SupplierOptions :many
 -- 開單選供應商:只需登入,只回傳啟用中的精簡欄位

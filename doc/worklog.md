@@ -1,5 +1,25 @@
 # 工作日誌
 
+## 2026-10-08 M4 銷售
+- 已 push M3 到 `origin/main`(d919682),CI 三個 job 通過。
+- 重構:採購與銷售共用的單頭驗證、明細計價、訂單狀態轉換抽到 `internal/trade`(D41),採購改用它;共用查詢移到 `queries/trade.sql`。重構後採購測試照常通過。
+- 資料表(000006):sales_orders / sales_order_lines(報價與訂單共用,D37)、deliveries / delivery_lines(出貨與退回共用)、accounts_receivable。
+- 後端 `internal/sales`:
+  - 報價 / 訂單:CRUD、狀態動作(結案 / 重開)、報價轉訂單(檢查報價已核准、同客戶)、有下游單據時擋取消核准 / 作廢。
+  - 訂單核准檢查信用額度(D39),先鎖客戶列。
+  - 可用量 API(現有 − 其他已核准訂單未出貨)、未出貨明細、可退回明細。
+  - 出貨 / 退回:來源檢查(開單時欄位錯誤、過帳時鎖訂單 / 出貨單再檢查),過帳扣 / 加庫存並產生應收;反過帳檢查退回單與已沖帳。
+  - 發票號碼登錄(D40):格式檢查、部分唯一索引防重複。
+  - 資料範圍(D38):所有讀寫依負責業務快照過濾,範圍外回 404;客戶選單 / 應收也依範圍。
+- `masterdata.CustomerVisible` 改為公開供銷售共用;新增 `/masterdata/customer-options`;權限點 sales.order.*、sales.delivery.*、finance.receivable.read。
+- 前端:`PurchaseEditView` 改寫為通用的 `views/trade/TradeEditView.vue` + `flows.ts`,採購、報價 / 訂單、出貨 / 退回共用;轉單(採購單 → 進貨、報價 → 訂單、訂單 → 出貨)、從來源帶入、可用量 / 現有量欄(不足紅字)、發票登錄對話框。`SupplierPicker` 改為 `PartnerPicker`(供應商 / 客戶);應付頁改為應收 / 應付共用的 `LedgerView`;新增報價 / 訂單、出貨 / 退回、未出貨清單頁。
+- 測試:5 個銷售整合測試(報價 → 訂單 → 部分出貨 → 應收、可用量與保留量、超出未出貨量兩階段擋、缺貨接單但出貨擋負庫存、退回與可退量、已沖帳擋反過帳、信用額度、發票格式 / 重複 / 作廢後可重用、資料範圍);`internal/trade` 狀態轉換單元測試。
+- 瀏覽器實測:新增報價單(可用量欄正確顯示 PEN-01 現有 3 個,數量 500 時紅字)→ 改 2 個 → 核准 → 轉訂單(自動帶入、顯示來源報價)→ 核准 → 轉出貨單 → 過帳 → 登錄發票 xy12345678(自動轉大寫)→ 應收帳款 42;採購進貨單在新編輯頁正常顯示。console 無錯誤。
+- 實測與 CR 修正:
+  - 轉單同屬「報價 / 訂單」路由時元件會被沿用 → `RouterView` 的 key 改為 path(換單據即重建)。
+  - 報價單也會出現「轉出貨單」按鈕的條件錯誤;報價來源連結在停用的表單內無法點擊 → 改用 RouterLink。
+  - 銷售明細欄位「未交」改為「未出」;轉單後可用量缺單位;過帳確認文字只提到進貨 / 應付 → 改為通用說明。
+
 ## 2026-10-08 M3 採購
 - 已 push M2 到 `origin/main`(d4ff424),CI 三個 job 通過。
 - 資料表(000005):purchase_orders / purchase_order_lines、goods_receipts / goods_receipt_lines(進貨與退出共用,D31)、accounts_payable。

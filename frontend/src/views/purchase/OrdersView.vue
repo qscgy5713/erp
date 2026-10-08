@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 import { statusLabels } from '@/utils/docstate'
 import DocStatusTag from '@/components/DocStatusTag.vue'
-import SupplierPicker from '@/components/SupplierPicker.vue'
+import PartnerPicker from '@/components/PartnerPicker.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -84,7 +84,7 @@ onMounted(load)
         <el-option v-for="(label, v) in orderStatuses" :key="v" :label="label" :value="v" />
       </el-select>
       <div style="width: 200px">
-        <SupplierPicker v-model="query.supplier_id" @update:model-value="search" />
+        <PartnerPicker kind="supplier" v-model="query.supplier_id" @update:model-value="search" />
       </div>
       <el-date-picker
         v-model="query.range"

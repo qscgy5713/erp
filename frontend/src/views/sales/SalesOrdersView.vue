@@ -1,8 +1,9 @@
 <script setup lang="ts">
+// 報價單與訂單列表(依資料範圍只列出自己範圍內的單據)
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { DocStatus } from '@/api/inventory'
-import { purchaseApi, type ReceiptDocType, type ReceiptRow } from '@/api/purchase'
+import { salesApi, type SalesOrderRow, type SalesOrderType, type ShipState } from '@/api/sales'
 import type { PageMeta } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
@@ -12,25 +13,30 @@ import PartnerPicker from '@/components/PartnerPicker.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
-const canWrite = computed(() => auth.can('purchase.receipt.write'))
+const canWrite = computed(() => auth.can(['sales.order.write']))
 const { handle } = useApiError()
 
-const typeLabels: Record<ReceiptDocType, string> = { receipt: '進貨', return: '退出' }
-// 進貨單不使用結案
-const receiptStatuses = Object.fromEntries(
-  Object.entries(statusLabels).filter(([k]) => k !== 'closed'),
+const typeLabels: Record<SalesOrderType, string> = { quotation: '報價', order: '訂單' }
+const shipStates: Record<ShipState, { label: string; type: 'info' | 'warning' | 'success' }> = {
+  none: { label: '未出貨', type: 'info' },
+  partial: { label: '部分出貨', type: 'warning' },
+  full: { label: '已出齊', type: 'success' },
+}
+// 報價單與訂單不過帳
+const orderStatuses = Object.fromEntries(
+  Object.entries(statusLabels).filter(([k]) => k !== 'posted'),
 ) as Partial<Record<DocStatus, string>>
 
 const query = reactive({
-  doc_type: '' as ReceiptDocType | '',
+  doc_type: '' as SalesOrderType | '',
   status: '' as DocStatus | '',
-  supplier_id: null as number | null,
+  customer_id: null as number | null,
   keyword: '',
   range: null as [string, string] | null,
   page: 1,
   size: 20,
 })
-const rows = ref<ReceiptRow[]>([])
+const rows = ref<SalesOrderRow[]>([])
 const meta = ref<PageMeta>({ page: 1, size: 20, total: 0 })
 const loading = ref(false)
 
@@ -38,7 +44,7 @@ async function load() {
   loading.value = true
   try {
     const { range, ...rest } = query
-    const res = await purchaseApi.receipts({
+    const res = await salesApi.orders({
       ...rest,
       keyword: rest.keyword.trim(),
       from: range?.[0],
@@ -58,12 +64,12 @@ function search() {
   load()
 }
 
-function open(row: ReceiptRow) {
-  router.push({ name: 'purchase-receipt', params: { id: row.id } })
+function open(row: SalesOrderRow) {
+  router.push({ name: 'sales-order', params: { id: row.id } })
 }
 
-function create(type: ReceiptDocType) {
-  router.push({ name: 'purchase-receipt-new', query: { type } })
+function create(type: SalesOrderType) {
+  router.push({ name: 'sales-order-new', query: { type } })
 }
 
 const money = (v: string) => Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 4 })
@@ -90,10 +96,10 @@ onMounted(load)
         style="width: 110px"
         @change="search"
       >
-        <el-option v-for="(label, v) in receiptStatuses" :key="v" :label="label" :value="v" />
+        <el-option v-for="(label, v) in orderStatuses" :key="v" :label="label" :value="v" />
       </el-select>
       <div style="width: 200px">
-        <PartnerPicker kind="supplier" v-model="query.supplier_id" @update:model-value="search" />
+        <PartnerPicker v-model="query.customer_id" kind="customer" @update:model-value="search" />
       </div>
       <el-date-picker
         v-model="query.range"
@@ -106,20 +112,20 @@ onMounted(load)
       />
       <el-input
         v-model="query.keyword"
-        placeholder="單號 / 發票號碼"
+        placeholder="單號 / 客戶單號"
         clearable
-        style="width: 170px"
+        style="width: 160px"
         @keyup.enter="search"
         @clear="search"
       />
       <el-button @click="search">查詢</el-button>
-      <el-button v-if="query.supplier_id" link @click="((query.supplier_id = null), search())">
-        清除供應商
+      <el-button v-if="query.customer_id" link @click="((query.customer_id = null), search())">
+        清除客戶
       </el-button>
       <span class="spacer" />
       <template v-if="canWrite">
-        <el-button type="primary" @click="create('receipt')">新增進貨單</el-button>
-        <el-button type="primary" @click="create('return')">新增退出單</el-button>
+        <el-button type="primary" @click="create('quotation')">新增報價單</el-button>
+        <el-button type="primary" @click="create('order')">新增訂單</el-button>
       </template>
     </div>
 
@@ -131,20 +137,36 @@ onMounted(load)
       </el-table-column>
       <el-table-column prop="doc_date" label="日期" width="110" />
       <el-table-column label="類型" width="70">
-        <template #default="{ row }">{{ typeLabels[row.doc_type as ReceiptDocType] }}</template>
+        <template #default="{ row }">{{ typeLabels[row.doc_type as SalesOrderType] }}</template>
       </el-table-column>
-      <el-table-column label="供應商" min-width="180">
-        <template #default="{ row }">{{ row.supplier_code }} {{ row.supplier_name }}</template>
+      <el-table-column label="客戶" min-width="180">
+        <template #default="{ row }">{{ row.customer_code }} {{ row.customer_name }}</template>
       </el-table-column>
-      <el-table-column prop="warehouse_name" label="倉庫" width="120" />
+      <el-table-column prop="sales_user_name" label="業務" width="100" />
       <el-table-column label="合計" width="150" align="right">
         <template #default="{ row }">{{ row.currency }} {{ money(row.total_amount) }}</template>
       </el-table-column>
-      <el-table-column prop="invoice_no" label="發票號碼" width="120" />
+      <el-table-column label="出貨日 / 有效期限" width="130">
+        <template #default="{ row }">{{ row.delivery_date ?? row.valid_until }}</template>
+      </el-table-column>
       <el-table-column label="狀態" width="100">
         <template #default="{ row }"><DocStatusTag :status="row.status" /></template>
       </el-table-column>
-      <el-table-column prop="created_by_name" label="建立者" width="110" />
+      <el-table-column label="進度" width="100">
+        <template #default="{ row }">
+          <template v-if="row.doc_type === 'order'">
+            <el-tag
+              v-if="row.status === 'approved' || row.status === 'closed'"
+              :type="shipStates[row.ship_state as ShipState].type"
+              effect="plain"
+            >
+              {{ shipStates[row.ship_state as ShipState].label }}
+            </el-tag>
+          </template>
+          <el-tag v-else-if="row.converted" type="success" effect="plain">已轉訂單</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="customer_po_no" label="客戶單號" width="120" />
       <el-table-column prop="note" label="備註" min-width="140" show-overflow-tooltip />
     </el-table>
     <div class="pager">

@@ -1,20 +1,32 @@
 <script setup lang="ts">
-// 供應商搜尋選擇:輸入代號、名稱或簡稱遠端搜尋;選中後回傳預設幣別、稅別、付款條件
+// 往來對象搜尋選擇:供應商或客戶(客戶依資料範圍過濾);選中後回傳預設幣別、稅別、付款條件
 import { ref, watch } from 'vue'
-import { purchaseApi, type SupplierOption } from '@/api/purchase'
+import { purchaseApi } from '@/api/purchase'
+import { salesApi } from '@/api/sales'
+
+export interface PartnerOption {
+  id: number
+  code: string
+  name: string
+  currency: string
+  tax_type_id: number | null
+  payment_term_id: number | null
+  sales_user_name?: string | null
+}
 
 const props = defineProps<{
+  kind: 'supplier' | 'customer'
   modelValue: number | null
-  /** 已選供應商的顯示文字(編輯既有單據時,選項尚未載入) */
+  /** 已選對象的顯示文字(編輯既有單據時,選項尚未載入) */
   label?: string
   disabled?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: number | null]
-  select: [supplier: SupplierOption | null]
+  select: [partner: PartnerOption | null]
 }>()
 
-const options = ref<SupplierOption[]>([])
+const options = ref<PartnerOption[]>([])
 const loading = ref(false)
 let seq = 0
 
@@ -22,7 +34,11 @@ async function search(keyword: string) {
   const mySeq = ++seq
   loading.value = true
   try {
-    const res = await purchaseApi.supplierOptions(keyword.trim())
+    const k = keyword.trim()
+    const res =
+      props.kind === 'supplier'
+        ? await purchaseApi.supplierOptions(k)
+        : await salesApi.customerOptions(k)
     if (mySeq === seq) options.value = res // 只採用最後一次搜尋的結果
   } finally {
     if (mySeq === seq) loading.value = false
@@ -34,15 +50,7 @@ watch(
   ([v, label]) => {
     if (v && label && !options.value.some((o) => o.id === v)) {
       options.value = [
-        {
-          id: v,
-          code: '',
-          name: label,
-          short_name: '',
-          currency: '',
-          tax_type_id: null,
-          payment_term_id: null,
-        },
+        { id: v, code: '', name: label, currency: '', tax_type_id: null, payment_term_id: null },
       ]
     }
   },
@@ -63,7 +71,7 @@ function onChange(id: number | null) {
     :remote-method="search"
     :loading="loading"
     :disabled="disabled"
-    placeholder="代號 / 名稱"
+    :placeholder="kind === 'supplier' ? '供應商代號 / 名稱' : '客戶代號 / 名稱'"
     style="width: 100%"
     @update:model-value="onChange"
     @focus="options.length <= 1 && search('')"

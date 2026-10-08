@@ -117,38 +117,6 @@ export interface ReceiptRow {
   created_by_name: string | null
 }
 
-export interface LineInput {
-  item_id: number
-  unit_id: number
-  qty: Decimal
-  unit_price: Decimal
-  po_line_id?: number | null
-  receipt_line_id?: number | null
-  note: string
-}
-
-export interface HeaderInput {
-  doc_date: string
-  supplier_id: number
-  warehouse_id: number
-  currency: string
-  exchange_rate: Decimal | null
-  tax_type_id: number
-  payment_term_id: number | null
-  note: string
-  lines: LineInput[]
-  version?: number
-}
-
-export interface OrderInput extends HeaderInput {
-  expected_date: string | null
-}
-
-export interface ReceiptInput extends HeaderInput {
-  doc_type: ReceiptDocType
-  invoice_no: string
-}
-
 export interface OutstandingLine {
   po_line_id: number
   order_id: number
@@ -207,8 +175,8 @@ type Q = Record<string, string | number | boolean | null | undefined>
 export const purchaseApi = {
   orders: (q: Q) => requestPage<OrderRow>(`/purchase/orders${qs(q)}`),
   order: (id: number) => http.get<PurchaseOrder>(`/purchase/orders/${id}`),
-  createOrder: (input: OrderInput) => http.post<PurchaseOrder>('/purchase/orders', input),
-  updateOrder: (id: number, input: OrderInput) =>
+  createOrder: (input: unknown) => http.post<PurchaseOrder>('/purchase/orders', input),
+  updateOrder: (id: number, input: unknown) =>
     http.put<PurchaseOrder>(`/purchase/orders/${id}`, input),
   orderAction: (id: number, action: DocAction, version: number) =>
     http.post<PurchaseOrder>(`/purchase/orders/${id}/actions/${action}`, { version }),
@@ -216,8 +184,8 @@ export const purchaseApi = {
 
   receipts: (q: Q) => requestPage<ReceiptRow>(`/purchase/receipts${qs(q)}`),
   receipt: (id: number) => http.get<GoodsReceipt>(`/purchase/receipts/${id}`),
-  createReceipt: (input: ReceiptInput) => http.post<GoodsReceipt>('/purchase/receipts', input),
-  updateReceipt: (id: number, input: ReceiptInput) =>
+  createReceipt: (input: unknown) => http.post<GoodsReceipt>('/purchase/receipts', input),
+  updateReceipt: (id: number, input: unknown) =>
     http.put<GoodsReceipt>(`/purchase/receipts/${id}`, input),
   receiptAction: (id: number, action: DocAction, version: number) =>
     http.post<GoodsReceipt>(`/purchase/receipts/${id}/actions/${action}`, { version }),

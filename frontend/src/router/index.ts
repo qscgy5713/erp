@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { INVENTORY_ANY, ORDER_ANY, RECEIPT_ANY } from '@/navigation'
+import { DELIVERY_ANY, INVENTORY_ANY, ORDER_ANY, RECEIPT_ANY, SALES_ORDER_ANY } from '@/navigation'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -11,8 +11,10 @@ declare module 'vue-router' {
     blank?: boolean
     /** 需要任一權限 */
     perm?: string[]
-    /** 採購編輯頁:採購單(order)或進貨 / 退出單(receipt) */
-    kind?: 'order' | 'receipt'
+    /** 採購 / 銷售共用編輯頁的流程,見 views/trade/flows.ts */
+    kind?: 'purchase-order' | 'receipt' | 'sales-order' | 'delivery'
+    /** 應收 / 應付帳款頁 */
+    ledger?: 'receivable' | 'payable'
   }
 }
 
@@ -111,14 +113,14 @@ const router = createRouter({
     {
       path: '/purchase/orders/new',
       name: 'purchase-order-new',
-      component: () => import('@/views/purchase/PurchaseEditView.vue'),
-      meta: { title: '新增採購單', perm: ['purchase.order.write'], kind: 'order' },
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '新增採購單', perm: ['purchase.order.write'], kind: 'purchase-order' },
     },
     {
       path: '/purchase/orders/:id(\\d+)',
       name: 'purchase-order',
-      component: () => import('@/views/purchase/PurchaseEditView.vue'),
-      meta: { title: '採購單', perm: ORDER_ANY, kind: 'order' },
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '採購單', perm: ORDER_ANY, kind: 'purchase-order' },
     },
     {
       path: '/purchase/receipts',
@@ -129,13 +131,13 @@ const router = createRouter({
     {
       path: '/purchase/receipts/new',
       name: 'purchase-receipt-new',
-      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      component: () => import('@/views/trade/TradeEditView.vue'),
       meta: { title: '新增進貨 / 退出單', perm: ['purchase.receipt.write'], kind: 'receipt' },
     },
     {
       path: '/purchase/receipts/:id(\\d+)',
       name: 'purchase-receipt',
-      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      component: () => import('@/views/trade/TradeEditView.vue'),
       meta: { title: '進貨 / 退出單', perm: RECEIPT_ANY, kind: 'receipt' },
     },
     {
@@ -144,9 +146,55 @@ const router = createRouter({
       meta: { title: '未交貨清單', perm: [...ORDER_ANY, 'purchase.receipt.write'] },
     },
     {
+      path: '/sales/orders',
+      name: 'sales-orders',
+      component: () => import('@/views/sales/SalesOrdersView.vue'),
+      meta: { title: '報價 / 訂單', perm: SALES_ORDER_ANY },
+    },
+    {
+      path: '/sales/orders/new',
+      name: 'sales-order-new',
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '新增報價 / 訂單', perm: ['sales.order.write'], kind: 'sales-order' },
+    },
+    {
+      path: '/sales/orders/:id(\\d+)',
+      name: 'sales-order',
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '報價 / 訂單', perm: SALES_ORDER_ANY, kind: 'sales-order' },
+    },
+    {
+      path: '/sales/deliveries',
+      name: 'sales-deliveries',
+      component: () => import('@/views/sales/DeliveriesView.vue'),
+      meta: { title: '出貨 / 退回', perm: DELIVERY_ANY },
+    },
+    {
+      path: '/sales/deliveries/new',
+      name: 'sales-delivery-new',
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '新增出貨 / 退回單', perm: ['sales.delivery.write'], kind: 'delivery' },
+    },
+    {
+      path: '/sales/deliveries/:id(\\d+)',
+      name: 'sales-delivery',
+      component: () => import('@/views/trade/TradeEditView.vue'),
+      meta: { title: '出貨 / 退回單', perm: DELIVERY_ANY, kind: 'delivery' },
+    },
+    {
+      path: '/sales/unshipped',
+      component: () => import('@/views/sales/UnshippedView.vue'),
+      meta: { title: '未出貨清單', perm: [...SALES_ORDER_ANY, 'sales.delivery.write'] },
+    },
+    {
+      path: '/finance/receivables',
+      component: () => import('@/views/finance/LedgerView.vue'),
+      meta: { title: '應收帳款', perm: ['finance.receivable.read'], ledger: 'receivable' },
+    },
+    {
       path: '/finance/payables',
-      component: () => import('@/views/finance/PayablesView.vue'),
-      meta: { title: '應付帳款', perm: ['finance.payable.read'] },
+      component: () => import('@/views/finance/LedgerView.vue'),
+      meta: { title: '應付帳款', perm: ['finance.payable.read'], ledger: 'payable' },
     },
     {
       path: '/system/departments',

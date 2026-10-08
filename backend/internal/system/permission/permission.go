@@ -40,8 +40,17 @@ const (
 	ReceiptWrite         = "purchase.receipt.write"
 	ReceiptApprove       = "purchase.receipt.approve"
 	ReceiptPost          = "purchase.receipt.post" // 過帳、反過帳(異動庫存與應付)
+	// 銷售
+	SalesOrderRead    = "sales.order.read" // 報價單與訂單
+	SalesOrderWrite   = "sales.order.write"
+	SalesOrderApprove = "sales.order.approve"
+	DeliveryRead      = "sales.delivery.read"  // 出貨單、銷貨退回單
+	DeliveryWrite     = "sales.delivery.write" // 含登錄發票號碼
+	DeliveryApprove   = "sales.delivery.approve"
+	DeliveryPost      = "sales.delivery.post"
 	// 應收應付
-	PayableRead = "finance.payable.read"
+	PayableRead    = "finance.payable.read"
+	ReceivableRead = "finance.receivable.read"
 )
 
 type Permission struct {
@@ -76,6 +85,13 @@ var Groups = []Group{
 	{"採購", "進貨單與進貨退出單", []Permission{
 		{ReceiptRead, "檢視"}, {ReceiptWrite, "開單/送審"}, {ReceiptApprove, "核准/退回/作廢"}, {ReceiptPost, "過帳/反過帳"},
 	}},
+	{"銷售", "報價單與訂單", []Permission{
+		{SalesOrderRead, "檢視"}, {SalesOrderWrite, "開單/送審"}, {SalesOrderApprove, "核准/退回/作廢/結案"},
+	}},
+	{"銷售", "出貨單與銷貨退回單", []Permission{
+		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
+	}},
+	{"應收應付", "應收帳款", []Permission{{ReceivableRead, "檢視"}}},
 	{"應收應付", "應付帳款", []Permission{{PayableRead, "檢視"}}},
 }
 

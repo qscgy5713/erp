@@ -18,6 +18,7 @@ import (
 	"erp/internal/system/audit"
 	"erp/internal/system/docno"
 	"erp/internal/system/permission"
+	"erp/internal/trade"
 )
 
 var errOrderEditNotAllowed = apperr.New(http.StatusConflict, "PUR-001", "只有草稿可以修改")
@@ -200,19 +201,19 @@ type orderInput struct {
 }
 
 // prepareOrder 驗證單頭與明細;採購單明細不引用其他單據。
-func prepareOrder(ctx context.Context, q *db.Queries, companyID int64, in *orderInput) (header, *time.Time, []pricedLine, totals, error) {
+func prepareOrder(ctx context.Context, q *db.Queries, companyID int64, in *orderInput) (trade.Header, *time.Time, []pricedLine, trade.Totals, error) {
 	h, err := checkHeader(ctx, q, companyID, &in.headerInput)
 	if err != nil {
-		return h, nil, nil, totals{}, err
+		return h, nil, nil, trade.Totals{}, err
 	}
 	var expected *time.Time
 	if in.ExpectedDate != nil && *in.ExpectedDate != "" {
 		t, err := parseDate("expected_date", *in.ExpectedDate)
 		if err != nil {
-			return h, nil, nil, totals{}, err
+			return h, nil, nil, trade.Totals{}, err
 		}
-		if t.Before(h.date) {
-			return h, nil, nil, totals{}, fieldErr("expected_date", "預定交貨日不可早於採購日期")
+		if t.Before(h.Date) {
+			return h, nil, nil, trade.Totals{}, fieldErr("expected_date", "預定交貨日不可早於採購日期")
 		}
 		expected = &t
 	}
@@ -230,7 +231,7 @@ func saveOrderLines(ctx context.Context, q *db.Queries, orderID int64, lines []p
 	for i, l := range lines {
 		if err := q.AddPurchaseOrderLine(ctx, db.AddPurchaseOrderLineParams{
 			OrderID: orderID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
-			Factor: l.factor, BaseQty: l.baseQty, UnitPrice: l.UnitPrice, Amount: l.amount, Note: l.Note,
+			Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice, Amount: l.Amount, Note: l.Note,
 		}); err != nil {
 			return err
 		}
@@ -252,15 +253,15 @@ func (m *Module) createOrder(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		no, err := docno.Next(ctx, q, a.CompanyID, "purchase_order", h.date)
+		no, err := docno.Next(ctx, q, a.CompanyID, "purchase_order", h.Date)
 		if err != nil {
 			return err
 		}
 		o, err := q.CreatePurchaseOrder(ctx, db.CreatePurchaseOrderParams{
-			CompanyID: a.CompanyID, DocNo: no, DocDate: h.date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
-			ExpectedDate: expected, Currency: in.Currency, ExchangeRate: h.rate, TaxTypeID: in.TaxTypeID,
-			TaxRate: h.taxRate, PaymentTermID: in.PaymentTermID, UntaxedAmount: t.untaxed, TaxAmount: t.tax,
-			TotalAmount: t.total, Note: in.Note, CreatedBy: &a.UserID,
+			CompanyID: a.CompanyID, DocNo: no, DocDate: h.Date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
+			ExpectedDate: expected, Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID,
+			TaxRate: h.TaxRate, PaymentTermID: in.PaymentTermID, UntaxedAmount: t.Untaxed, TaxAmount: t.Tax,
+			TotalAmount: t.Total, Note: in.Note, CreatedBy: &a.UserID,
 		})
 		if err != nil {
 			return err
@@ -319,10 +320,10 @@ func (m *Module) updateOrder(c *gin.Context) {
 			return err
 		}
 		if _, err := q.UpdatePurchaseOrderHeader(ctx, db.UpdatePurchaseOrderHeaderParams{
-			ID: id, CompanyID: a.CompanyID, DocDate: h.date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
-			ExpectedDate: expected, Currency: in.Currency, ExchangeRate: h.rate, TaxTypeID: in.TaxTypeID,
-			TaxRate: h.taxRate, PaymentTermID: in.PaymentTermID, UntaxedAmount: t.untaxed, TaxAmount: t.tax,
-			TotalAmount: t.total, Note: in.Note, Version: in.Version, UpdatedBy: &a.UserID,
+			ID: id, CompanyID: a.CompanyID, DocDate: h.Date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
+			ExpectedDate: expected, Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID,
+			TaxRate: h.TaxRate, PaymentTermID: in.PaymentTermID, UntaxedAmount: t.Untaxed, TaxAmount: t.Tax,
+			TotalAmount: t.Total, Note: in.Note, Version: in.Version, UpdatedBy: &a.UserID,
 		}); err != nil {
 			if database.IsNoRows(err) {
 				return apperr.ErrVersionConflict
@@ -351,26 +352,6 @@ func (m *Module) updateOrder(c *gin.Context) {
 
 type actionInput struct {
 	Version int32 `json:"version" binding:"required"`
-}
-
-var actionLabels = map[docstate.Action]string{
-	docstate.Submit: "送審", docstate.Reject: "退回", docstate.Approve: "核准", docstate.Unapprove: "取消核准",
-	docstate.Post: "過帳", docstate.Unpost: "反過帳", docstate.Void: "作廢", docstate.Close: "結案",
-	docstate.Reopen: "重開",
-}
-
-// orderTransition 採購單不過帳:核准後可結案(剩餘未交視為取消),結案可重開回「已核准」(D30)。
-func orderTransition(from docstate.Status, action docstate.Action) (docstate.Status, error) {
-	switch action {
-	case docstate.Post, docstate.Unpost:
-		return from, docstate.ErrInvalidTransition
-	case docstate.Reopen:
-		if from == docstate.Closed {
-			return docstate.Approved, nil
-		}
-		return from, docstate.ErrInvalidTransition
-	}
-	return docstate.Transition(from, action)
 }
 
 func orderActionPermission(action docstate.Action, status docstate.Status) (string, bool) {
@@ -422,7 +403,7 @@ func (m *Module) orderAction(c *gin.Context) {
 		if cur.Version != in.Version {
 			return apperr.ErrVersionConflict
 		}
-		next, err := orderTransition(docstate.Status(cur.Status), action)
+		next, err := trade.OrderTransition(docstate.Status(cur.Status), action)
 		if err != nil {
 			return err
 		}

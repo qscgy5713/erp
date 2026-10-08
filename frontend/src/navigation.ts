@@ -14,6 +14,13 @@ export const INVENTORY_ANY = [
   'inventory.stock.post',
 ]
 export const ORDER_ANY = ['purchase.order.read', 'purchase.order.write', 'purchase.order.approve']
+export const SALES_ORDER_ANY = ['sales.order.read', 'sales.order.write', 'sales.order.approve']
+export const DELIVERY_ANY = [
+  'sales.delivery.read',
+  'sales.delivery.write',
+  'sales.delivery.approve',
+  'sales.delivery.post',
+]
 export const RECEIPT_ANY = [
   'purchase.receipt.read',
   'purchase.receipt.write',
@@ -51,7 +58,18 @@ export const navigation: NavItem[] = [
       },
     ],
   },
-  { title: '銷售', path: '/sales', disabled: true },
+  {
+    title: '銷售',
+    children: [
+      { title: '報價 / 訂單', path: '/sales/orders', perm: SALES_ORDER_ANY },
+      { title: '出貨 / 退回', path: '/sales/deliveries', perm: DELIVERY_ANY },
+      {
+        title: '未出貨清單',
+        path: '/sales/unshipped',
+        perm: [...SALES_ORDER_ANY, 'sales.delivery.write'],
+      },
+    ],
+  },
   {
     title: '庫存',
     children: [
@@ -62,7 +80,10 @@ export const navigation: NavItem[] = [
   },
   {
     title: '應收應付',
-    children: [{ title: '應付帳款', path: '/finance/payables', perm: ['finance.payable.read'] }],
+    children: [
+      { title: '應收帳款', path: '/finance/receivables', perm: ['finance.receivable.read'] },
+      { title: '應付帳款', path: '/finance/payables', perm: ['finance.payable.read'] },
+    ],
   },
   { title: '會計', path: '/accounting', disabled: true },
   {

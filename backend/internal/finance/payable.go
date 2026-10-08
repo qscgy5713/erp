@@ -1,4 +1,4 @@
-// Package finance 為應收應付。M3 先提供應付帳款的產生 / 移除與查詢,付款沖帳於 M5 加入。
+// Package finance 為應收應付。目前提供應收 / 應付帳款的產生、移除與查詢,收付款沖帳於 M5 加入。
 package finance
 
 import (
@@ -20,10 +20,12 @@ import (
 	"erp/internal/system/permission"
 )
 
-// 應付來源類型
+// 應收應付來源類型
 const (
 	SourceGoodsReceipt   = "goods_receipt"
 	SourcePurchaseReturn = "purchase_return"
+	SourceDelivery       = "delivery"
+	SourceSalesReturn    = "sales_return"
 )
 
 var errPayableSettled = apperr.New(http.StatusConflict, "FIN-001", "應付帳款已有付款沖帳,請先取消沖帳")
@@ -61,6 +63,7 @@ func New(store *database.Store) *Module { return &Module{store: store} }
 func (m *Module) Register(r *gin.RouterGroup) {
 	g := r.Group("/finance")
 	g.GET("/payables", auth.Require(permission.PayableRead), m.listPayables)
+	g.GET("/receivables", auth.Require(permission.ReceivableRead), m.listReceivables)
 }
 
 type payableDTO struct {
@@ -82,8 +85,8 @@ type payableDTO struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-// payableMeta 分頁資訊加上篩選結果的本位幣合計。
-type payableMeta struct {
+// sumMeta 分頁資訊加上篩選結果的本位幣合計。
+type sumMeta struct {
 	page.Meta
 	BaseAmountSum decimal.Decimal `json:"base_amount_sum"`
 }
@@ -152,5 +155,5 @@ func (m *Module) listPayables(c *gin.Context) {
 			PaidAmount: r.PaidAmount, Balance: r.Amount.Sub(r.PaidAmount), CreatedAt: r.CreatedAt,
 		}
 	}
-	response.List(c, out, payableMeta{Meta: pg.Meta(sum.Total), BaseAmountSum: sum.BaseAmountSum})
+	response.List(c, out, sumMeta{Meta: pg.Meta(sum.Total), BaseAmountSum: sum.BaseAmountSum})
 }

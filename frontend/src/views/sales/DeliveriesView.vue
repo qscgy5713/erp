@@ -1,8 +1,9 @@
 <script setup lang="ts">
+// 出貨單與銷貨退回單列表(依資料範圍);可篩選尚未登錄發票的單據
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { DocStatus } from '@/api/inventory'
-import { purchaseApi, type ReceiptDocType, type ReceiptRow } from '@/api/purchase'
+import { salesApi, type DeliveryDocType, type DeliveryRow } from '@/api/sales'
 import type { PageMeta } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
@@ -12,25 +13,26 @@ import PartnerPicker from '@/components/PartnerPicker.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
-const canWrite = computed(() => auth.can('purchase.receipt.write'))
+const canWrite = computed(() => auth.can(['sales.delivery.write']))
 const { handle } = useApiError()
 
-const typeLabels: Record<ReceiptDocType, string> = { receipt: '進貨', return: '退出' }
-// 進貨單不使用結案
-const receiptStatuses = Object.fromEntries(
+const typeLabels: Record<DeliveryDocType, string> = { delivery: '出貨', return: '退回' }
+// 出貨單不使用結案
+const deliveryStatuses = Object.fromEntries(
   Object.entries(statusLabels).filter(([k]) => k !== 'closed'),
 ) as Partial<Record<DocStatus, string>>
 
 const query = reactive({
-  doc_type: '' as ReceiptDocType | '',
+  doc_type: '' as DeliveryDocType | '',
   status: '' as DocStatus | '',
-  supplier_id: null as number | null,
+  customer_id: null as number | null,
   keyword: '',
+  no_invoice: false,
   range: null as [string, string] | null,
   page: 1,
   size: 20,
 })
-const rows = ref<ReceiptRow[]>([])
+const rows = ref<DeliveryRow[]>([])
 const meta = ref<PageMeta>({ page: 1, size: 20, total: 0 })
 const loading = ref(false)
 
@@ -38,7 +40,7 @@ async function load() {
   loading.value = true
   try {
     const { range, ...rest } = query
-    const res = await purchaseApi.receipts({
+    const res = await salesApi.deliveries({
       ...rest,
       keyword: rest.keyword.trim(),
       from: range?.[0],
@@ -58,12 +60,12 @@ function search() {
   load()
 }
 
-function open(row: ReceiptRow) {
-  router.push({ name: 'purchase-receipt', params: { id: row.id } })
+function open(row: DeliveryRow) {
+  router.push({ name: 'sales-delivery', params: { id: row.id } })
 }
 
-function create(type: ReceiptDocType) {
-  router.push({ name: 'purchase-receipt-new', query: { type } })
+function create(type: DeliveryDocType) {
+  router.push({ name: 'sales-delivery-new', query: { type } })
 }
 
 const money = (v: string) => Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 4 })
@@ -90,10 +92,10 @@ onMounted(load)
         style="width: 110px"
         @change="search"
       >
-        <el-option v-for="(label, v) in receiptStatuses" :key="v" :label="label" :value="v" />
+        <el-option v-for="(label, v) in deliveryStatuses" :key="v" :label="label" :value="v" />
       </el-select>
       <div style="width: 200px">
-        <PartnerPicker kind="supplier" v-model="query.supplier_id" @update:model-value="search" />
+        <PartnerPicker v-model="query.customer_id" kind="customer" @update:model-value="search" />
       </div>
       <el-date-picker
         v-model="query.range"
@@ -112,14 +114,15 @@ onMounted(load)
         @keyup.enter="search"
         @clear="search"
       />
+      <el-checkbox v-model="query.no_invoice" @change="search">未登錄發票</el-checkbox>
       <el-button @click="search">查詢</el-button>
-      <el-button v-if="query.supplier_id" link @click="((query.supplier_id = null), search())">
-        清除供應商
+      <el-button v-if="query.customer_id" link @click="((query.customer_id = null), search())">
+        清除客戶
       </el-button>
       <span class="spacer" />
       <template v-if="canWrite">
-        <el-button type="primary" @click="create('receipt')">新增進貨單</el-button>
-        <el-button type="primary" @click="create('return')">新增退出單</el-button>
+        <el-button type="primary" @click="create('delivery')">新增出貨單</el-button>
+        <el-button type="primary" @click="create('return')">新增退回單</el-button>
       </template>
     </div>
 
@@ -131,12 +134,13 @@ onMounted(load)
       </el-table-column>
       <el-table-column prop="doc_date" label="日期" width="110" />
       <el-table-column label="類型" width="70">
-        <template #default="{ row }">{{ typeLabels[row.doc_type as ReceiptDocType] }}</template>
+        <template #default="{ row }">{{ typeLabels[row.doc_type as DeliveryDocType] }}</template>
       </el-table-column>
-      <el-table-column label="供應商" min-width="180">
-        <template #default="{ row }">{{ row.supplier_code }} {{ row.supplier_name }}</template>
+      <el-table-column label="客戶" min-width="180">
+        <template #default="{ row }">{{ row.customer_code }} {{ row.customer_name }}</template>
       </el-table-column>
-      <el-table-column prop="warehouse_name" label="倉庫" width="120" />
+      <el-table-column prop="sales_user_name" label="業務" width="100" />
+      <el-table-column prop="warehouse_name" label="倉庫" width="110" />
       <el-table-column label="合計" width="150" align="right">
         <template #default="{ row }">{{ row.currency }} {{ money(row.total_amount) }}</template>
       </el-table-column>
@@ -144,7 +148,6 @@ onMounted(load)
       <el-table-column label="狀態" width="100">
         <template #default="{ row }"><DocStatusTag :status="row.status" /></template>
       </el-table-column>
-      <el-table-column prop="created_by_name" label="建立者" width="110" />
       <el-table-column prop="note" label="備註" min-width="140" show-overflow-tooltip />
     </el-table>
     <div class="pager">

@@ -62,8 +62,8 @@ export const actionLabels: Record<DocAction, string> = {
 
 /** 需要二次確認的動作(影響庫存或無法復原) */
 export const confirmActions: Partial<Record<DocAction, string>> = {
-  post: '過帳後會異動庫存(進貨單另會產生應付帳款),確定過帳?',
-  unpost: '反過帳會以反向分錄沖銷庫存(並移除應付帳款),確定?',
+  post: '過帳後會異動庫存(進貨 / 出貨類單據另會產生應付 / 應收帳款),確定過帳?',
+  unpost: '反過帳會以反向分錄沖銷庫存(並移除產生的應收 / 應付帳款),確定?',
   close: '結案後剩餘未交數量不再進貨,確定結案?',
   void: '作廢後無法復原,確定作廢?',
 }

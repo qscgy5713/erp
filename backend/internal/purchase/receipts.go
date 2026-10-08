@@ -15,7 +15,6 @@ import (
 	"erp/internal/db"
 	"erp/internal/finance"
 	"erp/internal/inventory"
-	"erp/internal/masterdata"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
 	"erp/internal/shared/apperr"
@@ -27,6 +26,7 @@ import (
 	"erp/internal/system/audit"
 	"erp/internal/system/docno"
 	"erp/internal/system/permission"
+	"erp/internal/trade"
 )
 
 const (
@@ -364,11 +364,11 @@ type receiptInput struct {
 	Lines     []lineInput `json:"lines" binding:"dive"`
 }
 
-func prepareReceipt(ctx context.Context, q *db.Queries, companyID, excludeID int64, in *receiptInput) (header, []pricedLine, totals, error) {
+func prepareReceipt(ctx context.Context, q *db.Queries, companyID, excludeID int64, in *receiptInput) (trade.Header, []pricedLine, trade.Totals, error) {
 	in.InvoiceNo = strings.TrimSpace(in.InvoiceNo)
 	h, err := checkHeader(ctx, q, companyID, &in.headerInput)
 	if err != nil {
-		return h, nil, totals{}, err
+		return h, nil, trade.Totals{}, err
 	}
 	refs := make([]refLine, len(in.Lines))
 	for i := range in.Lines {
@@ -406,7 +406,7 @@ func saveReceiptLines(ctx context.Context, q *db.Queries, receiptID int64, lines
 	for i, l := range lines {
 		if err := q.AddGoodsReceiptLine(ctx, db.AddGoodsReceiptLineParams{
 			ReceiptID: receiptID, LineNo: int32(i + 1), ItemID: l.ItemID, UnitID: l.UnitID, Qty: l.Qty,
-			Factor: l.factor, BaseQty: l.baseQty, UnitPrice: l.UnitPrice, Amount: l.amount, BaseAmount: l.baseAmount,
+			Factor: l.Factor, BaseQty: l.BaseQty, UnitPrice: l.UnitPrice, Amount: l.Amount, BaseAmount: l.BaseAmount,
 			PoLineID: l.PoLineID, ReceiptLineID: l.ReceiptLineID, Note: l.Note,
 		}); err != nil {
 			return err
@@ -430,16 +430,16 @@ func (m *Module) createReceipt(c *gin.Context) {
 			return err
 		}
 		typ := receiptTypes[in.DocType]
-		no, err := docno.Next(ctx, q, a.CompanyID, typ.numbering, h.date)
+		no, err := docno.Next(ctx, q, a.CompanyID, typ.numbering, h.Date)
 		if err != nil {
 			return err
 		}
 		r, err := q.CreateGoodsReceipt(ctx, db.CreateGoodsReceiptParams{
-			CompanyID: a.CompanyID, DocType: in.DocType, DocNo: no, DocDate: h.date, SupplierID: in.SupplierID,
-			WarehouseID: in.WarehouseID, Currency: in.Currency, ExchangeRate: h.rate, TaxTypeID: in.TaxTypeID,
-			TaxRate: h.taxRate, PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.untaxed,
-			TaxAmount: t.tax, TotalAmount: t.total, BaseUntaxed: t.baseUntaxed, BaseTax: t.baseTax,
-			BaseTotal: t.baseTotal, Note: in.Note, CreatedBy: &a.UserID,
+			CompanyID: a.CompanyID, DocType: in.DocType, DocNo: no, DocDate: h.Date, SupplierID: in.SupplierID,
+			WarehouseID: in.WarehouseID, Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID,
+			TaxRate: h.TaxRate, PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.Untaxed,
+			TaxAmount: t.Tax, TotalAmount: t.Total, BaseUntaxed: t.BaseUntaxed, BaseTax: t.BaseTax,
+			BaseTotal: t.BaseTotal, Note: in.Note, CreatedBy: &a.UserID,
 		})
 		if err != nil {
 			return err
@@ -502,10 +502,10 @@ func (m *Module) updateReceipt(c *gin.Context) {
 			return err
 		}
 		if _, err := q.UpdateGoodsReceiptHeader(ctx, db.UpdateGoodsReceiptHeaderParams{
-			ID: id, CompanyID: a.CompanyID, DocDate: h.date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
-			Currency: in.Currency, ExchangeRate: h.rate, TaxTypeID: in.TaxTypeID, TaxRate: h.taxRate,
-			PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.untaxed, TaxAmount: t.tax,
-			TotalAmount: t.total, BaseUntaxed: t.baseUntaxed, BaseTax: t.baseTax, BaseTotal: t.baseTotal,
+			ID: id, CompanyID: a.CompanyID, DocDate: h.Date, SupplierID: in.SupplierID, WarehouseID: in.WarehouseID,
+			Currency: in.Currency, ExchangeRate: h.Rate, TaxTypeID: in.TaxTypeID, TaxRate: h.TaxRate,
+			PaymentTermID: in.PaymentTermID, InvoiceNo: in.InvoiceNo, UntaxedAmount: t.Untaxed, TaxAmount: t.Tax,
+			TotalAmount: t.Total, BaseUntaxed: t.BaseUntaxed, BaseTax: t.BaseTax, BaseTotal: t.BaseTotal,
 			Note: in.Note, Version: in.Version, UpdatedBy: &a.UserID,
 		}); err != nil {
 			if database.IsNoRows(err) {
@@ -585,7 +585,7 @@ func (m *Module) receiptAction(c *gin.Context) {
 		if cur.Version != in.Version {
 			return apperr.ErrVersionConflict
 		}
-		next, err := docstate.Transition(docstate.Status(cur.Status), action)
+		next, err := trade.PostingTransition(docstate.Status(cur.Status), action)
 		if err != nil {
 			return err
 		}
@@ -656,13 +656,9 @@ func applyReceiptAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cu
 				return err
 			}
 		}
-		due := cur.DocDate
-		if cur.PaymentTermID != nil {
-			term, err := q.GetPaymentTerm(ctx, db.GetPaymentTermParams{ID: *cur.PaymentTermID, CompanyID: a.CompanyID})
-			if err != nil {
-				return err
-			}
-			due = masterdata.DueDate(term, cur.DocDate)
+		due, err := trade.DueDate(ctx, q, a.CompanyID, cur.PaymentTermID, cur.DocDate)
+		if err != nil {
+			return err
 		}
 		amount, baseAmount := cur.TotalAmount, cur.BaseTotal
 		if cur.DocType == TypeReturn {
