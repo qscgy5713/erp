@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M6 會計總帳完成**。下一步 M7 月結與上線。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M6 會計總帳完成;M7 進行中(月結成本與對帳檢查已完成)**。下一步:Excel 匯入、儀表板、壓測、部署文件。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -67,8 +67,13 @@
 - **報表**:試算表(期初、本期借貸、期末,附借貸平衡核對)、總分類帳(含累計餘額)、日記帳
 - 銷貨成本與庫存調整 / 盤點的傳票於 M7 月結後拋轉;M6 之前已過帳的單據不補傳票
 
+### 已完成(M7 月結成本與對帳檢查)
+- **月結成本**:月加權平均成本(以料品為單位,期初 + 本月進貨);依月份順序月結,算出各料品平均成本、期末存貨金額;**自動拋銷貨成本與存貨盤損益傳票**,並把平均成本回寫到流水帳
+- 月結後該月的庫存異動鎖定;可取消最新一個月的月結並重算
+- **對帳檢查**:存貨 / 應收 / 應付子帳與總帳核對、庫存現有量與流水帳核對、傳票借貸平衡、未月結月份提醒
+
 ### 規劃中(第一期)
-月結與上線 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+Excel 匯入、儀表板、壓力測試、部署文件 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -188,6 +193,8 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `/gl/vouchers`、`POST /gl/vouchers/{id}/actions/{post\|void\|reverse}` | 傳票與動作 |
 | `GET /gl/periods`、`POST /gl/periods/{YYYY-MM}/{close\|reopen}` | 會計期間關帳 / 重開 |
 | `GET /gl/reports/{trial-balance\|ledger\|journal}` | 試算表、總分類帳、日記帳 |
+| `GET /costing/closings`、`GET …/{YYYY-MM}/items`、`POST …/{YYYY-MM}/{run\|cancel}` | 月結成本與各料品計算明細、月結 / 取消月結 |
+| `GET /costing/reconcile` | 自動對帳檢查 |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
 ## 目錄結構
@@ -214,6 +221,7 @@ erp/
 │   │   ├── trade/           # 採購與銷售共用:單頭驗證、計價、訂單狀態轉換
 │   │   ├── finance/         # 應收應付:帳款、收付款沖帳、對帳單、帳齡
 │   │   ├── gl/              # 會計總帳:科目、拋轉(PostSource / ReverseSource)、傳票、期間關帳、報表
+│   │   ├── costing/         # 月結成本(月加權平均)、銷貨成本傳票、對帳檢查
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
 │   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid
@@ -228,7 +236,7 @@ erp/
     │   ├── stores/          # Pinia(auth)
     │   ├── router/          # 路由與權限守衛
     │   ├── layouts/
-    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、sales/、trade/ 共用單據編輯頁、finance/、gl/)
+    │   ├── views/           # 頁面(system/、masterdata/、inventory/、purchase/、sales/、trade/ 共用單據編輯頁、finance/、gl/、costing/)
     │   ├── components/
     │   ├── composables/
     │   ├── utils/

@@ -111,6 +111,18 @@ type Company struct {
 	UpdatedAt time.Time
 }
 
+type CostClosing struct {
+	ID             int64
+	CompanyID      int64
+	Period         string
+	ItemCount      int32
+	CogsAmount     decimal.Decimal
+	AdjustAmount   decimal.Decimal
+	InventoryValue decimal.Decimal
+	ClosedBy       *int64
+	ClosedAt       time.Time
+}
+
 type Currency struct {
 	Code      string
 	Name      string
@@ -361,6 +373,22 @@ type ItemCategory struct {
 	Version   int32
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type ItemCost struct {
+	ClosingID     int64
+	ItemID        int64
+	OpeningQty    decimal.Decimal
+	OpeningValue  decimal.Decimal
+	PurchaseQty   decimal.Decimal
+	PurchaseValue decimal.Decimal
+	SalesQty      decimal.Decimal
+	AdjustQty     decimal.Decimal
+	AvgCost       decimal.Decimal
+	CogsAmount    decimal.Decimal
+	AdjustAmount  decimal.Decimal
+	ClosingQty    decimal.Decimal
+	ClosingValue  decimal.Decimal
 }
 
 type ItemUnit struct {

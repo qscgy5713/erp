@@ -55,6 +55,7 @@ export const sourceLabels: Record<string, string> = {
   sales_return: '銷貨退回',
   collection: '收款',
   payment: '付款',
+  cost_closing: '月結成本',
 }
 
 export interface VoucherLine {

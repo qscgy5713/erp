@@ -89,6 +89,7 @@ export const navigation: NavItem[] = [
       { title: '現有量', path: '/inventory/balances', perm: INVENTORY_ANY },
       { title: '收發存', path: '/inventory/movement-summary', perm: INVENTORY_ANY },
       { title: '庫存單據', path: '/inventory/documents', perm: INVENTORY_ANY },
+      { title: '月結成本', path: '/costing/closings', perm: ['costing.read', 'costing.close'] },
     ],
   },
   {
@@ -113,6 +114,7 @@ export const navigation: NavItem[] = [
     children: [
       { title: '傳票', path: '/gl/vouchers', perm: VOUCHER_ANY },
       { title: '會計報表', path: '/gl/reports', perm: ['gl.report.read'] },
+      { title: '對帳檢查', path: '/costing/reconcile', perm: ['costing.read', 'costing.close'] },
       { title: '會計期間', path: '/gl/periods', perm: ['gl.period.read', 'gl.period.close'] },
       { title: '會計科目', path: '/gl/accounts', perm: ['gl.account.read', 'gl.account.write'] },
       { title: '拋轉規則', path: '/gl/mappings', perm: ['gl.account.read', 'gl.account.write'] },

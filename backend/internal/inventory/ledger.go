@@ -20,6 +20,7 @@ import (
 )
 
 var (
+	errCostClosed       = apperr.New(http.StatusConflict, "INV-008", "該月份已月結成本,不可異動庫存;如需更正請先取消月結")
 	errNotStockItem     = apperr.New(http.StatusUnprocessableEntity, "INV-002", "服務類料品不能有庫存異動")
 	errBadWarehouse     = apperr.New(http.StatusUnprocessableEntity, "INV-003", "倉庫不存在或已停用")
 	errNothingToPost    = apperr.New(http.StatusUnprocessableEntity, "INV-004", "沒有可過帳的庫存異動")
@@ -88,6 +89,12 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 	// 會計期間已關帳時不可異動庫存(與單據的傳票拋轉共用同一規則)
 	if err := gl.CheckPeriodOpen(ctx, q, opt.CompanyID, src.DocDate); err != nil {
 		return err
+	}
+	// 該月已月結成本時不可異動庫存(成本已定案;需先取消月結)
+	if closed, err := q.CostClosingExists(ctx, db.CostClosingExistsParams{CompanyID: opt.CompanyID, Period: src.DocDate.Format("2006-01")}); err != nil {
+		return err
+	} else if closed {
+		return errCostClosed.WithDetails(map[string]string{"period": src.DocDate.Format("2006-01")})
 	}
 	itemIDs, whIDs := map[int64]bool{}, map[int64]bool{}
 	net := map[balanceKey]decimal.Decimal{}

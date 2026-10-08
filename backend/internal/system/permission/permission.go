@@ -48,6 +48,9 @@ const (
 	DeliveryWrite     = "sales.delivery.write" // 含登錄發票號碼
 	DeliveryApprove   = "sales.delivery.approve"
 	DeliveryPost      = "sales.delivery.post"
+	// 月結成本與對帳
+	CostRead  = "costing.read"  // 月結結果、對帳檢查
+	CostClose = "costing.close" // 月結 / 取消月結
 	// 會計
 	AccountRead  = "gl.account.read" // 科目表、拋轉規則
 	AccountWrite = "gl.account.write"
@@ -109,6 +112,7 @@ var Groups = []Group{
 	{"銷售", "出貨單與銷貨退回單", []Permission{
 		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
 	}},
+	{"庫存", "月結成本與對帳檢查", []Permission{{CostRead, "檢視"}, {CostClose, "月結/取消月結"}}},
 	{"會計", "會計科目與拋轉規則", []Permission{{AccountRead, "檢視"}, {AccountWrite, "新增/修改"}}},
 	{"會計", "傳票", []Permission{{VoucherRead, "檢視"}, {VoucherWrite, "開單"}, {VoucherPost, "過帳/沖銷"}}},
 	{"會計", "會計期間", []Permission{{PeriodRead, "檢視"}, {PeriodClose, "關帳/重開"}}},

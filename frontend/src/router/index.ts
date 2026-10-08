@@ -264,6 +264,16 @@ const router = createRouter({
       meta: { title: '應付帳款', perm: ['finance.payable.read'], ledger: 'payable' },
     },
     {
+      path: '/costing/closings',
+      component: () => import('@/views/costing/ClosingsView.vue'),
+      meta: { title: '月結成本', perm: ['costing.read', 'costing.close'] },
+    },
+    {
+      path: '/costing/reconcile',
+      component: () => import('@/views/costing/ReconcileView.vue'),
+      meta: { title: '對帳檢查', perm: ['costing.read', 'costing.close'] },
+    },
+    {
       path: '/gl/vouchers',
       name: 'gl-vouchers',
       component: () => import('@/views/gl/VouchersView.vue'),

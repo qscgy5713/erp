@@ -24,6 +24,9 @@ var MappingKeys = []struct{ Key, Label string }{
 	{"sales.revenue", "銷貨:銷貨收入"},
 	{"sales.output_tax", "銷貨:銷項稅額"},
 	{"sales.return", "銷貨退回:銷貨退回及折讓"},
+	{"cost.cogs", "月結:銷貨成本"},
+	{"cost.inventory", "月結:存貨"},
+	{"cost.adjustment", "月結:存貨盤損(盈)"},
 	{"settle.cash", "收付款:現金"},
 	{"settle.bank", "收付款:銀行存款(匯款、支票、其他)"},
 }
