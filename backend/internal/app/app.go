@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"erp/internal/auth"
+	"erp/internal/inventory"
 	"erp/internal/masterdata"
 	"erp/internal/platform/config"
 	"erp/internal/platform/database"
@@ -27,6 +28,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	apiLimit := limiter(cfg.RateLimitPerMinute)
 	systemModule := system.New(store)
 	masterdataModule := masterdata.New(store)
+	inventoryModule := inventory.New(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
 		DB:             pool,
@@ -38,6 +40,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 			authHandler.Register(public, protected)
 			systemModule.Register(protected)
 			masterdataModule.Register(protected)
+			inventoryModule.Register(protected)
 		},
 	})
 }

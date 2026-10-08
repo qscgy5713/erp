@@ -7,6 +7,13 @@ export interface NavItem {
   children?: NavItem[]
 }
 
+const INVENTORY_ANY = [
+  'inventory.stock.read',
+  'inventory.stock.write',
+  'inventory.stock.approve',
+  'inventory.stock.post',
+]
+
 export const navigation: NavItem[] = [
   { title: '首頁', path: '/' },
   {
@@ -27,7 +34,14 @@ export const navigation: NavItem[] = [
   },
   { title: '採購', path: '/purchase', disabled: true },
   { title: '銷售', path: '/sales', disabled: true },
-  { title: '庫存', path: '/inventory', disabled: true },
+  {
+    title: '庫存',
+    children: [
+      { title: '現有量', path: '/inventory/balances', perm: INVENTORY_ANY },
+      { title: '收發存', path: '/inventory/movement-summary', perm: INVENTORY_ANY },
+      { title: '庫存單據', path: '/inventory/documents', perm: INVENTORY_ANY },
+    ],
+  },
   { title: '應收應付', path: '/finance', disabled: true },
   { title: '會計', path: '/accounting', disabled: true },
   {

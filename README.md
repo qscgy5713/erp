@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M1 基本資料完成**。下一步 M2 庫存核心。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M2 庫存核心完成**。下一步 M3 採購。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -22,8 +22,17 @@
 - **財務設定**:幣別、匯率(依日期,取當天或之前最近一筆)、稅別(應稅/零稅率/免稅)、付款條件(月結/天數,自動算到期日)
 - 預載常用單位、稅別、付款條件、幣別
 
+### 已完成(M2 庫存核心)
+- **庫存流水帳 + 現有量**:所有進出寫流水帳(只增不改,反過帳以反向分錄沖銷),現有量依料品 × 倉庫維護;過帳時鎖定現有量,併發不超賣
+- **庫存單據**:調整單、調撥單、盤點單,共用「草稿 → 待審 → 已核准 → 已過帳」流程;明細可用任一換算單位輸入
+- **盤點**:建立時快照帳面數並**凍結該倉庫**(過帳或作廢前其他單據不可異動),過帳時依差異調整;盤點明細只能新增不能刪除
+- **負庫存控管**:倉庫未允許負庫存時,出庫後低於 0 即拒絕並列出不足的料品
+- **報表**:現有量(可篩低於安全庫存)、收發存(期初 + 收 − 發 = 期末)、料品異動明細
+- 權限分為檢視 / 開單送審 / 核准 / 過帳,可由不同人負責
+- 料品有庫存異動後不可修改基本單位或類型
+
 ### 規劃中(第一期)
-庫存 → 採購 → 銷售 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
+採購 → 銷售 → 應收應付 → 會計 → 月結,詳見 [doc/todo.md](doc/todo.md)。
 
 ## 技術棧
 | 層 | 技術 |
@@ -124,6 +133,9 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `/masterdata/items`、`/masterdata/customers`、`/masterdata/suppliers` | 料品、客戶、供應商(分頁、篩選) |
 | `/masterdata/units`、`/item-categories`、`/warehouses`、`/tax-types`、`/payment-terms`、`/currencies` | 下拉選單會用到的清單,讀取只需登入;修改需對應權限 |
 | `/masterdata/exchange-rates`、`GET /masterdata/exchange-rates/lookup?currency=USD&date=…` | 匯率維護與查詢某日適用匯率 |
+| `GET /masterdata/item-options?keyword=` | 開單選料(只需登入) |
+| `/inventory/documents`、`POST /inventory/documents/{id}/actions/{submit\|approve\|reject\|unapprove\|post\|unpost\|void}` | 庫存單據與狀態動作(需帶 `version`) |
+| `GET /inventory/balances`、`/inventory/movement-summary`、`/inventory/items/{id}/ledger` | 現有量、收發存、料品異動明細 |
 
 ## 目錄結構
 ```
@@ -143,6 +155,7 @@ erp/
 │   │   ├── auth/            # 登入、token、驗證中介層
 │   │   ├── system/          # 系統管理 API;permission/ 權限點、audit/ 稽核、docno/ 單號
 │   │   ├── masterdata/      # 基本資料 API(料品、客戶、供應商、倉庫、財務設定)
+│   │   ├── inventory/       # 庫存核心:ledger.go(Post/Reverse,供各模組過帳)、庫存單據、報表
 │   │   ├── db/              # sqlc 產生的程式碼(勿手改)
 │   │   ├── platform/        # config、database、httpserver、httpx、ratelimit
 │   │   ├── shared/          # apperr、authctx、docstate、money、page、response、taxid
@@ -157,7 +170,7 @@ erp/
     │   ├── stores/          # Pinia(auth)
     │   ├── router/          # 路由與權限守衛
     │   ├── layouts/
-    │   ├── views/           # 頁面(system/ 系統管理、masterdata/ 基本資料)
+    │   ├── views/           # 頁面(system/、masterdata/、inventory/)
     │   ├── components/
     │   ├── composables/
     │   ├── utils/

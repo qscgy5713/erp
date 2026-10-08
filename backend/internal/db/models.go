@@ -122,6 +122,31 @@ type ExchangeRate struct {
 	UpdatedAt time.Time
 }
 
+type InventoryBalance struct {
+	CompanyID   int64
+	ItemID      int64
+	WarehouseID int64
+	Qty         decimal.Decimal
+	UpdatedAt   time.Time
+}
+
+type InventoryTransaction struct {
+	ID           int64
+	CompanyID    int64
+	ItemID       int64
+	WarehouseID  int64
+	DocDate      time.Time
+	Qty          decimal.Decimal
+	UnitCost     *decimal.Decimal
+	SourceType   string
+	SourceID     int64
+	SourceLineID *int64
+	SourceNo     string
+	ReversalOf   *int64
+	CreatedBy    *int64
+	CreatedAt    time.Time
+}
+
 type Item struct {
 	ID                 int64
 	CompanyID          int64
@@ -212,6 +237,43 @@ type Role struct {
 type RolePermission struct {
 	RoleID     int64
 	Permission string
+}
+
+type StockDocument struct {
+	ID            int64
+	CompanyID     int64
+	DocType       string
+	DocNo         string
+	DocDate       time.Time
+	WarehouseID   int64
+	ToWarehouseID *int64
+	CategoryID    *int64
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	PostedBy      *int64
+	PostedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type StockDocumentLine struct {
+	ID         int64
+	DocumentID int64
+	LineNo     int32
+	ItemID     int64
+	UnitID     int64
+	Qty        *decimal.Decimal
+	Factor     decimal.Decimal
+	BaseQty    *decimal.Decimal
+	SystemQty  *decimal.Decimal
+	Note       string
 }
 
 type Supplier struct {

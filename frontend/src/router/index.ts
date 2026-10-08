@@ -13,6 +13,13 @@ declare module 'vue-router' {
   }
 }
 
+const INVENTORY_ANY = [
+  'inventory.stock.read',
+  'inventory.stock.write',
+  'inventory.stock.approve',
+  'inventory.stock.post',
+]
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -70,6 +77,34 @@ const router = createRouter({
       path: '/masterdata/finance',
       component: () => import('@/views/masterdata/FinanceSettingsView.vue'),
       meta: { title: '財務設定', perm: ['masterdata.finance.read', 'masterdata.finance.write'] },
+    },
+    {
+      path: '/inventory/balances',
+      component: () => import('@/views/inventory/BalancesView.vue'),
+      meta: { title: '現有量', perm: INVENTORY_ANY },
+    },
+    {
+      path: '/inventory/movement-summary',
+      component: () => import('@/views/inventory/MovementSummaryView.vue'),
+      meta: { title: '收發存', perm: INVENTORY_ANY },
+    },
+    {
+      path: '/inventory/documents',
+      name: 'inventory-documents',
+      component: () => import('@/views/inventory/DocumentsView.vue'),
+      meta: { title: '庫存單據', perm: INVENTORY_ANY },
+    },
+    {
+      path: '/inventory/documents/new',
+      name: 'inventory-document-new',
+      component: () => import('@/views/inventory/DocumentEditView.vue'),
+      meta: { title: '新增庫存單據', perm: ['inventory.stock.write'] },
+    },
+    {
+      path: '/inventory/documents/:id(\\d+)',
+      name: 'inventory-document',
+      component: () => import('@/views/inventory/DocumentEditView.vue'),
+      meta: { title: '庫存單據', perm: INVENTORY_ANY },
     },
     {
       path: '/system/departments',

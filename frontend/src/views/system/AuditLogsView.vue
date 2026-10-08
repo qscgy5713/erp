@@ -19,6 +19,13 @@ const actionLabels: Record<string, string> = {
   password_reset: '重設密碼',
   unlock: '解除鎖定',
   token_reuse: '憑證重放',
+  submit: '送審',
+  reject: '退回',
+  approve: '核准',
+  unapprove: '取消核准',
+  post: '過帳',
+  unpost: '反過帳',
+  void: '作廢',
 }
 const entityLabels: Record<string, string> = {
   user: '使用者',
@@ -35,6 +42,7 @@ const entityLabels: Record<string, string> = {
   exchange_rate: '匯率',
   tax_type: '稅別',
   payment_term: '付款條件',
+  stock_document: '庫存單據',
 }
 
 const query = reactive({

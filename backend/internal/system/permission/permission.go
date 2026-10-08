@@ -26,6 +26,12 @@ const (
 	SupplierWrite  = "masterdata.supplier.write"
 	FinanceRead    = "masterdata.finance.read" // 幣別、匯率、稅別、付款條件
 	FinanceWrite   = "masterdata.finance.write"
+
+	// 庫存
+	InventoryRead    = "inventory.stock.read"    // 現有量、收發存、庫存單據
+	InventoryWrite   = "inventory.stock.write"   // 建立/修改草稿、送審、作廢草稿
+	InventoryApprove = "inventory.stock.approve" // 核准、退回、取消核准、作廢
+	InventoryPost    = "inventory.stock.post"    // 過帳、反過帳
 )
 
 type Permission struct {
@@ -51,6 +57,9 @@ var Groups = []Group{
 	{"基本資料", "客戶", []Permission{{CustomerRead, "檢視"}, {CustomerWrite, "新增/修改"}, {CustomerCredit, "設定信用額度"}}},
 	{"基本資料", "供應商", []Permission{{SupplierRead, "檢視"}, {SupplierWrite, "新增/修改"}}},
 	{"基本資料", "財務設定(幣別、匯率、稅別、付款條件)", []Permission{{FinanceRead, "檢視"}, {FinanceWrite, "新增/修改"}}},
+	{"庫存", "庫存單據與報表", []Permission{
+		{InventoryRead, "檢視"}, {InventoryWrite, "開單/送審"}, {InventoryApprove, "核准/退回/作廢"}, {InventoryPost, "過帳/反過帳"},
+	}},
 }
 
 var known = func() map[string]struct{} {

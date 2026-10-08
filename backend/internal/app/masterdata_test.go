@@ -267,7 +267,7 @@ func TestDropdownListsNeedOnlyLogin(t *testing.T) {
 	e.seedUser("nobody", pw, false, false) // 沒有任何角色
 	c := e.loggedIn("nobody", pw)
 	for _, path := range []string{"/masterdata/units", "/masterdata/tax-types", "/masterdata/payment-terms",
-		"/masterdata/currencies", "/masterdata/warehouses", "/masterdata/item-categories", "/system/user-options"} {
+		"/masterdata/currencies", "/masterdata/warehouses", "/masterdata/item-categories", "/system/user-options", "/masterdata/item-options"} {
 		expect(t, c.do(http.MethodGet, path, nil), http.StatusOK, "")
 	}
 	expect(t, c.do(http.MethodGet, "/masterdata/items", nil), http.StatusForbidden, "SYS-403")

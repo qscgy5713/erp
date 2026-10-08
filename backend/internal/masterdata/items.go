@@ -22,6 +22,7 @@ import (
 var (
 	errItemCodeDup    = apperr.Conflict("ITEM-001", "料號已存在")
 	errItemBarcodeDup = apperr.Conflict("ITEM-002", "條碼已被其他料品使用")
+	errItemInUse      = apperr.Conflict("ITEM-003", "此料品已有庫存異動,不可修改基本單位或類型")
 )
 
 const maxItemUnits = 10
@@ -352,6 +353,16 @@ func (m *Module) updateItem(c *gin.Context) {
 		if err := checkItemRefs(ctx, q, a.CompanyID, &in); err != nil {
 			return err
 		}
+		// D24:已有庫存異動時,改基本單位或類型會讓歷史數量失真
+		if in.BaseUnitID != before.BaseUnitID || in.ItemType != before.ItemType {
+			used, err := q.ItemHasTransactions(ctx, id)
+			if err != nil {
+				return err
+			}
+			if used {
+				return errItemInUse
+			}
+		}
 		item, err := q.UpdateItem(ctx, db.UpdateItemParams{
 			ID: id, CompanyID: a.CompanyID, Code: in.Code, Name: in.Name, Spec: in.Spec, CategoryID: in.CategoryID,
 			ItemType: in.ItemType, BaseUnitID: in.BaseUnitID, Barcode: in.Barcode, TaxTypeID: in.TaxTypeID,
@@ -373,4 +384,50 @@ func (m *Module) updateItem(c *gin.Context) {
 		})
 	})
 	reply(c, http.StatusOK, dto, err)
+}
+
+type itemOptionDTO struct {
+	ID           int64         `json:"id"`
+	Code         string        `json:"code"`
+	Name         string        `json:"name"`
+	Spec         string        `json:"spec"`
+	ItemType     string        `json:"item_type"`
+	BaseUnitID   int64         `json:"base_unit_id"`
+	BaseUnitName string        `json:"base_unit_name"`
+	Units        []itemUnitDTO `json:"units"`
+}
+
+// itemOptions 開單時搜尋料品(料號、品名、規格、條碼),最多 20 筆。
+func (m *Module) itemOptions(c *gin.Context) {
+	ctx := c.Request.Context()
+	active := true
+	rows, err := m.store.ListItems(ctx, db.ListItemsParams{
+		CompanyID: actor(c).CompanyID, Keyword: httpx.QueryString(c, "keyword"),
+		ItemType: httpx.QueryString(c, "item_type"), IsActive: &active, Lim: 20, Off: 0,
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	ids := make([]int64, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	units, err := m.itemUnits(ctx, m.store.Queries, ids)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	out := make([]itemOptionDTO, len(rows))
+	for i, r := range rows {
+		us := units[r.ID]
+		if us == nil {
+			us = []itemUnitDTO{}
+		}
+		out[i] = itemOptionDTO{
+			ID: r.ID, Code: r.Code, Name: r.Name, Spec: r.Spec, ItemType: r.ItemType,
+			BaseUnitID: r.BaseUnitID, BaseUnitName: r.BaseUnitName, Units: us,
+		}
+	}
+	response.OK(c, out)
 }
