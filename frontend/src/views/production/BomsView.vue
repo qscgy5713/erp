@@ -39,6 +39,7 @@ interface FormLine {
   item_id: number | null
   label?: string
   qty: string
+  scrap_pct: string
   note: string
 }
 
@@ -63,7 +64,7 @@ function openNew() {
     yield_qty: '1',
     is_active: true,
     note: '',
-    lines: [{ item_id: null, qty: '', note: '' }],
+    lines: [{ item_id: null, qty: '', scrap_pct: '0', note: '' }],
   })
   dialog.value = true
 }
@@ -83,6 +84,7 @@ async function openEdit(row: BomRow) {
         item_id: l.item_id,
         label: `${l.item_code} ${l.item_name}`,
         qty: l.qty,
+        scrap_pct: l.scrap_pct,
         note: l.note,
       })),
     })
@@ -105,6 +107,7 @@ async function save() {
       .map((l) => ({
         item_id: l.item_id as number,
         qty: l.qty === '' ? '0' : l.qty,
+        scrap_pct: l.scrap_pct === '' ? '0' : l.scrap_pct,
         note: l.note,
       })),
     version: editing.value?.version,
@@ -223,7 +226,9 @@ onMounted(load)
           </el-col>
         </el-row>
         <p class="hint">
-          下面的材料用量是「產出 {{ form.yield_qty || '?' }} 個成品」需要的數量,一律以基本單位計。
+          下面的材料用量是「產出
+          {{ form.yield_qty || '?' }}
+          個成品」需要的淨數量,一律以基本單位計;損耗率(%)會在開工單時加成(用量 × (1 + 損耗率))。
         </p>
         <el-form-item label="備註"><el-input v-model="form.note" maxlength="2000" /></el-form-item>
         <div v-if="fieldErrors.lines" class="err">{{ fieldErrors.lines }}</div>
@@ -242,6 +247,11 @@ onMounted(load)
           <el-table-column label="用量" width="130">
             <template #default="{ row }"><el-input v-model="row.qty" size="small" /></template>
           </el-table-column>
+          <el-table-column label="損耗率 %" width="100">
+            <template #default="{ row }"
+              ><el-input v-model="row.scrap_pct" size="small"
+            /></template>
+          </el-table-column>
           <el-table-column label="備註" min-width="140">
             <template #default="{ row }"
               ><el-input v-model="row.note" size="small" maxlength="255"
@@ -256,7 +266,7 @@ onMounted(load)
         <el-button
           v-if="canWrite"
           class="addline"
-          @click="form.lines.push({ item_id: null, qty: '', note: '' })"
+          @click="form.lines.push({ item_id: null, qty: '', scrap_pct: '0', note: '' })"
           >新增材料</el-button
         >
       </el-form>

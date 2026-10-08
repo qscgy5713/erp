@@ -222,9 +222,10 @@ func (m *Module) getOrder(c *gin.Context) {
 
 // ---- 依 BOM 展開 ----
 
-// ExplodeQty 成品數量 planQty 需要的材料量 = BOM 用量 × planQty ÷ yield,捨入到 4 位小數,但至少 0.0001。
-func ExplodeQty(bomQty, yield, planQty decimal.Decimal) decimal.Decimal {
-	q := bomQty.Mul(planQty).Div(yield).Round(money.QuantityPlaces)
+// ExplodeQty 成品數量 planQty 需要的材料量 = BOM 用量 × (1 + 損耗率%) × planQty ÷ yield,捨入到 4 位小數,但至少 0.0001。
+func ExplodeQty(bomQty, yield, planQty, scrapPct decimal.Decimal) decimal.Decimal {
+	factor := decimal.NewFromInt(1).Add(scrapPct.Div(decimal.NewFromInt(100)))
+	q := bomQty.Mul(factor).Mul(planQty).Div(yield).Round(money.QuantityPlaces)
 	if !q.IsPositive() {
 		return decimal.New(1, -money.QuantityPlaces)
 	}
@@ -257,7 +258,7 @@ func explodeLines(ctx context.Context, q *db.Queries, companyID, itemID int64, p
 	out := make([]explodeLineDTO, len(rows))
 	for i, l := range rows {
 		out[i] = explodeLineDTO{ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName,
-			Qty: ExplodeQty(l.Qty, bom.YieldQty, planQty)}
+			Qty: ExplodeQty(l.Qty, bom.YieldQty, planQty, l.ScrapPct)}
 	}
 	return out, nil
 }

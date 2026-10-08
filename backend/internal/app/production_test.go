@@ -103,6 +103,22 @@ func TestBomRules(t *testing.T) {
 	expect(t, c.do(http.MethodGet, prodWO+"/explode?item_id="+itoa(raw)+"&qty=4", nil), http.StatusUnprocessableEntity, "SYS-422")
 	expect(t, c.do(http.MethodGet, prodWO+"/explode?item_id="+itoa(fg)+"&qty=0", nil), http.StatusUnprocessableEntity, "SYS-422")
 
+	// 損耗率:25 ÷ 10 × 4 × (1 + 10%) = 11;範圍 0 ≤ x < 100、最多 2 位小數
+	sc := e.seedItem("SC1", "goods")
+	scrapBom := func(pct string) apiResp {
+		return c.do(http.MethodPost, "/production/boms", bomBody(sc, "10", map[string]any{"item_id": raw, "qty": "25", "scrap_pct": pct}))
+	}
+	for _, bad := range []string{"-1", "100", "1.234"} {
+		expect(t, scrapBom(bad), http.StatusUnprocessableEntity, "SYS-422")
+	}
+	expect(t, scrapBom("10"), http.StatusCreated, "")
+	sl := decode[[]struct {
+		Qty string `json:"qty"`
+	}](t, c.do(http.MethodGet, prodWO+"/explode?item_id="+itoa(sc)+"&qty=4", nil).Data)
+	if len(sl) != 1 || sl[0].Qty != "11" {
+		t.Fatalf("含損耗展開 = %+v", sl)
+	}
+
 	// 修改:版本衝突;成品不可更換;停用後不能開工單
 	upd := func(version int32, item int64, active bool) apiResp {
 		body := bomBody(item, "10", bl(raw, "25"))

@@ -13,15 +13,16 @@ import (
 )
 
 const addBomLine = `-- name: AddBomLine :exec
-INSERT INTO bom_lines (bom_id, line_no, item_id, qty, note) VALUES ($1, $2, $3, $4, $5)
+INSERT INTO bom_lines (bom_id, line_no, item_id, qty, scrap_pct, note) VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type AddBomLineParams struct {
-	BomID  int64
-	LineNo int32
-	ItemID int64
-	Qty    decimal.Decimal
-	Note   string
+	BomID    int64
+	LineNo   int32
+	ItemID   int64
+	Qty      decimal.Decimal
+	ScrapPct decimal.Decimal
+	Note     string
 }
 
 func (q *Queries) AddBomLine(ctx context.Context, arg AddBomLineParams) error {
@@ -30,6 +31,7 @@ func (q *Queries) AddBomLine(ctx context.Context, arg AddBomLineParams) error {
 		arg.LineNo,
 		arg.ItemID,
 		arg.Qty,
+		arg.ScrapPct,
 		arg.Note,
 	)
 	return err
@@ -526,7 +528,7 @@ func (q *Queries) ItemHasWorkOrders(ctx context.Context, arg ItemHasWorkOrdersPa
 }
 
 const listBomLines = `-- name: ListBomLines :many
-SELECT l.bom_id, l.line_no, l.item_id, l.qty, l.note, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.item_type, i.is_active AS item_active
+SELECT l.bom_id, l.line_no, l.item_id, l.qty, l.note, l.scrap_pct, i.code AS item_code, i.name AS item_name, u.name AS unit_name, i.item_type, i.is_active AS item_active
 FROM bom_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE l.bom_id = $1 ORDER BY l.line_no
 `
@@ -537,6 +539,7 @@ type ListBomLinesRow struct {
 	ItemID     int64
 	Qty        decimal.Decimal
 	Note       string
+	ScrapPct   decimal.Decimal
 	ItemCode   string
 	ItemName   string
 	UnitName   string
@@ -559,6 +562,7 @@ func (q *Queries) ListBomLines(ctx context.Context, bomID int64) ([]ListBomLines
 			&i.ItemID,
 			&i.Qty,
 			&i.Note,
+			&i.ScrapPct,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,

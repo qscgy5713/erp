@@ -42,7 +42,7 @@ DELETE FROM boms WHERE id = @id AND company_id = @company_id;
 DELETE FROM bom_lines WHERE bom_id = @bom_id;
 
 -- name: AddBomLine :exec
-INSERT INTO bom_lines (bom_id, line_no, item_id, qty, note) VALUES (@bom_id, @line_no, @item_id, @qty, @note);
+INSERT INTO bom_lines (bom_id, line_no, item_id, qty, scrap_pct, note) VALUES (@bom_id, @line_no, @item_id, @qty, @scrap_pct, @note);
 
 -- name: AllBomEdges :many
 -- 全公司所有 BOM 的 (成品 → 材料) 關係,檢查循環用

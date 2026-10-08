@@ -60,6 +60,7 @@ type bomLineDTO struct {
 	ItemName string          `json:"item_name"`
 	UnitName string          `json:"unit_name"`
 	Qty      decimal.Decimal `json:"qty"`
+	ScrapPct decimal.Decimal `json:"scrap_pct"` // 損耗率(%)
 	Note     string          `json:"note"`
 }
 
@@ -92,7 +93,7 @@ func loadBom(c *gin.Context, q *db.Queries, companyID, id int64) (bomDTO, error)
 	out := bomDTO{ID: b.ID, ItemID: b.ItemID, ItemCode: b.ItemCode, ItemName: b.ItemName, UnitName: b.UnitName,
 		YieldQty: b.YieldQty, IsActive: b.IsActive, Note: b.Note, Lines: make([]bomLineDTO, len(rows)), Version: b.Version}
 	for i, l := range rows {
-		out.Lines[i] = bomLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: l.Qty, Note: l.Note}
+		out.Lines[i] = bomLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note}
 	}
 	return out, nil
 }
@@ -148,7 +149,9 @@ func (m *Module) getBom(c *gin.Context) {
 type bomLineInput struct {
 	ItemID int64           `json:"item_id" binding:"required"`
 	Qty    decimal.Decimal `json:"qty"`
-	Note   string          `json:"note" binding:"max=255"`
+	// 損耗率(%),0 ≤ x < 100,最多 2 位小數;空值視為 0
+	ScrapPct decimal.Decimal `json:"scrap_pct"`
+	Note     string          `json:"note" binding:"max=255"`
 }
 
 type bomInput struct {
@@ -203,6 +206,8 @@ func validateBom(c *gin.Context, q *db.Queries, companyID int64, in *bomInput) e
 			fields[key] = it.Code + " 重複"
 		case !qtyOK(l.Qty):
 			fields[key] = "用量須大於 0,最多 4 位小數"
+		case l.ScrapPct.IsNegative() || l.ScrapPct.GreaterThanOrEqual(decimal.NewFromInt(100)) || l.ScrapPct.Exponent() < -2:
+			fields[key] = "損耗率須介於 0 到 100(不含 100),最多 2 位小數"
 		}
 		seen[l.ItemID] = true
 		children = append(children, l.ItemID)
@@ -232,7 +237,7 @@ func saveBomLines(c *gin.Context, q *db.Queries, bomID int64, lines []bomLineInp
 		return err
 	}
 	for i, l := range lines {
-		if err := q.AddBomLine(ctx, db.AddBomLineParams{BomID: bomID, LineNo: int32(i + 1), ItemID: l.ItemID, Qty: l.Qty, Note: l.Note}); err != nil {
+		if err := q.AddBomLine(ctx, db.AddBomLineParams{BomID: bomID, LineNo: int32(i + 1), ItemID: l.ItemID, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note}); err != nil {
 			return err
 		}
 	}

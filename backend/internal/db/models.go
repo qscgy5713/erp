@@ -148,11 +148,12 @@ type Bom struct {
 }
 
 type BomLine struct {
-	BomID  int64
-	LineNo int32
-	ItemID int64
-	Qty    decimal.Decimal
-	Note   string
+	BomID    int64
+	LineNo   int32
+	ItemID   int64
+	Qty      decimal.Decimal
+	Note     string
+	ScrapPct decimal.Decimal
 }
 
 type Company struct {

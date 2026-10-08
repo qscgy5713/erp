@@ -9,6 +9,8 @@ export interface BomLine {
   item_name?: string
   unit_name?: string
   qty: Decimal
+  /** 損耗率(%) */
+  scrap_pct: Decimal
   note: string
 }
 
@@ -41,7 +43,7 @@ export interface BomInput {
   yield_qty: Decimal
   is_active: boolean
   note: string
-  lines: { item_id: number; qty: Decimal; note: string }[]
+  lines: { item_id: number; qty: Decimal; scrap_pct: Decimal; note: string }[]
   version?: number
 }
 

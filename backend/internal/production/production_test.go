@@ -30,15 +30,17 @@ func TestWouldCycle(t *testing.T) {
 
 func TestExplodeQty(t *testing.T) {
 	d := decimal.RequireFromString
-	cases := []struct{ bom, yield, plan, want string }{
-		{"2", "1", "10", "20"},
-		{"1", "3", "10", "3.3333"}, // 捨入到 4 位
-		{"5", "10", "7", "3.5"},
-		{"0.0001", "1000", "1", "0.0001"}, // 太小仍至少 0.0001
+	cases := []struct{ bom, yield, plan, scrap, want string }{
+		{"2", "1", "10", "0", "20"},
+		{"1", "3", "10", "0", "3.3333"}, // 捨入到 4 位
+		{"5", "10", "7", "0", "3.5"},
+		{"0.0001", "1000", "1", "0", "0.0001"}, // 太小仍至少 0.0001
+		{"2", "1", "10", "5", "21"},            // 損耗 5%
+		{"1", "3", "10", "2.5", "3.4167"},      // 損耗後再捨入
 	}
 	for _, c := range cases {
-		if got := ExplodeQty(d(c.bom), d(c.yield), d(c.plan)); !got.Equal(d(c.want)) {
-			t.Errorf("explode(%s,%s,%s) = %s, want %s", c.bom, c.yield, c.plan, got, c.want)
+		if got := ExplodeQty(d(c.bom), d(c.yield), d(c.plan), d(c.scrap)); !got.Equal(d(c.want)) {
+			t.Errorf("explode(%s,%s,%s,%s) = %s, want %s", c.bom, c.yield, c.plan, c.scrap, got, c.want)
 		}
 	}
 }
