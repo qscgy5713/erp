@@ -7,11 +7,18 @@ export interface NavItem {
   children?: NavItem[]
 }
 
-const INVENTORY_ANY = [
+export const INVENTORY_ANY = [
   'inventory.stock.read',
   'inventory.stock.write',
   'inventory.stock.approve',
   'inventory.stock.post',
+]
+export const ORDER_ANY = ['purchase.order.read', 'purchase.order.write', 'purchase.order.approve']
+export const RECEIPT_ANY = [
+  'purchase.receipt.read',
+  'purchase.receipt.write',
+  'purchase.receipt.approve',
+  'purchase.receipt.post',
 ]
 
 export const navigation: NavItem[] = [
@@ -32,7 +39,18 @@ export const navigation: NavItem[] = [
       },
     ],
   },
-  { title: '採購', path: '/purchase', disabled: true },
+  {
+    title: '採購',
+    children: [
+      { title: '採購單', path: '/purchase/orders', perm: ORDER_ANY },
+      { title: '進貨 / 退出', path: '/purchase/receipts', perm: RECEIPT_ANY },
+      {
+        title: '未交貨清單',
+        path: '/purchase/outstanding',
+        perm: [...ORDER_ANY, 'purchase.receipt.write'],
+      },
+    ],
+  },
   { title: '銷售', path: '/sales', disabled: true },
   {
     title: '庫存',
@@ -42,7 +60,10 @@ export const navigation: NavItem[] = [
       { title: '庫存單據', path: '/inventory/documents', perm: INVENTORY_ANY },
     ],
   },
-  { title: '應收應付', path: '/finance', disabled: true },
+  {
+    title: '應收應付',
+    children: [{ title: '應付帳款', path: '/finance/payables', perm: ['finance.payable.read'] }],
+  },
   { title: '會計', path: '/accounting', disabled: true },
   {
     title: '系統管理',

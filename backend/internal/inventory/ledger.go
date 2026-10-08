@@ -19,11 +19,11 @@ import (
 )
 
 var (
-	errNotStockItem   = apperr.New(http.StatusUnprocessableEntity, "INV-002", "服務類料品不能有庫存異動")
-	errBadWarehouse   = apperr.New(http.StatusUnprocessableEntity, "INV-003", "倉庫不存在或已停用")
-	errNothingToPost  = apperr.New(http.StatusUnprocessableEntity, "INV-004", "沒有可過帳的庫存異動")
-	errItemNotFound   = apperr.New(http.StatusUnprocessableEntity, "INV-006", "料品不存在")
-	errNothingReverse = apperr.New(http.StatusConflict, "INV-007", "找不到可沖銷的庫存分錄")
+	errNotStockItem     = apperr.New(http.StatusUnprocessableEntity, "INV-002", "服務類料品不能有庫存異動")
+	errBadWarehouse     = apperr.New(http.StatusUnprocessableEntity, "INV-003", "倉庫不存在或已停用")
+	errNothingToPost    = apperr.New(http.StatusUnprocessableEntity, "INV-004", "沒有可過帳的庫存異動")
+	errItemNotFound     = apperr.New(http.StatusUnprocessableEntity, "INV-006", "料品不存在")
+	ErrNothingToReverse = apperr.New(http.StatusConflict, "INV-007", "找不到可沖銷的庫存分錄")
 )
 
 // Source 異動來源單據。
@@ -69,7 +69,7 @@ func Reverse(ctx context.Context, q *db.Queries, opt Options, src Source) error 
 		return err
 	}
 	if len(txs) == 0 {
-		return errNothingReverse
+		return ErrNothingToReverse
 	}
 	moves := make([]Movement, len(txs))
 	for i, t := range txs {

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { INVENTORY_ANY, ORDER_ANY, RECEIPT_ANY } from '@/navigation'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -10,15 +11,10 @@ declare module 'vue-router' {
     blank?: boolean
     /** 需要任一權限 */
     perm?: string[]
+    /** 採購編輯頁:採購單(order)或進貨 / 退出單(receipt) */
+    kind?: 'order' | 'receipt'
   }
 }
-
-const INVENTORY_ANY = [
-  'inventory.stock.read',
-  'inventory.stock.write',
-  'inventory.stock.approve',
-  'inventory.stock.post',
-]
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -105,6 +101,52 @@ const router = createRouter({
       name: 'inventory-document',
       component: () => import('@/views/inventory/DocumentEditView.vue'),
       meta: { title: '庫存單據', perm: INVENTORY_ANY },
+    },
+    {
+      path: '/purchase/orders',
+      name: 'purchase-orders',
+      component: () => import('@/views/purchase/OrdersView.vue'),
+      meta: { title: '採購單', perm: ORDER_ANY },
+    },
+    {
+      path: '/purchase/orders/new',
+      name: 'purchase-order-new',
+      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      meta: { title: '新增採購單', perm: ['purchase.order.write'], kind: 'order' },
+    },
+    {
+      path: '/purchase/orders/:id(\\d+)',
+      name: 'purchase-order',
+      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      meta: { title: '採購單', perm: ORDER_ANY, kind: 'order' },
+    },
+    {
+      path: '/purchase/receipts',
+      name: 'purchase-receipts',
+      component: () => import('@/views/purchase/ReceiptsView.vue'),
+      meta: { title: '進貨 / 退出', perm: RECEIPT_ANY },
+    },
+    {
+      path: '/purchase/receipts/new',
+      name: 'purchase-receipt-new',
+      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      meta: { title: '新增進貨 / 退出單', perm: ['purchase.receipt.write'], kind: 'receipt' },
+    },
+    {
+      path: '/purchase/receipts/:id(\\d+)',
+      name: 'purchase-receipt',
+      component: () => import('@/views/purchase/PurchaseEditView.vue'),
+      meta: { title: '進貨 / 退出單', perm: RECEIPT_ANY, kind: 'receipt' },
+    },
+    {
+      path: '/purchase/outstanding',
+      component: () => import('@/views/purchase/OutstandingView.vue'),
+      meta: { title: '未交貨清單', perm: [...ORDER_ANY, 'purchase.receipt.write'] },
+    },
+    {
+      path: '/finance/payables',
+      component: () => import('@/views/finance/PayablesView.vue'),
+      meta: { title: '應付帳款', perm: ['finance.payable.read'] },
     },
     {
       path: '/system/departments',

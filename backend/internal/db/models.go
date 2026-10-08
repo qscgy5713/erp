@@ -11,6 +11,25 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type AccountsPayable struct {
+	ID           int64
+	CompanyID    int64
+	SupplierID   int64
+	SourceType   string
+	SourceID     int64
+	SourceNo     string
+	DocDate      time.Time
+	DueDate      time.Time
+	Currency     string
+	ExchangeRate decimal.Decimal
+	Amount       decimal.Decimal
+	BaseAmount   decimal.Decimal
+	PaidAmount   decimal.Decimal
+	CreatedBy    *int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type AuditLog struct {
 	ID         int64
 	CompanyID  int64
@@ -122,6 +141,58 @@ type ExchangeRate struct {
 	UpdatedAt time.Time
 }
 
+type GoodsReceipt struct {
+	ID            int64
+	CompanyID     int64
+	DocType       string
+	DocNo         string
+	DocDate       time.Time
+	SupplierID    int64
+	WarehouseID   int64
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	TaxTypeID     int64
+	TaxRate       decimal.Decimal
+	PaymentTermID *int64
+	InvoiceNo     string
+	UntaxedAmount decimal.Decimal
+	TaxAmount     decimal.Decimal
+	TotalAmount   decimal.Decimal
+	BaseUntaxed   decimal.Decimal
+	BaseTax       decimal.Decimal
+	BaseTotal     decimal.Decimal
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	PostedBy      *int64
+	PostedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type GoodsReceiptLine struct {
+	ID            int64
+	ReceiptID     int64
+	LineNo        int32
+	ItemID        int64
+	UnitID        int64
+	Qty           decimal.Decimal
+	Factor        decimal.Decimal
+	BaseQty       decimal.Decimal
+	UnitPrice     decimal.Decimal
+	Amount        decimal.Decimal
+	BaseAmount    decimal.Decimal
+	PoLineID      *int64
+	ReceiptLineID *int64
+	Note          string
+}
+
 type InventoryBalance struct {
 	CompanyID   int64
 	ItemID      int64
@@ -205,6 +276,51 @@ type PaymentTerm struct {
 	Version    int32
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+type PurchaseOrder struct {
+	ID            int64
+	CompanyID     int64
+	DocNo         string
+	DocDate       time.Time
+	SupplierID    int64
+	WarehouseID   int64
+	ExpectedDate  *time.Time
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	TaxTypeID     int64
+	TaxRate       decimal.Decimal
+	PaymentTermID *int64
+	UntaxedAmount decimal.Decimal
+	TaxAmount     decimal.Decimal
+	TotalAmount   decimal.Decimal
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	ClosedBy      *int64
+	ClosedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type PurchaseOrderLine struct {
+	ID        int64
+	OrderID   int64
+	LineNo    int32
+	ItemID    int64
+	UnitID    int64
+	Qty       decimal.Decimal
+	Factor    decimal.Decimal
+	BaseQty   decimal.Decimal
+	UnitPrice decimal.Decimal
+	Amount    decimal.Decimal
+	Note      string
 }
 
 type RefreshToken struct {

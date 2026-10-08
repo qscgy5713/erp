@@ -32,6 +32,16 @@ const (
 	InventoryWrite   = "inventory.stock.write"   // 建立/修改草稿、送審、作廢草稿
 	InventoryApprove = "inventory.stock.approve" // 核准、退回、取消核准、作廢
 	InventoryPost    = "inventory.stock.post"    // 過帳、反過帳
+	// 採購
+	PurchaseOrderRead    = "purchase.order.read"
+	PurchaseOrderWrite   = "purchase.order.write"   // 建立/修改草稿、送審、作廢草稿
+	PurchaseOrderApprove = "purchase.order.approve" // 核准、退回、取消核准、作廢、結案、重開
+	ReceiptRead          = "purchase.receipt.read"  // 進貨單、進貨退出單
+	ReceiptWrite         = "purchase.receipt.write"
+	ReceiptApprove       = "purchase.receipt.approve"
+	ReceiptPost          = "purchase.receipt.post" // 過帳、反過帳(異動庫存與應付)
+	// 應收應付
+	PayableRead = "finance.payable.read"
 )
 
 type Permission struct {
@@ -60,6 +70,13 @@ var Groups = []Group{
 	{"庫存", "庫存單據與報表", []Permission{
 		{InventoryRead, "檢視"}, {InventoryWrite, "開單/送審"}, {InventoryApprove, "核准/退回/作廢"}, {InventoryPost, "過帳/反過帳"},
 	}},
+	{"採購", "採購單", []Permission{
+		{PurchaseOrderRead, "檢視"}, {PurchaseOrderWrite, "開單/送審"}, {PurchaseOrderApprove, "核准/退回/作廢/結案"},
+	}},
+	{"採購", "進貨單與進貨退出單", []Permission{
+		{ReceiptRead, "檢視"}, {ReceiptWrite, "開單/送審"}, {ReceiptApprove, "核准/退回/作廢"}, {ReceiptPost, "過帳/反過帳"},
+	}},
+	{"應收應付", "應付帳款", []Permission{{PayableRead, "檢視"}}},
 }
 
 var known = func() map[string]struct{} {

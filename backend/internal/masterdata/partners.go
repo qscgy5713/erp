@@ -582,3 +582,28 @@ func (m *Module) updateSupplier(c *gin.Context) {
 	})
 	reply(c, http.StatusOK, toSupplierDTO(out), err)
 }
+
+type supplierOptionDTO struct {
+	ID            int64  `json:"id"`
+	Code          string `json:"code"`
+	Name          string `json:"name"`
+	ShortName     string `json:"short_name"`
+	Currency      string `json:"currency"`
+	TaxTypeID     *int64 `json:"tax_type_id"`
+	PaymentTermID *int64 `json:"payment_term_id"`
+}
+
+// supplierOptions 開單選供應商(最多 20 筆),附預設幣別、稅別、付款條件。
+func (m *Module) supplierOptions(c *gin.Context) {
+	rows, err := m.store.SupplierOptions(c.Request.Context(), db.SupplierOptionsParams{
+		CompanyID: actor(c).CompanyID, Keyword: httpx.QueryString(c, "keyword"),
+	})
+	out := make([]supplierOptionDTO, len(rows))
+	for i, r := range rows {
+		out[i] = supplierOptionDTO{
+			ID: r.ID, Code: r.Code, Name: r.Name, ShortName: r.ShortName, Currency: r.Currency,
+			TaxTypeID: r.TaxTypeID, PaymentTermID: r.PaymentTermID,
+		}
+	}
+	reply(c, http.StatusOK, out, err)
+}

@@ -61,7 +61,10 @@ async function onCommand(cmd: string) {
         </el-dropdown>
       </el-header>
       <el-main>
-        <RouterView />
+        <!-- 採購單與進貨單共用編輯頁:切換單據種類(例如採購單「轉進貨單」)時要重建元件 -->
+        <RouterView v-slot="{ Component, route: r }">
+          <component :is="Component" :key="String(r.meta.kind ?? '')" />
+        </RouterView>
       </el-main>
     </el-container>
   </el-container>

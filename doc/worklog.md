@@ -1,5 +1,26 @@
 # 工作日誌
 
+## 2026-10-08 M3 採購
+- 已 push M2 到 `origin/main`(d4ff424),CI 三個 job 通過。
+- 資料表(000005):purchase_orders / purchase_order_lines、goods_receipts / goods_receipt_lines(進貨與退出共用,D31)、accounts_payable。
+- 後端 `internal/purchase`:
+  - 共用單頭驗證(供應商、倉庫、幣別、匯率、稅別、付款條件)與明細計價 `priceLines`(D33)。
+  - 採購單:CRUD、送審 / 核准 / 退回 / 取消核准 / 結案 / 重開 / 作廢(D30);已有未作廢進貨單時擋取消核准與作廢。
+  - 進貨 / 退出:`checkRefs` 檢查來源(狀態、供應商、幣別、料品單位、剩餘量),開單時回欄位錯誤,過帳時先依 id 鎖來源單再檢查(D32);過帳呼叫 `inventory.Post`(單位成本 D36)並產生應付;反過帳檢查退出單 / 已沖帳後沖銷。
+  - 未交貨明細、可退貨明細 API。
+- 後端 `internal/finance`:`CreatePayable / RemovePayable`(D34)與應付查詢(meta 附本位幣合計)。
+- `inventory.ErrNothingToReverse` 改為公開:只有服務類明細的進貨單沒有庫存分錄,反過帳時要能略過。
+- 新增 `/masterdata/supplier-options`;權限點 purchase.order.*、purchase.receipt.*、finance.payable.read。
+- 前端:採購單列表、進貨 / 退出列表、共用編輯頁 `PurchaseEditView`(從採購單 / 進貨單帶入、轉進貨單、外幣匯率帶入、金額預覽)、未交貨清單、應付帳款;`SupplierPicker`;docstate 加入採購單流程(結案 / 重開)。
+- 測試:5 個採購整合測試(部分進貨與應付、超交於開單與過帳兩階段被擋、結案 / 重開、反過帳與已沖帳、退出與可退量、外幣捨入、服務類明細、權限分工);前端 docstate 加採購單流程測試(共 38 個)。
+- 瀏覽器實測:新增採購單 10 個 @12.5 → 預覽 125 / 稅 6 / 131 → 送審 → 核准 → 轉進貨單(自動帶入未交 10)改 4 → 過帳 → 應付 53、未交貨清單未交 6 → 退出單從進貨單帶入 1 個 → 13 / 稅 1 / 14 → 過帳 → 應付 −14、合計 39。console 無錯誤。
+- 實測與 CR 修正:
+  - 匯率原本用 watch 監看幣別 / 日期,載入既有草稿時會被重新查詢覆蓋 → 改為只在使用者修改時查詢。
+  - `SupplierPicker` 未傳 `disabled` 時 Vue 會把布林 prop 轉成 false,蓋過表單的停用 → 由父層明確傳入。
+  - 採購單與進貨單共用編輯元件,「轉進貨單」時元件被重複使用、單據種類錯亂 → `RouterView` 依 `meta.kind` 設 key。
+  - 庫存單據編輯頁 `canDo` 補上 close / reopen(DocAction 擴充後 switch 不完整)。
+  - golangci-lint:測試中無效賦值。
+
 ## 2026-10-07(深夜)M2 庫存核心
 - 已 push M1 到 `origin/main`(d135741),CI 通過。
 - 資料表(000004):stock_documents / stock_document_lines(三種單據共用,D25)、inventory_balances、inventory_transactions(trigger 只允許回寫 unit_cost,D29)。

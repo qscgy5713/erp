@@ -222,6 +222,9 @@ function canDo(action: DocAction): boolean {
       return doc.value.status === 'draft'
         ? auth.can('inventory.stock.write')
         : auth.can('inventory.stock.approve')
+    case 'close':
+    case 'reopen':
+      return false // 庫存單據不使用結案
   }
 }
 

@@ -2,7 +2,8 @@ import { http, qs, requestPage } from './http'
 import type { Decimal, ItemUnit } from './masterdata'
 
 export type DocStatus = 'draft' | 'pending' | 'approved' | 'posted' | 'closed' | 'voided'
-export type DocAction = 'submit' | 'reject' | 'approve' | 'unapprove' | 'post' | 'unpost' | 'void'
+export type DocAction =
+  'submit' | 'reject' | 'approve' | 'unapprove' | 'post' | 'unpost' | 'void' | 'close' | 'reopen'
 export type StockDocType = 'adjustment' | 'transfer' | 'count'
 
 export interface StockLine {

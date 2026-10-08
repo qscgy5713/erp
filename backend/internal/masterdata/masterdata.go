@@ -68,6 +68,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/customers", auth.Require(p.CustomerWrite), m.createCustomer)
 	g.PUT("/customers/:id", auth.Require(p.CustomerWrite), m.updateCustomer)
 
+	// 開單選供應商用:只需登入,只回傳啟用中的精簡欄位
+	g.GET("/supplier-options", m.supplierOptions)
 	g.GET("/suppliers", auth.Require(p.SupplierRead), m.listSuppliers)
 	g.GET("/suppliers/:id", auth.Require(p.SupplierRead), m.getSupplier)
 	g.POST("/suppliers", auth.Require(p.SupplierWrite), m.createSupplier)

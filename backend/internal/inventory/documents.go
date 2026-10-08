@@ -743,7 +743,7 @@ func (m *Module) applyAction(ctx context.Context, q *db.Queries, a *authctx.Acto
 	case docstate.Unpost:
 		err := Reverse(ctx, q, opt, src)
 		// 無差異的盤點單過帳時沒有分錄,反過帳也就沒有東西可沖銷
-		if err == errNothingReverse && cur.DocType == TypeCount {
+		if err == ErrNothingToReverse && cur.DocType == TypeCount {
 			return nil
 		}
 		return err
