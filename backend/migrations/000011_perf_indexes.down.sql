@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS accounts_payable_open_idx;
+DROP INDEX IF EXISTS accounts_receivable_open_idx;
+DROP INDEX IF EXISTS purchase_orders_approved_idx;
+DROP INDEX IF EXISTS sales_orders_approved_idx;
+DROP INDEX IF EXISTS vouchers_draft_idx;
+DROP INDEX IF EXISTS stock_documents_pending_idx;
+DROP INDEX IF EXISTS goods_receipts_pending_idx;
+DROP INDEX IF EXISTS purchase_orders_pending_idx;
+DROP INDEX IF EXISTS settlements_pending_idx;
+DROP INDEX IF EXISTS deliveries_pending_idx;
+DROP INDEX IF EXISTS sales_orders_pending_idx;

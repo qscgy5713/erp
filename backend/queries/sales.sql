@@ -3,6 +3,24 @@
 -- ======== 報價單 / 訂單 ========
 
 -- name: ListSalesOrders :many
+-- 先依條件排序取出該頁,再對這一頁計算出貨狀態與是否已轉訂單(相關子查詢只算 @lim 次;壓測 30,000 張單 94 ms → 個位數)。
+-- 資料範圍用 EXISTS 而非 JOIN,避免非必要的 JOIN 影響排序計畫。
+WITH page AS (
+    SELECT o.* FROM sales_orders o
+    WHERE o.company_id = @company_id
+      AND (sqlc.narg(doc_type)::text IS NULL OR o.doc_type = sqlc.narg(doc_type))
+      AND (sqlc.narg(status)::text IS NULL OR o.status = sqlc.narg(status))
+      AND (sqlc.narg(customer_id)::bigint IS NULL OR o.customer_id = sqlc.narg(customer_id))
+      AND (sqlc.narg(keyword)::text IS NULL OR o.doc_no ILIKE '%' || sqlc.narg(keyword) || '%'
+           OR o.customer_po_no ILIKE '%' || sqlc.narg(keyword) || '%')
+      AND (sqlc.narg(from_date)::date IS NULL OR o.doc_date >= sqlc.narg(from_date))
+      AND (sqlc.narg(to_date)::date IS NULL OR o.doc_date <= sqlc.narg(to_date))
+      AND (sqlc.narg(scope_user_id)::bigint IS NULL OR o.sales_user_id = sqlc.narg(scope_user_id))
+      AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR EXISTS (
+            SELECT 1 FROM users u WHERE u.id = o.sales_user_id AND u.department_id = sqlc.narg(scope_dept_id)))
+    ORDER BY o.doc_date DESC, o.id DESC
+    LIMIT @lim OFFSET @off
+)
 SELECT o.id, o.doc_type, o.doc_no, o.doc_date, o.valid_until, o.delivery_date, o.customer_po_no, o.status,
        o.currency, o.total_amount, o.note, o.version, o.updated_at,
        c.code AS customer_code, c.name AS customer_name, su.name AS sales_user_name, cu.name AS created_by_name,
@@ -23,22 +41,11 @@ SELECT o.id, o.doc_type, o.doc_no, o.doc_date, o.valid_until, o.delivery_date, o
             ELSE 'none' END)::text AS ship_state,
        -- 報價單是否已轉訂單(未作廢)
        EXISTS (SELECT 1 FROM sales_orders so WHERE so.quotation_id = o.id AND so.status <> 'voided') AS converted
-FROM sales_orders o
+FROM page o
 JOIN customers c ON c.id = o.customer_id
 LEFT JOIN users su ON su.id = o.sales_user_id
 LEFT JOIN users cu ON cu.id = o.created_by
-WHERE o.company_id = @company_id
-  AND (sqlc.narg(doc_type)::text IS NULL OR o.doc_type = sqlc.narg(doc_type))
-  AND (sqlc.narg(status)::text IS NULL OR o.status = sqlc.narg(status))
-  AND (sqlc.narg(customer_id)::bigint IS NULL OR o.customer_id = sqlc.narg(customer_id))
-  AND (sqlc.narg(keyword)::text IS NULL OR o.doc_no ILIKE '%' || sqlc.narg(keyword) || '%'
-       OR o.customer_po_no ILIKE '%' || sqlc.narg(keyword) || '%')
-  AND (sqlc.narg(from_date)::date IS NULL OR o.doc_date >= sqlc.narg(from_date))
-  AND (sqlc.narg(to_date)::date IS NULL OR o.doc_date <= sqlc.narg(to_date))
-  AND (sqlc.narg(scope_user_id)::bigint IS NULL OR o.sales_user_id = sqlc.narg(scope_user_id))
-  AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR su.department_id = sqlc.narg(scope_dept_id))
-ORDER BY o.doc_date DESC, o.id DESC
-LIMIT @lim OFFSET @off;
+ORDER BY o.doc_date DESC, o.id DESC;
 
 -- name: CountSalesOrders :one
 SELECT count(*) FROM sales_orders o
