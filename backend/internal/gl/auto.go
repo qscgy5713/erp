@@ -221,3 +221,47 @@ func reverseVoucher(ctx context.Context, q *db.Queries, opt Options, orig db.Vou
 	}
 	return nil
 }
+
+// RawEntry 直接指定科目的分錄(期初科目餘額匯入用,不經拋轉規則)。
+type RawEntry struct {
+	AccountID     int64
+	Debit, Credit decimal.Decimal
+	Description   string
+}
+
+// PostAccounts 以指定科目產生一張已過帳傳票;借貸須平衡。須在呼叫端的交易內執行。
+func PostAccounts(ctx context.Context, q *db.Queries, opt Options, src Source, entries []RawEntry) error {
+	if err := CheckPeriodOpen(ctx, q, opt.CompanyID, src.Date); err != nil {
+		return err
+	}
+	debit, credit := decimal.Zero, decimal.Zero
+	for _, e := range entries {
+		debit, credit = debit.Add(e.Debit), credit.Add(e.Credit)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if !debit.Equal(credit) {
+		return errUnbalanced.WithDetails(map[string]string{"debit": debit.String(), "credit": credit.String(), "source": src.No})
+	}
+	no, err := docno.Next(ctx, q, opt.CompanyID, "journal_voucher", src.Date)
+	if err != nil {
+		return err
+	}
+	v, err := q.CreateVoucher(ctx, db.CreateVoucherParams{
+		CompanyID: opt.CompanyID, DocNo: no, VoucherDate: src.Date, SourceType: src.Type, SourceID: &src.ID,
+		SourceNo: src.No, Description: src.Desc, Status: "posted", TotalAmount: debit, PostedBy: opt.ActorID,
+		CreatedBy: opt.ActorID,
+	})
+	if err != nil {
+		return err
+	}
+	for i, e := range entries {
+		if err := q.AddVoucherLine(ctx, db.AddVoucherLineParams{
+			VoucherID: v.ID, LineNo: int32(i + 1), AccountID: e.AccountID, Debit: e.Debit, Credit: e.Credit, Description: e.Description,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}

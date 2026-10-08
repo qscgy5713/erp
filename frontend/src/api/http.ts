@@ -121,3 +121,70 @@ export function qs(params: Record<string, string | number | boolean | null | und
   const s = sp.toString()
   return s ? `?${s}` : ''
 }
+
+/** 檔案上傳(multipart);沿用 token 與 401 自動刷新 */
+export async function upload<T>(path: string, file: File, retry = true): Promise<T> {
+  const headers = new Headers()
+  const token = hooks?.getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`/api/v1${path}`, {
+    method: 'POST',
+    body: form,
+    headers,
+    credentials: 'same-origin',
+  })
+  if (res.status === 401 && retry && hooks && token) {
+    const result = await hooks.refresh()
+    if (result === 'ok') return upload<T>(path, file, false)
+    if (result === 'throttled') throw new ApiRequestError(429, 'SYS-429', '請求過於頻繁,請稍後再試')
+    hooks.onUnauthorized()
+  }
+  let body: ApiBody<T> = {}
+  try {
+    body = (await res.json()) as ApiBody<T>
+  } catch {
+    // 非 JSON 回應
+  }
+  if (!res.ok || body.error) {
+    throw new ApiRequestError(
+      res.status,
+      body.error?.code ?? `HTTP-${res.status}`,
+      body.error?.message ?? '伺服器無回應',
+      body.error?.details,
+    )
+  }
+  return body.data as T
+}
+
+/** 下載檔案(帶登入 token),並觸發瀏覽器儲存 */
+export async function download(path: string, fallbackName: string, retry = true): Promise<void> {
+  const headers = new Headers()
+  const token = hooks?.getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await fetch(`/api/v1${path}`, { headers, credentials: 'same-origin' })
+  if (res.status === 401 && retry && hooks && token) {
+    const result = await hooks.refresh()
+    if (result === 'ok') return download(path, fallbackName, false)
+    hooks.onUnauthorized()
+  }
+  if (!res.ok) {
+    let msg = '下載失敗'
+    try {
+      msg = ((await res.json()) as ApiBody<unknown>).error?.message ?? msg
+    } catch {
+      // 非 JSON
+    }
+    throw new ApiRequestError(res.status, `HTTP-${res.status}`, msg)
+  }
+  // Content-Disposition 為 RFC 5987 的 filename*=UTF-8''...
+  const m = /filename\*=UTF-8''([^;]+)/.exec(res.headers.get('Content-Disposition') ?? '')
+  const name = m ? decodeURIComponent(m[1]!) : fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}

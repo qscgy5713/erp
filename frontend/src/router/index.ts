@@ -312,6 +312,11 @@ const router = createRouter({
       meta: { title: '拋轉規則', perm: ['gl.account.read', 'gl.account.write'] },
     },
     {
+      path: '/system/imports',
+      component: () => import('@/views/system/ImportsView.vue'),
+      meta: { title: '資料匯入', perm: ['system.import.run'] },
+    },
+    {
       path: '/system/departments',
       component: () => import('@/views/system/DepartmentsView.vue'),
       meta: { title: '部門', perm: ['system.department.read'] },

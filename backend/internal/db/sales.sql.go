@@ -1264,7 +1264,7 @@ func (q *Queries) ListDeliveryLines(ctx context.Context, deliveryID int64) ([]Li
 }
 
 const listReceivables = `-- name: ListReceivables :many
-SELECT r.id, r.company_id, r.customer_id, r.source_type, r.source_id, r.source_no, r.doc_date, r.due_date, r.currency, r.exchange_rate, r.amount, r.base_amount, r.paid_amount, r.created_by, r.created_at, r.updated_at, c.code AS customer_code, c.name AS customer_name
+SELECT r.id, r.company_id, r.customer_id, r.source_type, r.source_id, r.source_no, r.doc_date, r.due_date, r.currency, r.exchange_rate, r.amount, r.base_amount, r.paid_amount, r.created_by, r.created_at, r.updated_at, r.import_batch_id, c.code AS customer_code, c.name AS customer_name
 FROM accounts_receivable r
 JOIN customers c ON c.id = r.customer_id
 LEFT JOIN users su ON su.id = c.sales_user_id
@@ -1294,24 +1294,25 @@ type ListReceivablesParams struct {
 }
 
 type ListReceivablesRow struct {
-	ID           int64
-	CompanyID    int64
-	CustomerID   int64
-	SourceType   string
-	SourceID     int64
-	SourceNo     string
-	DocDate      time.Time
-	DueDate      time.Time
-	Currency     string
-	ExchangeRate decimal.Decimal
-	Amount       decimal.Decimal
-	BaseAmount   decimal.Decimal
-	PaidAmount   decimal.Decimal
-	CreatedBy    *int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	CustomerCode string
-	CustomerName string
+	ID            int64
+	CompanyID     int64
+	CustomerID    int64
+	SourceType    string
+	SourceID      int64
+	SourceNo      string
+	DocDate       time.Time
+	DueDate       time.Time
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	Amount        decimal.Decimal
+	BaseAmount    decimal.Decimal
+	PaidAmount    decimal.Decimal
+	CreatedBy     *int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ImportBatchID *int64
+	CustomerCode  string
+	CustomerName  string
 }
 
 // 資料範圍依客戶目前的負責業務
@@ -1352,6 +1353,7 @@ func (q *Queries) ListReceivables(ctx context.Context, arg ListReceivablesParams
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ImportBatchID,
 			&i.CustomerCode,
 			&i.CustomerName,
 		); err != nil {
@@ -1670,7 +1672,7 @@ func (q *Queries) LockDelivery(ctx context.Context, arg LockDeliveryParams) (Del
 }
 
 const lockReceivableBySource = `-- name: LockReceivableBySource :one
-SELECT id, company_id, customer_id, source_type, source_id, source_no, doc_date, due_date, currency, exchange_rate, amount, base_amount, paid_amount, created_by, created_at, updated_at FROM accounts_receivable WHERE source_type = $1 AND source_id = $2 FOR UPDATE
+SELECT id, company_id, customer_id, source_type, source_id, source_no, doc_date, due_date, currency, exchange_rate, amount, base_amount, paid_amount, created_by, created_at, updated_at, import_batch_id FROM accounts_receivable WHERE source_type = $1 AND source_id = $2 FOR UPDATE
 `
 
 type LockReceivableBySourceParams struct {
@@ -1698,6 +1700,7 @@ func (q *Queries) LockReceivableBySource(ctx context.Context, arg LockReceivable
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImportBatchID,
 	)
 	return i, err
 }

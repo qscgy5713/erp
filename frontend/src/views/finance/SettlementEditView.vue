@@ -80,6 +80,7 @@ const sourceLabels: Record<LedgerEntry['source_type'], string> = {
   purchase_return: '退出',
   delivery: '出貨',
   sales_return: '退回',
+  opening: '期初',
 }
 
 function applyDoc(d: Settlement) {

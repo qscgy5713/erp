@@ -56,6 +56,7 @@ export const sourceLabels: Record<string, string> = {
   collection: '收款',
   payment: '付款',
   cost_closing: '月結成本',
+  opening_balance: '期初科目餘額',
 }
 
 export interface VoucherLine {

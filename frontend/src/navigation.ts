@@ -131,6 +131,7 @@ export const navigation: NavItem[] = [
         path: '/system/doc-number-rules',
         perm: ['system.docno.read', 'system.docno.write'],
       },
+      { title: '資料匯入', path: '/system/imports', perm: ['system.import.run'] },
       { title: '稽核日誌', path: '/system/audit-logs', perm: ['system.audit.read'] },
     ],
   },

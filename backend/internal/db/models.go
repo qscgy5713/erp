@@ -46,41 +46,43 @@ type AccountingPeriod struct {
 }
 
 type AccountsPayable struct {
-	ID           int64
-	CompanyID    int64
-	SupplierID   int64
-	SourceType   string
-	SourceID     int64
-	SourceNo     string
-	DocDate      time.Time
-	DueDate      time.Time
-	Currency     string
-	ExchangeRate decimal.Decimal
-	Amount       decimal.Decimal
-	BaseAmount   decimal.Decimal
-	PaidAmount   decimal.Decimal
-	CreatedBy    *int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID            int64
+	CompanyID     int64
+	SupplierID    int64
+	SourceType    string
+	SourceID      int64
+	SourceNo      string
+	DocDate       time.Time
+	DueDate       time.Time
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	Amount        decimal.Decimal
+	BaseAmount    decimal.Decimal
+	PaidAmount    decimal.Decimal
+	CreatedBy     *int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ImportBatchID *int64
 }
 
 type AccountsReceivable struct {
-	ID           int64
-	CompanyID    int64
-	CustomerID   int64
-	SourceType   string
-	SourceID     int64
-	SourceNo     string
-	DocDate      time.Time
-	DueDate      time.Time
-	Currency     string
-	ExchangeRate decimal.Decimal
-	Amount       decimal.Decimal
-	BaseAmount   decimal.Decimal
-	PaidAmount   decimal.Decimal
-	CreatedBy    *int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID            int64
+	CompanyID     int64
+	CustomerID    int64
+	SourceType    string
+	SourceID      int64
+	SourceNo      string
+	DocDate       time.Time
+	DueDate       time.Time
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	Amount        decimal.Decimal
+	BaseAmount    decimal.Decimal
+	PaidAmount    decimal.Decimal
+	CreatedBy     *int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ImportBatchID *int64
 }
 
 type AuditLog struct {
@@ -310,6 +312,19 @@ type GoodsReceiptLine struct {
 	PoLineID      *int64
 	ReceiptLineID *int64
 	Note          string
+}
+
+type ImportBatch struct {
+	ID         int64
+	CompanyID  int64
+	ImportType string
+	Filename   string
+	RowCount   int32
+	Summary    string
+	CreatedBy  *int64
+	CreatedAt  time.Time
+	UndoneBy   *int64
+	UndoneAt   *time.Time
 }
 
 type InventoryBalance struct {

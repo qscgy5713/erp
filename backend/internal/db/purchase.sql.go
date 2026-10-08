@@ -889,7 +889,7 @@ func (q *Queries) ListGoodsReceipts(ctx context.Context, arg ListGoodsReceiptsPa
 }
 
 const listPayables = `-- name: ListPayables :many
-SELECT p.id, p.company_id, p.supplier_id, p.source_type, p.source_id, p.source_no, p.doc_date, p.due_date, p.currency, p.exchange_rate, p.amount, p.base_amount, p.paid_amount, p.created_by, p.created_at, p.updated_at, s.code AS supplier_code, s.name AS supplier_name
+SELECT p.id, p.company_id, p.supplier_id, p.source_type, p.source_id, p.source_no, p.doc_date, p.due_date, p.currency, p.exchange_rate, p.amount, p.base_amount, p.paid_amount, p.created_by, p.created_at, p.updated_at, p.import_batch_id, s.code AS supplier_code, s.name AS supplier_name
 FROM accounts_payable p
 JOIN suppliers s ON s.id = p.supplier_id
 WHERE p.company_id = $1
@@ -914,24 +914,25 @@ type ListPayablesParams struct {
 }
 
 type ListPayablesRow struct {
-	ID           int64
-	CompanyID    int64
-	SupplierID   int64
-	SourceType   string
-	SourceID     int64
-	SourceNo     string
-	DocDate      time.Time
-	DueDate      time.Time
-	Currency     string
-	ExchangeRate decimal.Decimal
-	Amount       decimal.Decimal
-	BaseAmount   decimal.Decimal
-	PaidAmount   decimal.Decimal
-	CreatedBy    *int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	SupplierCode string
-	SupplierName string
+	ID            int64
+	CompanyID     int64
+	SupplierID    int64
+	SourceType    string
+	SourceID      int64
+	SourceNo      string
+	DocDate       time.Time
+	DueDate       time.Time
+	Currency      string
+	ExchangeRate  decimal.Decimal
+	Amount        decimal.Decimal
+	BaseAmount    decimal.Decimal
+	PaidAmount    decimal.Decimal
+	CreatedBy     *int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ImportBatchID *int64
+	SupplierCode  string
+	SupplierName  string
 }
 
 func (q *Queries) ListPayables(ctx context.Context, arg ListPayablesParams) ([]ListPayablesRow, error) {
@@ -969,6 +970,7 @@ func (q *Queries) ListPayables(ctx context.Context, arg ListPayablesParams) ([]L
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ImportBatchID,
 			&i.SupplierCode,
 			&i.SupplierName,
 		); err != nil {
@@ -1256,7 +1258,7 @@ func (q *Queries) LockGoodsReceipts(ctx context.Context, arg LockGoodsReceiptsPa
 }
 
 const lockPayableBySource = `-- name: LockPayableBySource :one
-SELECT id, company_id, supplier_id, source_type, source_id, source_no, doc_date, due_date, currency, exchange_rate, amount, base_amount, paid_amount, created_by, created_at, updated_at FROM accounts_payable WHERE source_type = $1 AND source_id = $2 FOR UPDATE
+SELECT id, company_id, supplier_id, source_type, source_id, source_no, doc_date, due_date, currency, exchange_rate, amount, base_amount, paid_amount, created_by, created_at, updated_at, import_batch_id FROM accounts_payable WHERE source_type = $1 AND source_id = $2 FOR UPDATE
 `
 
 type LockPayableBySourceParams struct {
@@ -1284,6 +1286,7 @@ func (q *Queries) LockPayableBySource(ctx context.Context, arg LockPayableBySour
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImportBatchID,
 	)
 	return i, err
 }

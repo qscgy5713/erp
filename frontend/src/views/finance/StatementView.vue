@@ -17,6 +17,7 @@ const kindLabels: Record<StatementRow['kind'], string> = {
   purchase_return: '退出',
   delivery: '出貨',
   sales_return: '退回',
+  opening: '期初',
   receipt: '收款',
   payment: '付款',
 }

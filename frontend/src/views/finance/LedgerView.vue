@@ -24,6 +24,7 @@ const sourceLabels: Record<LedgerEntry['source_type'], string> = {
   purchase_return: '退出',
   delivery: '出貨',
   sales_return: '退回',
+  opening: '期初',
 }
 
 const query = reactive({
@@ -120,7 +121,12 @@ onMounted(load)
       <el-table-column label="來源" width="170">
         <template #default="{ row }">
           {{ sourceLabels[row.source_type as LedgerEntry['source_type']] }}
-          <el-button v-if="canOpenSource" link type="primary" @click="openSource(row)">
+          <el-button
+            v-if="canOpenSource && row.source_type !== 'opening'"
+            link
+            type="primary"
+            @click="openSource(row)"
+          >
             {{ row.source_no }}
           </el-button>
           <span v-else>{{ row.source_no }}</span>

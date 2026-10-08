@@ -26,6 +26,7 @@ const sourceLabels: Record<string, string> = {
   purchase_return: '進貨退出',
   delivery: '出貨',
   sales_return: '銷貨退回',
+  opening_stock: '期初庫存',
 }
 
 watch(

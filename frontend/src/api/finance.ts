@@ -13,7 +13,7 @@ export interface LedgerEntry {
   supplier_id?: number
   supplier_code?: string
   supplier_name?: string
-  source_type: 'goods_receipt' | 'purchase_return' | 'delivery' | 'sales_return'
+  source_type: 'goods_receipt' | 'purchase_return' | 'delivery' | 'sales_return' | 'opening'
   source_id: number
   source_no: string
   doc_date: string

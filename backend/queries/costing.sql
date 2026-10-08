@@ -30,12 +30,12 @@ ORDER BY x.m LIMIT 1;
 -- name: CostPeriodAggregates :many
 -- 期間內各料品的異動彙總(基本單位);其他來源(未知類型)併入 other_qty,以平均成本計價
 SELECT t.item_id,
-       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return')), 0)::numeric AS purchase_qty,
-       COALESCE(SUM(t.qty * COALESCE(t.unit_cost, 0)) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return')), 0)::numeric AS purchase_value,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return', 'opening_stock')), 0)::numeric AS purchase_qty,
+       COALESCE(SUM(t.qty * COALESCE(t.unit_cost, 0)) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return', 'opening_stock')), 0)::numeric AS purchase_value,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('delivery', 'sales_return')), 0)::numeric AS sales_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('stock_adjustment', 'stock_count')), 0)::numeric AS adjust_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type NOT IN ('goods_receipt', 'purchase_return', 'delivery',
-                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer')), 0)::numeric AS other_qty
+                                   'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock')), 0)::numeric AS other_qty
 FROM inventory_transactions t
 WHERE t.company_id = @company_id AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 GROUP BY t.item_id
@@ -76,7 +76,7 @@ DELETE FROM cost_closings WHERE id = @id;
 UPDATE inventory_transactions SET unit_cost = @avg_cost
 WHERE company_id = @company_id AND item_id = @item_id
   AND doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-  AND source_type NOT IN ('goods_receipt', 'purchase_return');
+  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock');
 
 -- ======== 對帳檢查 ========
 
