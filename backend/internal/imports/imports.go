@@ -29,9 +29,12 @@ import (
 
 const (
 	maxFileBytes = 5 << 20
-	maxRows      = 5000
-	maxErrors    = 200
-	dataSheet    = "匯入資料"
+	// 展開後的上限:正常的 5000 列檔案遠低於此
+	maxUnzipBytes    = 64 << 20
+	maxUnzipXMLBytes = 16 << 20
+	maxRows          = 5000
+	maxErrors        = 200
+	dataSheet        = "匯入資料"
 )
 
 type Module struct {
@@ -156,7 +159,8 @@ func parseDate(s string) (time.Time, error) {
 // ---- 讀取 Excel ----
 
 func readSheet(data []byte, im *importer) ([]sheetRow, *apperr.Error) {
-	f, err := excelize.OpenReader(bytes.NewReader(data))
+	// 上傳檔只有 5 MB,但 xlsx 是 zip:壓縮炸彈可以展開成數 GB。限制展開後的總大小(excelize 預設是 16 GB)。
+	f, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{UnzipSizeLimit: maxUnzipBytes, UnzipXMLSizeLimit: maxUnzipXMLBytes})
 	if err != nil {
 		return nil, apperr.New(http.StatusUnprocessableEntity, "IMP-001", "無法讀取檔案,請上傳 .xlsx 格式的 Excel 檔")
 	}

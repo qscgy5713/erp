@@ -41,7 +41,7 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	if err := r.SetTrustedProxies(d.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("TRUSTED_PROXIES 格式錯誤: %w", err)
 	}
-	r.Use(gin.Recovery(), httpx.RequestMeta(), requestLogger())
+	r.Use(gin.Recovery(), httpx.RequestMeta(), requestLogger(), securityHeaders(), limitBody(maxBodyBytes))
 	r.NoRoute(func(c *gin.Context) {
 		response.Fail(c, http.StatusNotFound, "SYS-404", "找不到資源")
 	})
@@ -57,6 +57,29 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	}
 
 	return r, nil
+}
+
+// maxBodyBytes 所有請求內容的上限。最大的是 Excel 匯入(檔案 5 MB + 表單),與 nginx 的 client_max_body_size 一致;
+// 一般 JSON 遠小於此。沒有上限時,任何人都能用超大的請求吃光記憶體。
+const maxBodyBytes = 6 << 20
+
+func limitBody(n int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, n)
+		}
+		c.Next()
+	}
+}
+
+// securityHeaders API 回應不可被快取(含個人與財務資料),也不讓瀏覽器猜測內容類型。
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.Writer.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Content-Type-Options", "nosniff")
+		c.Next()
+	}
 }
 
 func healthHandler(db Pinger) gin.HandlerFunc {

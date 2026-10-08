@@ -12,6 +12,51 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const approvalDocVisible = `-- name: ApprovalDocVisible :one
+SELECT (
+  ($1::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = $2 AND x.company_id = $3))
+  OR ($1::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = $2 AND x.company_id = $3))
+  OR ($1::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = $2 AND x.company_id = $3 AND x.side = 'payment'))
+  OR ($1::text = 'sales_order' AND EXISTS (
+        SELECT 1 FROM sales_orders x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = $2 AND x.company_id = $3
+          AND ($4::bigint IS NULL OR x.sales_user_id = $4)
+          AND ($5::bigint IS NULL OR su.department_id = $5)))
+  OR ($1::text = 'delivery' AND EXISTS (
+        SELECT 1 FROM deliveries x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = $2 AND x.company_id = $3
+          AND ($4::bigint IS NULL OR x.sales_user_id = $4)
+          AND ($5::bigint IS NULL OR su.department_id = $5)))
+  OR ($1::text = 'collection' AND EXISTS (
+        SELECT 1 FROM settlements x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = $2 AND x.company_id = $3 AND x.side = 'receipt'
+          AND ($4::bigint IS NULL OR x.sales_user_id = $4)
+          AND ($5::bigint IS NULL OR su.department_id = $5)))
+)::boolean AS visible
+`
+
+type ApprovalDocVisibleParams struct {
+	DocType     string
+	DocID       int64
+	CompanyID   int64
+	ScopeUserID *int64
+	ScopeDeptID *int64
+}
+
+// 單據是否存在於本公司,且在使用者的資料範圍內(業務類單據依負責業務快照,與各單據頁相同的規則)
+func (q *Queries) ApprovalDocVisible(ctx context.Context, arg ApprovalDocVisibleParams) (bool, error) {
+	row := q.db.QueryRow(ctx, approvalDocVisible,
+		arg.DocType,
+		arg.DocID,
+		arg.CompanyID,
+		arg.ScopeUserID,
+		arg.ScopeDeptID,
+	)
+	var visible bool
+	err := row.Scan(&visible)
+	return visible, err
+}
+
 const companyRolesByIDs = `-- name: CompanyRolesByIDs :many
 SELECT id, name FROM roles WHERE company_id = $1 AND id = ANY($2::bigint[]) AND is_active
 `

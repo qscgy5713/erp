@@ -1,5 +1,13 @@
 # 工作日誌
 
+## 2026-10-08 資安 review
+- 設計見 plan D67。
+- 新增 `routes_audit_test.go`:列舉所有路由,驗證未登入 401、無權限 403(白名單例外);它抓到客戶 / 供應商下拉選單任何登入者都能讀。
+- 修正:下拉選單權限、簽核進度資料範圍(查無則 404)、匯入 zip bomb(未限制時測試程序被 OOM 終止,限制後回 IMP-001)、安全標頭與本文上限、密碼 / 2FA 敏感操作的失敗鎖定。
+- 相依套件(OSV):excelize 9 項公告 → 升級;quic-go(gin 間接依賴)→ 0.59.1;x/crypto 公告為 openpgp,未使用。
+- 其他檢查無問題:SQL 租戶隔離、前端無 `v-html`、`npm audit` 0 弱點、請求日誌不含 query string。
+- 測試:新增 `security_test.go`;`TestPurchasePermissions` 原斷言「下拉只需登入」,改為新規則。全套後端 / 前端測試與 lint 通過。
+
 ## 2026-10-08 M15 雙因素驗證 TOTP(第二期)
 - 已 push M14(5ae3e3a)。
 - 設計見 plan D66。**登入改為兩步**:密碼對 → 啟用者拿挑戰憑證 → 驗證碼 / 備援碼 → 才有 Session。

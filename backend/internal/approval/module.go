@@ -330,6 +330,17 @@ func (m *Module) progress(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// 單據須存在於本公司且在資料範圍內;範圍外視為不存在(與各單據頁一致,不透露存在與否)
+	deptID, userID := a.ScopeFilter()
+	if ok, err := m.store.ApprovalDocVisible(ctx, db.ApprovalDocVisibleParams{
+		DocType: docType, DocID: docID, CompanyID: a.CompanyID, ScopeUserID: userID, ScopeDeptID: deptID,
+	}); err != nil {
+		response.Error(c, err)
+		return
+	} else if !ok {
+		response.Error(c, apperr.ErrNotFound)
+		return
+	}
 	rows, err := m.store.ListDocumentApprovals(ctx, db.ListDocumentApprovalsParams{CompanyID: a.CompanyID, DocType: docType, DocID: docID})
 	if err != nil {
 		response.Error(c, err)

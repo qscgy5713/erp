@@ -60,3 +60,26 @@ DELETE FROM document_approvals WHERE doc_type = @doc_type AND doc_id = @doc_id A
 
 -- name: UserHasRole :one
 SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = @user_id AND role_id = @role_id);
+
+-- name: ApprovalDocVisible :one
+-- 單據是否存在於本公司,且在使用者的資料範圍內(業務類單據依負責業務快照,與各單據頁相同的規則)
+SELECT (
+  (@doc_type::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
+  OR (@doc_type::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = @doc_id AND x.company_id = @company_id))
+  OR (@doc_type::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = @doc_id AND x.company_id = @company_id AND x.side = 'payment'))
+  OR (@doc_type::text = 'sales_order' AND EXISTS (
+        SELECT 1 FROM sales_orders x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = @doc_id AND x.company_id = @company_id
+          AND (sqlc.narg(scope_user_id)::bigint IS NULL OR x.sales_user_id = sqlc.narg(scope_user_id))
+          AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR su.department_id = sqlc.narg(scope_dept_id))))
+  OR (@doc_type::text = 'delivery' AND EXISTS (
+        SELECT 1 FROM deliveries x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = @doc_id AND x.company_id = @company_id
+          AND (sqlc.narg(scope_user_id)::bigint IS NULL OR x.sales_user_id = sqlc.narg(scope_user_id))
+          AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR su.department_id = sqlc.narg(scope_dept_id))))
+  OR (@doc_type::text = 'collection' AND EXISTS (
+        SELECT 1 FROM settlements x LEFT JOIN users su ON su.id = x.sales_user_id
+        WHERE x.id = @doc_id AND x.company_id = @company_id AND x.side = 'receipt'
+          AND (sqlc.narg(scope_user_id)::bigint IS NULL OR x.sales_user_id = sqlc.narg(scope_user_id))
+          AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR su.department_id = sqlc.narg(scope_dept_id))))
+)::boolean AS visible;

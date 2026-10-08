@@ -316,15 +316,16 @@ func (s *Service) replaceRecoveryCodes(ctx context.Context, q *db.Queries, userI
 
 // confirmSensitive 停用、重新產生備援碼這類敏感操作:須再驗證密碼與目前的第二因素。
 func (s *Service) confirmSensitive(ctx context.Context, u db.User, password, code string) error {
+	// 密碼或驗證碼錯誤都計入失敗次數(與登入共用鎖定),避免拿到 access token 的人在這裡無限次嘗試
 	if !CheckPassword(u.PasswordHash, password) {
-		return ErrWrongOldPassword.WithMessage("密碼錯誤")
+		return s.recordFailure(ctx, u, "雙因素設定時密碼錯誤", ErrWrongOldPassword.WithMessage("密碼錯誤"))
 	}
 	used, err := s.checkSecondFactor(ctx, u, code)
 	if err != nil {
 		return err
 	}
 	if used == "" {
-		return ErrBadTwoFactorCode
+		return s.recordFailure(ctx, u, "雙因素設定時驗證碼錯誤", ErrBadTwoFactorCode)
 	}
 	return nil
 }
@@ -502,13 +503,15 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPw, newPw
 		return Session{}, err
 	}
 	var sess Session
+	wrongPassword := false
 	err := s.store.InTx(ctx, func(q *db.Queries) error {
 		u, err := q.GetUserByID(ctx, userID)
 		if err != nil {
 			return err
 		}
 		if !CheckPassword(u.PasswordHash, oldPw) {
-			return ErrWrongOldPassword
+			wrongPassword = true
+			return nil
 		}
 		if oldPw == newPw {
 			return ErrSamePassword
@@ -533,6 +536,14 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPw, newPw
 			EntityType: "user", EntityID: &u.ID, Summary: "變更密碼",
 		})
 	})
+	if err == nil && wrongPassword {
+		// 登入後輸錯目前密碼也計入失敗次數:拿到 access token 的人不能無限次試密碼。獨立交易,不被上面的回滾影響
+		u, uerr := s.store.GetUserByID(ctx, userID)
+		if uerr != nil {
+			return Session{}, uerr
+		}
+		return Session{}, s.recordFailure(ctx, u, "變更密碼時目前密碼錯誤", ErrWrongOldPassword)
+	}
 	return sess, err
 }
 

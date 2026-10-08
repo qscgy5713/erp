@@ -1,14 +1,17 @@
 package app
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -374,4 +377,41 @@ func TestImportPermissions(t *testing.T) {
 	expect(t, res, http.StatusForbidden, "SYS-403")
 	res, _ = im.upload("items", "", xlsx(t, im.importHeaders("items"))) // 只有標題列
 	expect(t, res, http.StatusUnprocessableEntity, "IMP-002")
+}
+
+// 壓縮炸彈:5 MB 以內的 xlsx 展開後可能是數 GB;須在讀取前就拒絕,不能吃光記憶體。
+func TestImportRejectsZipBomb(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	good := xlsx(t, c.importHeaders("items"), []string{"X1", "測試", "", "", "", "PCS", "", "", "", "", ""})
+
+	// 把正常檔案的工作表 XML 換成「開頭正常、後面接 300 MB 空白」的版本(壓縮後很小)
+	zr, err := zip.NewReader(bytes.NewReader(good), int64(len(good)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, f := range zr.File {
+		w, _ := zw.Create(f.Name)
+		rc, _ := f.Open()
+		data, _ := io.ReadAll(rc)
+		_ = rc.Close()
+		if strings.HasPrefix(f.Name, "xl/worksheets/sheet") {
+			data = append(bytes.TrimSuffix(data, []byte("</worksheet>")), bytes.Repeat([]byte(" "), 300<<20)...)
+			data = append(data, []byte("</worksheet>")...)
+		}
+		_, _ = w.Write(data)
+	}
+	_ = zw.Close()
+	if out.Len() > 5<<20 {
+		t.Fatalf("測試檔壓縮後 %d 位元組,應小於 5 MB", out.Len())
+	}
+	start := time.Now()
+	res, _ := c.upload("items", "dry_run=true", out.Bytes())
+	expect(t, res, http.StatusUnprocessableEntity, "IMP-001")
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("拒絕太慢: %v", time.Since(start))
+	}
 }

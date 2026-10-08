@@ -68,14 +68,16 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/items/:id", auth.Require(p.ItemWrite), m.updateItem)
 
 	// 開單選客戶用:只需登入,依資料範圍過濾
-	g.GET("/customer-options", m.customerOptions)
+	// 客戶 / 供應商下拉:開單、收付款、傳票輔助核算會用到,所以只要具備任一相關權限即可(不必有維護基本資料的權限),
+	// 但沒有任何相關權限的登入者不可列舉(客戶另依資料範圍過濾)
+	g.GET("/customer-options", auth.Require(customerOptionPerms...), m.customerOptions)
 	g.GET("/customers", auth.Require(p.CustomerRead), m.listCustomers)
 	g.GET("/customers/:id", auth.Require(p.CustomerRead), m.getCustomer)
 	g.POST("/customers", auth.Require(p.CustomerWrite), m.createCustomer)
 	g.PUT("/customers/:id", auth.Require(p.CustomerWrite), m.updateCustomer)
 
 	// 開單選供應商用:只需登入,只回傳啟用中的精簡欄位
-	g.GET("/supplier-options", m.supplierOptions)
+	g.GET("/supplier-options", auth.Require(supplierOptionPerms...), m.supplierOptions)
 	g.GET("/suppliers", auth.Require(p.SupplierRead), m.listSuppliers)
 	g.GET("/suppliers/:id", auth.Require(p.SupplierRead), m.getSupplier)
 	g.POST("/suppliers", auth.Require(p.SupplierWrite), m.createSupplier)
@@ -165,4 +167,14 @@ func parseDate(field, s string) (time.Time, error) {
 
 func fieldErr(field, msg string) error {
 	return apperr.Validation(map[string]string{field: msg})
+}
+
+var customerOptionPerms = []string{
+	p.CustomerRead, p.CustomerWrite, p.SalesOrderRead, p.SalesOrderWrite, p.DeliveryRead, p.DeliveryWrite,
+	p.CollectionRead, p.CollectionWrite, p.ReceivableRead, p.VoucherRead, p.VoucherWrite,
+}
+
+var supplierOptionPerms = []string{
+	p.SupplierRead, p.SupplierWrite, p.PurchaseOrderRead, p.PurchaseOrderWrite, p.ReceiptRead, p.ReceiptWrite,
+	p.PaymentRead, p.PaymentWrite, p.PayableRead, p.VoucherRead, p.VoucherWrite,
 }

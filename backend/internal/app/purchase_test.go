@@ -404,6 +404,7 @@ func TestPurchasePermissions(t *testing.T) {
 
 	expect(t, nb.do(http.MethodGet, orders, nil), http.StatusForbidden, "SYS-403")
 	expect(t, nb.do(http.MethodGet, "/finance/payables", nil), http.StatusForbidden, "SYS-403")
-	// 下拉選單只需登入
-	expect(t, nb.do(http.MethodGet, "/masterdata/supplier-options?keyword=S1", nil), http.StatusOK, "")
+	// 下拉選單需有相關權限(無任何權限者不可列出供應商)
+	expect(t, nb.do(http.MethodGet, "/masterdata/supplier-options?keyword=S1", nil), http.StatusForbidden, "SYS-403")
+	expect(t, ck.do(http.MethodGet, "/masterdata/supplier-options?keyword=S1", nil), http.StatusOK, "")
 }
