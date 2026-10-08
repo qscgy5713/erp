@@ -40,6 +40,12 @@ const router = createRouter({
       meta: { title: '登入', public: true, blank: true },
     },
     {
+      path: '/account/security',
+      name: 'account-security',
+      component: () => import('@/views/AccountSecurityView.vue'),
+      meta: { title: '帳號安全' },
+    },
+    {
       path: '/change-password',
       name: 'change-password',
       component: () => import('@/views/ChangePasswordView.vue'),
@@ -424,6 +430,9 @@ router.beforeEach(async (to) => {
   }
   if (auth.mustChangePassword && to.name !== 'change-password') {
     return { name: 'change-password' }
+  }
+  if (auth.mustSetup2FA && to.name !== 'account-security') {
+    return { name: 'account-security' }
   }
   if (!auth.can(to.meta.perm)) {
     return { name: 'forbidden' }

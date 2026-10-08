@@ -73,7 +73,8 @@ erp.example.com {
 | 變數 | 說明 | 預設 / 建議 |
 |---|---|---|
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | 資料庫帳密與名稱;**首次啟動後再改密碼不會生效**(資料已建立),要改請用 `ALTER USER` | 密碼用長隨機值 |
-| `JWT_SECRET` | 簽章密鑰,至少 32 字元,含 `dev-only` 會拒絕啟動。換掉只會讓所有人重新登入,不損毀資料 | `openssl rand -base64 48` |
+| `TOTP_ENCRYPTION_KEY` | 雙因素驗證密鑰的加密金鑰,至少 32 字元(`openssl rand -base64 48`)。**留空則由 JWT_SECRET 衍生**;建議獨立設定並妥善保管、**不要更換**——更換後所有已啟用雙因素驗證的人都無法驗證,需管理員逐一重設 | 長隨機值 |
+| `JWT_SECRET` | 簽章密鑰,至少 32 字元,含 `dev-only` 會拒絕啟動。換掉會讓所有人重新登入(不損毀資料);若沒有另外設定 `TOTP_ENCRYPTION_KEY`,已啟用雙因素驗證的人也需管理員重設 | `openssl rand -base64 48` |
 | `TRUSTED_PROXIES` | 信任的反向代理網段,見第 3 節 | `172.28.0.0/24` + TLS 代理 |
 | `WEB_BIND` / `WEB_PORT` | web 對外位址與埠 | `127.0.0.1` / `8080`;改 `0.0.0.0` 只限內網測試 |
 | `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | 登入憑證效期 | `15m` / `168h` |
@@ -154,7 +155,7 @@ erp ps && curl https://你的網域/api/v1/health   # 4. 確認
 **部署**
 - [ ] `.env.prod` 全部改成自己的值(`POSTGRES_PASSWORD`、`JWT_SECRET`),權限 600,**沒有**提交到 git
 - [ ] HTTPS 可用;`TRUSTED_PROXIES` 含代理;登入後稽核日誌的來源 IP 是真實 IP
-- [ ] 第一個管理員已建立並**改過密碼**,`ADMIN_PASSWORD` 已清空
+- [ ] 第一個管理員已建立並**改過密碼**、**啟用雙因素驗證**,並保管好備援碼;`TOTP_ENCRYPTION_KEY` 已設定並備份,`ADMIN_PASSWORD` 已清空
 - [ ] `erp ps` 全部 healthy;`/api/v1/health` 正常
 - [ ] 備份已排程、已同步到另一台機器、**已做過一次 `--verify`**
 

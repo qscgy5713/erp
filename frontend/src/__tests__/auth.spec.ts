@@ -12,6 +12,8 @@ const me = (over: Partial<Me> = {}): Me => ({
   department_id: null,
   is_superadmin: false,
   must_change_password: false,
+  must_setup_2fa: false,
+  two_factor_enabled: false,
   data_scope: 'self',
   permissions: ['system.user.read'],
   ...over,

@@ -180,6 +180,25 @@ async function resetPassword(u: User) {
   }
 }
 
+async function resetTwoFactor(u: User) {
+  try {
+    await ElMessageBox.confirm(
+      `重設 ${u.name}(${u.username})的雙因素驗證?對方的備援碼會作廢、既有登入全部失效,之後只需密碼即可登入(公司若要求雙因素驗證,須重新設定)。`,
+      '重設雙因素驗證',
+      { type: 'warning', confirmButtonText: '重設', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await systemApi.resetTwoFactor(u.id)
+    ElMessage.success('已重設雙因素驗證')
+    await load()
+  } catch (e) {
+    handle(e)
+  }
+}
+
 async function unlock(u: User) {
   try {
     await systemApi.unlockUser(u.id)
@@ -244,17 +263,28 @@ async function unlock(u: User) {
             row.is_active ? '啟用' : '停用'
           }}</el-tag>
           <el-tag v-if="isLocked(row)" type="danger" class="tag">鎖定</el-tag>
+          <el-tag v-if="row.two_factor_enabled" type="primary" effect="plain" class="tag"
+            >2FA</el-tag
+          >
         </template>
       </el-table-column>
       <el-table-column label="最後登入" width="180">
         <template #default="{ row }">{{ formatDateTime(row.last_login_at) }}</template>
       </el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="200" fixed="right">
+      <el-table-column v-if="canWrite" label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <template v-if="!row.is_superadmin || auth.user?.is_superadmin">
             <el-button link type="primary" @click="openEdit(row)">編輯</el-button>
             <el-button link type="primary" @click="resetPassword(row)">重設密碼</el-button>
             <el-button v-if="isLocked(row)" link type="danger" @click="unlock(row)">解鎖</el-button>
+            <el-button
+              v-if="row.two_factor_enabled"
+              link
+              type="danger"
+              @click="resetTwoFactor(row)"
+            >
+              重設 2FA
+            </el-button>
           </template>
         </template>
       </el-table-column>

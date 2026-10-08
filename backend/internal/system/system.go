@@ -41,6 +41,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/users", auth.Require(permission.UserWrite), m.createUser)
 	g.PUT("/users/:id", auth.Require(permission.UserWrite), m.updateUser)
 	g.POST("/users/:id/reset-password", auth.Require(permission.UserWrite), m.resetPassword)
+	g.POST("/users/:id/reset-2fa", auth.Require(permission.UserWrite), m.resetTwoFactor)
 	g.POST("/users/:id/unlock", auth.Require(permission.UserWrite), m.unlockUser)
 
 	g.GET("/roles", auth.Require(permission.RoleRead, permission.UserRead, permission.UserWrite), m.listRoles)

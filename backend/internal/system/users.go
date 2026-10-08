@@ -41,6 +41,7 @@ type userDTO struct {
 	IsSuperadmin       bool       `json:"is_superadmin"`
 	IsActive           bool       `json:"is_active"`
 	MustChangePassword bool       `json:"must_change_password"`
+	TwoFactorEnabled   bool       `json:"two_factor_enabled"`
 	LockedUntil        *time.Time `json:"locked_until"`
 	LastLoginAt        *time.Time `json:"last_login_at"`
 	Roles              []roleRef  `json:"roles"`
@@ -61,7 +62,7 @@ func toUserDTO(u db.User, roleIDs []int64) userDTO {
 	}
 	return userDTO{
 		ID: u.ID, Username: u.Username, Name: u.Name, Email: u.Email, DepartmentID: u.DepartmentID,
-		IsSuperadmin: u.IsSuperadmin, IsActive: u.IsActive, MustChangePassword: u.MustChangePassword,
+		IsSuperadmin: u.IsSuperadmin, IsActive: u.IsActive, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TotpEnabled,
 		LockedUntil: locked, LastLoginAt: u.LastLoginAt, Roles: []roleRef{}, RoleIDs: roleIDs,
 		Version: u.Version, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 	}
@@ -476,4 +477,45 @@ func (m *Module) listUserOptions(c *gin.Context) {
 		out[i] = userOptionDTO{ID: r.ID, Username: r.Username, Name: r.Name, DepartmentID: r.DepartmentID}
 	}
 	response.OK(c, out)
+}
+
+// resetTwoFactor 管理員重設某位使用者的雙因素驗證(手機遺失又沒有備援碼時):停用並刪除備援碼,既有登入全部失效。
+// 公司要求雙因素驗證時,該使用者下次登入須重新設定。
+func (m *Module) resetTwoFactor(c *gin.Context) {
+	id, err := httpx.ParamID(c, "id")
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	ctx := c.Request.Context()
+	a := actor(c)
+	err = m.store.InTx(ctx, func(q *db.Queries) error {
+		u, err := m.loadTargetUser(ctx, q, a, id)
+		if err != nil {
+			return err
+		}
+		if !u.TotpEnabled {
+			return apperr.Conflict("AUTH-011", "這位使用者沒有啟用雙因素驗證")
+		}
+		if err := q.DisableTOTP(ctx, id); err != nil {
+			return err
+		}
+		if err := q.DeleteRecoveryCodes(ctx, id); err != nil {
+			return err
+		}
+		if err := q.BumpTokenVersion(ctx, id); err != nil {
+			return err
+		}
+		if err := q.RevokeUserRefreshTokens(ctx, id); err != nil {
+			return err
+		}
+		return audit.Record(ctx, q, audit.Entry{
+			Action: "reset_2fa", EntityType: "user", EntityID: &id, Summary: "重設使用者 " + u.Username + " 的雙因素驗證",
+		})
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.NoContent(c)
 }

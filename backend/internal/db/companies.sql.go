@@ -10,7 +10,7 @@ import (
 )
 
 const getCompany = `-- name: GetCompany :one
-SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no FROM companies WHERE id = $1
+SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no, require_2fa FROM companies WHERE id = $1
 `
 
 func (q *Queries) GetCompany(ctx context.Context, id int64) (Company, error) {
@@ -27,12 +27,13 @@ func (q *Queries) GetCompany(ctx context.Context, id int64) (Company, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TaxRegNo,
+		&i.Require2fa,
 	)
 	return i, err
 }
 
 const getCompanyByCode = `-- name: GetCompanyByCode :one
-SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no FROM companies WHERE code = $1
+SELECT id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no, require_2fa FROM companies WHERE code = $1
 `
 
 func (q *Queries) GetCompanyByCode(ctx context.Context, code string) (Company, error) {
@@ -49,13 +50,14 @@ func (q *Queries) GetCompanyByCode(ctx context.Context, code string) (Company, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TaxRegNo,
+		&i.Require2fa,
 	)
 	return i, err
 }
 
 const updateCompany = `-- name: UpdateCompany :one
 UPDATE companies SET name = $1, tax_id = $2, tax_reg_no = $3, version = version + 1
-WHERE id = $4 AND version = $5 RETURNING id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no
+WHERE id = $4 AND version = $5 RETURNING id, code, name, tax_id, currency, is_active, version, created_at, updated_at, tax_reg_no, require_2fa
 `
 
 type UpdateCompanyParams struct {
@@ -86,6 +88,7 @@ func (q *Queries) UpdateCompany(ctx context.Context, arg UpdateCompanyParams) (C
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TaxRegNo,
+		&i.Require2fa,
 	)
 	return i, err
 }

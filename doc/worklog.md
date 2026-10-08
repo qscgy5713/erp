@@ -1,5 +1,16 @@
 # 工作日誌
 
+## 2026-10-08 M15 雙因素驗證 TOTP(第二期)
+- 已 push M14(5ae3e3a)。
+- 設計見 plan D66。**登入改為兩步**:密碼對 → 啟用者拿挑戰憑證 → 驗證碼 / 備援碼 → 才有 Session。
+- 資料:migration 000018 —— `users` 加 `totp_secret_enc`(加密)、`totp_enabled`、`totp_last_step`;`user_recovery_codes`(只存雜湊);`companies.require_2fa`。
+- 後端:`auth/totp.go`(RFC 6238、AES-GCM、備援碼,有單元測試含 **RFC 6238 官方測試向量**)、`auth/service.go`(登入挑戰、`LoginTwoFactor`、啟用 / 停用 / 重新產生備援碼、狀態)、`auth/handler.go`(`/auth/login/2fa`、`/auth/2fa/*`;公司要求時的 API 限制)、`system`(管理員重設 `/users/:id/reset-2fa`、公司政策)、新設定 `TOTP_ENCRYPTION_KEY`(compose 與 `.env.prod.example` 已加)。
+- 前端:登入第二步畫面、個人選單 → 帳號安全(QR Code、手動密鑰、備援碼只顯示一次、停用、重新產生)、使用者管理顯示 2FA 標籤與重設按鈕、公司資料的政策開關;新增套件 `qrcode`(**web 映像需重建**:`docker compose build web`)。
+- 測試:設定與啟用(錯誤碼、未設定先啟用)、密鑰加密存放、登入只回挑戰憑證(無 token、無 cookie)、**挑戰憑證不能當 access token**、重放被擋、過期窗口外的碼被擋、備援碼(大小寫 / 空白 / 只能用一次 / 剩餘數)、**驗證碼錯誤計入鎖定**、改密碼 / 停用使挑戰失效、停用與重新產生須密碼 + 驗證碼、管理員重設與權限、清單與稽核不含密鑰與備援碼、公司政策(未啟用者被擋但能設定、不能停用、重設後再被擋、開啟者自己須先啟用)。**突變測試**:不擋重放、驗證碼錯誤不計入鎖定、挑戰憑證與 access token 同 issuer、密碼對就跳過第二因素,各自都會讓測試失敗。
+- 瀏覽器端到端:建立測試帳號 → 帳號安全頁(QR 與密鑰)→ 輸入驗證碼啟用 → 備援碼視窗 → 登出 → 登入第二步 → 錯誤碼訊息 → 以備援碼(大寫、含空白)登入成功。測試帳號已停用。
+- 驗證中的觀察:第一次載入帳號安全頁時 Vite 要預先打包新增的 qrcode,點「開始設定」要等數秒;之後正常。
+- 已知限制:沒有 SMS / Email / WebAuthn;更換 `TOTP_ENCRYPTION_KEY`(或未獨立設定時更換 JWT_SECRET)會讓已啟用者無法驗證,須管理員逐一重設。
+
 ## 2026-10-08 M14 儲位(第二期)
 - 已 push M13(39429cf)。
 - 設計見 plan D65;沿用批號的做法——**集中在庫存引擎**,各單據只多帶 `bin_code`。

@@ -156,16 +156,17 @@ type BomLine struct {
 }
 
 type Company struct {
-	ID        int64
-	Code      string
-	Name      string
-	TaxID     *string
-	Currency  string
-	IsActive  bool
-	Version   int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	TaxRegNo  string
+	ID         int64
+	Code       string
+	Name       string
+	TaxID      *string
+	Currency   string
+	IsActive   bool
+	Version    int32
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	TaxRegNo   string
+	Require2fa bool
 }
 
 type CostClosing struct {
@@ -814,6 +815,18 @@ type User struct {
 	UpdatedBy          *int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	TotpSecretEnc      []byte
+	TotpEnabled        bool
+	TotpEnabledAt      *time.Time
+	TotpLastStep       int64
+}
+
+type UserRecoveryCode struct {
+	ID        int64
+	UserID    int64
+	CodeHash  []byte
+	UsedAt    *time.Time
+	CreatedAt time.Time
 }
 
 type UserRole struct {

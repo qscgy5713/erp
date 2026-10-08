@@ -17,6 +17,9 @@ const rules: FormRules = {
 }
 const loading = ref(false)
 const error = ref('')
+// 已啟用雙因素驗證的帳號:密碼正確後進入第二步,輸入驗證器 App 的 6 位數(或備援碼)
+const challenge = ref<string | null>(null)
+const code = ref('')
 
 /** 只允許站內相對路徑,避免開放式重新導向 */
 function safeRedirect(v: unknown): string {
@@ -28,16 +31,54 @@ async function submit() {
   loading.value = true
   error.value = ''
   try {
-    await auth.login(form.username, form.password)
-    router.replace(
-      auth.mustChangePassword ? { name: 'change-password' } : safeRedirect(route.query.redirect),
-    )
+    const ch = await auth.login(form.username, form.password)
+    if (ch) {
+      challenge.value = ch
+      return
+    }
+    done()
   } catch (e) {
     error.value = e instanceof ApiRequestError ? e.message : '登入失敗,請稍後再試'
     form.password = ''
   } finally {
     loading.value = false
   }
+}
+function done() {
+  router.replace(
+    auth.mustChangePassword
+      ? { name: 'change-password' }
+      : auth.mustSetup2FA
+        ? { name: 'account-security' }
+        : safeRedirect(route.query.redirect),
+  )
+}
+
+async function submitCode() {
+  if (!challenge.value || !code.value.trim()) return
+  loading.value = true
+  error.value = ''
+  try {
+    await auth.loginTwoFactor(challenge.value, code.value)
+    done()
+  } catch (e) {
+    error.value = e instanceof ApiRequestError ? e.message : '驗證失敗,請稍後再試'
+    code.value = ''
+    // 挑戰逾時(5 分鐘)或帳號被鎖定:回到第一步重新開始
+    if (e instanceof ApiRequestError && (e.code === 'AUTH-009' || e.status === 423)) {
+      challenge.value = null
+      form.password = ''
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+function backToPassword() {
+  challenge.value = null
+  code.value = ''
+  error.value = ''
+  form.password = ''
 }
 </script>
 
@@ -46,7 +87,27 @@ async function submit() {
     <el-card class="login-card">
       <h1>ERP 登入</h1>
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="mb" />
+      <el-form v-if="challenge" label-position="top" @submit.prevent="submitCode">
+        <p class="hint">
+          請輸入驗證器 App 目前顯示的 6 位數驗證碼。手機不在身邊時,可改輸入一組備援碼。
+        </p>
+        <el-form-item label="驗證碼或備援碼">
+          <el-input
+            v-model="code"
+            autocomplete="one-time-code"
+            inputmode="text"
+            maxlength="20"
+            autofocus
+            placeholder="123456"
+          />
+        </el-form-item>
+        <el-button type="primary" native-type="submit" :loading="loading" class="full"
+          >驗證並登入</el-button
+        >
+        <el-button link class="back" @click="backToPassword">← 重新輸入帳號密碼</el-button>
+      </el-form>
       <el-form
+        v-else
         ref="formRef"
         :model="form"
         :rules="rules"
@@ -96,5 +157,13 @@ h1 {
 }
 .full {
   width: 100%;
+}
+.hint {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.back {
+  margin-top: 8px;
 }
 </style>

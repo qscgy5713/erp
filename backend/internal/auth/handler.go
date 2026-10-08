@@ -37,12 +37,18 @@ func NewHandler(svc *Service, tokens *TokenIssuer, secureCookie bool, loginLimit
 func (h *Handler) Register(public, protected *gin.RouterGroup) {
 	g := public.Group("/auth")
 	g.POST("/login", h.loginLimit, h.login)
+	g.POST("/login/2fa", h.loginLimit, h.loginTwoFactor)
 	g.POST("/refresh", h.refreshLimit, h.refresh)
 	g.POST("/logout", h.logout)
 
 	p := protected.Group("/auth")
 	p.GET("/me", h.me)
 	p.POST("/change-password", h.changePassword)
+	p.GET("/2fa", h.twoFactorStatus)
+	p.POST("/2fa/setup", h.twoFactorSetup)
+	p.POST("/2fa/enable", h.twoFactorEnable)
+	p.POST("/2fa/disable", h.twoFactorDisable)
+	p.POST("/2fa/recovery-codes", h.twoFactorRecoveryCodes)
 }
 
 type loginRequest struct {
@@ -65,6 +71,8 @@ type meResponse struct {
 	DepartmentID       *int64   `json:"department_id"`
 	IsSuperadmin       bool     `json:"is_superadmin"`
 	MustChangePassword bool     `json:"must_change_password"`
+	MustSetup2FA       bool     `json:"must_setup_2fa"`
+	TwoFactorEnabled   bool     `json:"two_factor_enabled"`
 	DataScope          string   `json:"data_scope"`
 	Permissions        []string `json:"permissions"`
 }
@@ -75,12 +83,103 @@ func (h *Handler) login(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	sess, err := h.svc.Login(c.Request.Context(), strings.TrimSpace(req.Username), req.Password)
+	res, err := h.svc.Login(c.Request.Context(), strings.TrimSpace(req.Username), req.Password)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	if res.Challenge != "" { // 已啟用雙因素驗證:還不發 Session,等驗證碼
+		response.OK(c, gin.H{"two_factor_required": true, "challenge": res.Challenge})
+		return
+	}
+	h.respondSession(c, res.Session)
+}
+
+type loginTwoFactorRequest struct {
+	Challenge string `json:"challenge" binding:"required,max=2000"`
+	Code      string `json:"code" binding:"required,max=64"`
+}
+
+func (h *Handler) loginTwoFactor(c *gin.Context) {
+	var req loginTwoFactorRequest
+	if err := httpx.BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	sess, err := h.svc.LoginTwoFactor(c.Request.Context(), req.Challenge, req.Code)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 	h.respondSession(c, sess)
+}
+
+func (h *Handler) twoFactorStatus(c *gin.Context) {
+	st, err := h.svc.TwoFactorStatus(c.Request.Context(), authctx.ActorFrom(c.Request.Context()).UserID)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, st)
+}
+
+func (h *Handler) twoFactorSetup(c *gin.Context) {
+	out, err := h.svc.SetupTwoFactor(c.Request.Context(), authctx.ActorFrom(c.Request.Context()).UserID)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, out)
+}
+
+type codeRequest struct {
+	Code string `json:"code" binding:"required,max=64"`
+}
+
+func (h *Handler) twoFactorEnable(c *gin.Context) {
+	var req codeRequest
+	if err := httpx.BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	codes, err := h.svc.EnableTwoFactor(c.Request.Context(), authctx.ActorFrom(c.Request.Context()).UserID, req.Code)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, gin.H{"recovery_codes": codes})
+}
+
+type confirmRequest struct {
+	Password string `json:"password" binding:"required,max=200"`
+	Code     string `json:"code" binding:"required,max=64"`
+}
+
+func (h *Handler) twoFactorDisable(c *gin.Context) {
+	var req confirmRequest
+	if err := httpx.BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	if err := h.svc.DisableTwoFactor(c.Request.Context(), authctx.ActorFrom(c.Request.Context()).UserID, req.Password, req.Code); err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.NoContent(c)
+}
+
+func (h *Handler) twoFactorRecoveryCodes(c *gin.Context) {
+	var req confirmRequest
+	if err := httpx.BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	codes, err := h.svc.RegenerateRecoveryCodes(c.Request.Context(), authctx.ActorFrom(c.Request.Context()).UserID, req.Password, req.Code)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, gin.H{"recovery_codes": codes})
 }
 
 func (h *Handler) refresh(c *gin.Context) {
@@ -111,7 +210,9 @@ func (h *Handler) me(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, toMe(a, u.Email))
+	me := toMe(a, u.Email)
+	me.TwoFactorEnabled = u.TotpEnabled
+	response.OK(c, me)
 }
 
 type changePasswordRequest struct {
@@ -150,7 +251,9 @@ func (h *Handler) respondSession(c *gin.Context, sess Session) {
 		Secure:   h.secureCookie,
 		SameSite: http.SameSiteStrictMode, // 跨站請求不會帶 cookie,防 CSRF
 	})
-	response.OK(c, sessionResponse{AccessToken: sess.AccessToken, ExpiresAt: sess.AccessExpiresAt, User: toMe(a, u.Email)})
+	me := toMe(a, u.Email)
+	me.TwoFactorEnabled = u.TotpEnabled
+	response.OK(c, sessionResponse{AccessToken: sess.AccessToken, ExpiresAt: sess.AccessExpiresAt, User: me})
 }
 
 func (h *Handler) clearCookie(c *gin.Context) {
@@ -169,7 +272,7 @@ func toMe(a *authctx.Actor, email *string) meResponse {
 	return meResponse{
 		ID: a.UserID, CompanyID: a.CompanyID, Username: a.Username, Name: a.Name, Email: email,
 		DepartmentID: a.DepartmentID, IsSuperadmin: a.IsSuperadmin,
-		MustChangePassword: a.MustChangePassword, DataScope: a.Scope(), Permissions: perms,
+		MustChangePassword: a.MustChangePassword, MustSetup2FA: a.MustSetup2FA, DataScope: a.Scope(), Permissions: perms,
 	}
 }
 
@@ -178,6 +281,14 @@ func toMe(a *authctx.Actor, email *string) meResponse {
 func (h *Handler) Authenticate() gin.HandlerFunc {
 	allowWhenMustChange := map[string]bool{
 		"/api/v1/auth/me":              true,
+		"/api/v1/auth/change-password": true,
+	}
+	// 公司要求雙因素驗證、但自己還沒啟用:只能做設定雙因素驗證需要的事
+	allowWhenMustSetup2FA := map[string]bool{
+		"/api/v1/auth/me":              true,
+		"/api/v1/auth/2fa":             true,
+		"/api/v1/auth/2fa/setup":       true,
+		"/api/v1/auth/2fa/enable":      true,
 		"/api/v1/auth/change-password": true,
 	}
 	return func(c *gin.Context) {
@@ -198,6 +309,10 @@ func (h *Handler) Authenticate() gin.HandlerFunc {
 		}
 		if actor.MustChangePassword && !allowWhenMustChange[c.FullPath()] {
 			response.Error(c, ErrMustChangePassword)
+			return
+		}
+		if actor.MustSetup2FA && !allowWhenMustSetup2FA[c.FullPath()] {
+			response.Error(c, ErrMustSetup2FA)
 			return
 		}
 		c.Request = c.Request.WithContext(authctx.WithActor(c.Request.Context(), actor))

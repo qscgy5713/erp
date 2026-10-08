@@ -19,11 +19,13 @@ type companyDTO struct {
 	Name     string `json:"name"`
 	TaxID    string `json:"tax_id"`     // 統一編號(8 碼)
 	TaxRegNo string `json:"tax_reg_no"` // 稅籍編號(9 碼,營業稅媒體申報檔用)
-	Version  int32  `json:"version"`
+	// Require2FA 要求所有使用者啟用雙因素驗證:未啟用者登入後只能先設定
+	Require2FA bool  `json:"require_2fa"`
+	Version    int32 `json:"version"`
 }
 
 func toCompanyDTO(c db.Company) companyDTO {
-	d := companyDTO{Name: c.Name, TaxRegNo: c.TaxRegNo, Version: c.Version}
+	d := companyDTO{Name: c.Name, TaxRegNo: c.TaxRegNo, Require2FA: c.Require2fa, Version: c.Version}
 	if c.TaxID != nil {
 		d.TaxID = strings.TrimSpace(*c.TaxID)
 	}
@@ -40,10 +42,11 @@ func (m *Module) getCompany(c *gin.Context) {
 }
 
 type companyInput struct {
-	Name     string `json:"name" binding:"required,max=100"`
-	TaxID    string `json:"tax_id"`
-	TaxRegNo string `json:"tax_reg_no"`
-	Version  int32  `json:"version" binding:"required"`
+	Name       string `json:"name" binding:"required,max=100"`
+	TaxID      string `json:"tax_id"`
+	TaxRegNo   string `json:"tax_reg_no"`
+	Require2FA bool   `json:"require_2fa"`
+	Version    int32  `json:"version" binding:"required"`
 }
 
 var taxRegNoRe = regexp.MustCompile(`^[A-Z0-9]{9}$`)
@@ -87,6 +90,22 @@ func (m *Module) updateCompany(c *gin.Context) {
 		}
 		if err != nil {
 			return err
+		}
+		if in.Require2FA && !before.Require2fa {
+			// 避免把自己鎖在系統管理之外:開啟前,操作的人自己必須已啟用雙因素驗證
+			me, err := q.GetUserByID(ctx, a.UserID)
+			if err != nil {
+				return err
+			}
+			if !me.TotpEnabled {
+				return apperr.Conflict("SYS-022", "請先為自己啟用雙因素驗證(個人設定 → 帳號安全),再開啟公司政策")
+			}
+		}
+		if in.Require2FA != before.Require2fa {
+			if err := q.SetCompanyRequire2FA(ctx, db.SetCompanyRequire2FAParams{ID: a.CompanyID, Require: in.Require2FA}); err != nil {
+				return err
+			}
+			co.Require2fa = in.Require2FA
 		}
 		out = toCompanyDTO(co)
 		id := co.ID

@@ -19,7 +19,9 @@ type Config struct {
 	// X-Forwarded-For 才會被採用,避免使用者偽造來源 IP。
 	TrustedProxies []string
 
-	JWTSecret       []byte
+	JWTSecret []byte
+	// TOTPKey 雙因素驗證密鑰的加密金鑰;未設定時由 JWT_SECRET 衍生(此時更換 JWT_SECRET 會讓已啟用者無法驗證,需重設)
+	TOTPKey         []byte
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 
@@ -42,6 +44,7 @@ func Load() (Config, error) {
 		ShutdownTimeout: 10 * time.Second,
 		TrustedProxies:  splitList(os.Getenv("TRUSTED_PROXIES")),
 		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
+		TOTPKey:         []byte(os.Getenv("TOTP_ENCRYPTION_KEY")),
 	}
 
 	var errs []error
@@ -50,6 +53,9 @@ func Load() (Config, error) {
 	}
 	if len(cfg.JWTSecret) < 32 {
 		errs = append(errs, errors.New("JWT_SECRET 至少 32 個字元"))
+	}
+	if len(cfg.TOTPKey) > 0 && len(cfg.TOTPKey) < 32 {
+		errs = append(errs, errors.New("TOTP_ENCRYPTION_KEY 至少 32 個字元(不設定則由 JWT_SECRET 衍生)"))
 	}
 	if cfg.IsProduction() && strings.Contains(string(cfg.JWTSecret), devSecretMarker) {
 		errs = append(errs, errors.New("正式環境不可使用開發用 JWT_SECRET"))

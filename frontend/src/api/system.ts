@@ -44,6 +44,7 @@ export interface User {
   is_superadmin: boolean
   is_active: boolean
   must_change_password: boolean
+  two_factor_enabled: boolean
   locked_until: string | null
   last_login_at: string | null
   roles: RoleRef[]
@@ -150,6 +151,8 @@ export interface Company {
   name: string
   tax_id: string
   tax_reg_no: string
+  /** 要求所有使用者啟用雙因素驗證 */
+  require_2fa: boolean
   version: number
 }
 
@@ -168,6 +171,7 @@ export const systemApi = {
   user: (id: number) => http.get<User>(`/system/users/${id}`),
   createUser: (input: CreateUserInput) => http.post<User>('/system/users', input),
   updateUser: (id: number, input: UpdateUserInput) => http.put<User>(`/system/users/${id}`, input),
+  resetTwoFactor: (id: number) => http.post<void>(`/system/users/${id}/reset-2fa`),
   resetPassword: (id: number, password: string) =>
     http.post<void>(`/system/users/${id}/reset-password`, { password }),
   unlockUser: (id: number) => http.post<void>(`/system/users/${id}/unlock`),

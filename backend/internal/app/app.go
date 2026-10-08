@@ -32,7 +32,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	limiter := func(perMinute int) gin.HandlerFunc {
 		return ratelimit.Middleware(ratelimit.New(perMinute, max(perMinute/2, 1)))
 	}
-	authHandler := auth.NewHandler(auth.NewService(store, tokens, cfg.RefreshTokenTTL), tokens,
+	authHandler := auth.NewHandler(auth.NewService(store, tokens, cfg.RefreshTokenTTL).WithTOTPKey(cfg.TOTPKey, cfg.JWTSecret), tokens,
 		cfg.IsProduction(), limiter(cfg.LoginRateLimitPerMinute), limiter(cfg.RefreshRateLimitPerMinute))
 	apiLimit := limiter(cfg.RateLimitPerMinute)
 	systemModule := system.New(store)

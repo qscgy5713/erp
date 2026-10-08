@@ -12,6 +12,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => user.value !== null)
   const mustChangePassword = computed(() => user.value?.must_change_password ?? false)
+  const mustSetup2FA = computed(() => user.value?.must_setup_2fa ?? false)
 
   function can(perms: string | string[] | undefined): boolean {
     if (!perms || (Array.isArray(perms) && perms.length === 0)) return true
@@ -58,9 +59,23 @@ export const useAuthStore = defineStore('auth', () => {
     initialized.value = true
   }
 
-  async function login(username: string, password: string) {
-    apply(await authApi.login(username, password))
+  /** 回傳挑戰憑證表示還需要雙因素驗證碼(呼叫 loginTwoFactor 完成);否則已登入,回傳 null */
+  async function login(username: string, password: string): Promise<string | null> {
+    const res = await authApi.login(username, password)
+    if ('two_factor_required' in res) return res.challenge
+    apply(res)
     initialized.value = true
+    return null
+  }
+
+  async function loginTwoFactor(challenge: string, code: string) {
+    apply(await authApi.loginTwoFactor(challenge, code))
+    initialized.value = true
+  }
+
+  /** 設定 / 停用雙因素驗證後,重新載入自己的狀態(me) */
+  async function reloadMe() {
+    user.value = await authApi.me()
   }
 
   async function logout() {
@@ -81,9 +96,12 @@ export const useAuthStore = defineStore('auth', () => {
     initialized,
     isLoggedIn,
     mustChangePassword,
+    mustSetup2FA,
     can,
     init,
     login,
+    loginTwoFactor,
+    reloadMe,
     logout,
     refresh,
     changePassword,

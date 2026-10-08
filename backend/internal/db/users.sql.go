@@ -60,7 +60,7 @@ INSERT INTO users (company_id, department_id, username, name, email, password_ha
                    is_superadmin, must_change_password, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $9)
-RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at
+RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step
 `
 
 type CreateUserParams struct {
@@ -109,6 +109,10 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
@@ -123,7 +127,7 @@ func (q *Queries) DeleteUserRoles(ctx context.Context, userID int64) error {
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at FROM users WHERE id = $1 AND company_id = $2
+SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step FROM users WHERE id = $1 AND company_id = $2
 `
 
 type GetUserParams struct {
@@ -155,12 +159,16 @@ func (q *Queries) GetUser(ctx context.Context, arg GetUserParams) (User, error) 
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at FROM users WHERE id = $1
+SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -187,12 +195,16 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at FROM users WHERE lower(username) = lower($1)
+SELECT id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step FROM users WHERE lower(username) = lower($1)
 `
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
@@ -219,6 +231,10 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
@@ -356,7 +372,7 @@ func (q *Queries) ListUserRoleIDs(ctx context.Context, userID int64) ([]int64, e
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT u.id, u.company_id, u.department_id, u.username, u.name, u.email, u.password_hash, u.is_superadmin, u.is_active, u.must_change_password, u.failed_login_count, u.locked_until, u.last_login_at, u.password_changed_at, u.token_version, u.version, u.created_by, u.updated_by, u.created_at, u.updated_at, d.name AS department_name
+SELECT u.id, u.company_id, u.department_id, u.username, u.name, u.email, u.password_hash, u.is_superadmin, u.is_active, u.must_change_password, u.failed_login_count, u.locked_until, u.last_login_at, u.password_changed_at, u.token_version, u.version, u.created_by, u.updated_by, u.created_at, u.updated_at, u.totp_secret_enc, u.totp_enabled, u.totp_enabled_at, u.totp_last_step, d.name AS department_name
 FROM users u
 LEFT JOIN departments d ON d.id = u.department_id
 WHERE u.company_id = $1
@@ -399,6 +415,10 @@ type ListUsersRow struct {
 	UpdatedBy          *int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	TotpSecretEnc      []byte
+	TotpEnabled        bool
+	TotpEnabledAt      *time.Time
+	TotpLastStep       int64
 	DepartmentName     *string
 }
 
@@ -439,6 +459,10 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 			&i.UpdatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TotpSecretEnc,
+			&i.TotpEnabled,
+			&i.TotpEnabledAt,
+			&i.TotpLastStep,
 			&i.DepartmentName,
 		); err != nil {
 			return nil, err
@@ -503,7 +527,7 @@ SET password_hash        = $1,
     version              = version + 1,
     updated_by           = $3
 WHERE id = $4
-RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at
+RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step
 `
 
 type SetPasswordParams struct {
@@ -542,6 +566,10 @@ func (q *Queries) SetPassword(ctx context.Context, arg SetPasswordParams) (User,
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
@@ -574,7 +602,7 @@ SET department_id = $1,
     version       = version + 1,
     updated_by    = $5
 WHERE id = $6 AND company_id = $7 AND version = $8
-RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at
+RETURNING id, company_id, department_id, username, name, email, password_hash, is_superadmin, is_active, must_change_password, failed_login_count, locked_until, last_login_at, password_changed_at, token_version, version, created_by, updated_by, created_at, updated_at, totp_secret_enc, totp_enabled, totp_enabled_at, totp_last_step
 `
 
 type UpdateUserParams struct {
@@ -622,6 +650,10 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabled,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }

@@ -32,6 +32,8 @@ type Actor struct {
 	Permissions  map[string]struct{}
 	// MustChangePassword 為 true 時只能呼叫改密碼等少數 API
 	MustChangePassword bool
+	// MustSetup2FA 公司要求雙因素驗證、但此使用者尚未啟用:只能存取設定雙因素驗證所需的少數 API
+	MustSetup2FA bool
 }
 
 // Can 判斷是否具備權限;超級管理員擁有全部權限。

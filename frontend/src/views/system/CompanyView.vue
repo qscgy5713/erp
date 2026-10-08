@@ -12,7 +12,7 @@ const { handle, fieldErrors, reset } = useApiError()
 
 const loading = ref(false)
 const saving = ref(false)
-const form = reactive({ name: '', tax_id: '', tax_reg_no: '', version: 0 })
+const form = reactive({ name: '', tax_id: '', tax_reg_no: '', require_2fa: false, version: 0 })
 
 async function load() {
   loading.value = true
@@ -57,9 +57,23 @@ onMounted(load)
           placeholder="9 碼英數字(營業稅申報書上的稅籍編號)"
         />
       </el-form-item>
+      <el-form-item label="雙因素驗證" :error="fieldErrors.require_2fa">
+        <el-switch v-model="form.require_2fa" />
+        <span class="hint"
+          >開啟後,所有使用者登入後須先設定雙因素驗證才能使用系統;須先為自己啟用</span
+        >
+      </el-form-item>
       <el-form-item v-if="canWrite">
         <el-button type="primary" :loading="saving" @click="save">儲存</el-button>
       </el-form-item>
     </el-form>
   </el-card>
 </template>
+
+<style scoped>
+.hint {
+  margin-left: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+</style>
