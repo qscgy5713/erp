@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/auth"
 	"erp/internal/db"
 	"erp/internal/gl"
@@ -45,6 +46,8 @@ type sideCfg struct {
 	write     string
 	approve   string
 	post      string
+
+	approvalType string // 簽核規則的單據類型
 }
 
 var sides = map[string]sideCfg{
@@ -52,11 +55,13 @@ var sides = map[string]sideCfg{
 		side: SideReceipt, label: "收款單", numbering: "receipt",
 		read:  []string{permission.CollectionRead, permission.CollectionWrite, permission.CollectionApprove, permission.CollectionPost},
 		write: permission.CollectionWrite, approve: permission.CollectionApprove, post: permission.CollectionPost,
+		approvalType: approval.Collection,
 	},
 	SidePayment: {
 		side: SidePayment, label: "付款單", numbering: "payment",
 		read:  []string{permission.PaymentRead, permission.PaymentWrite, permission.PaymentApprove, permission.PaymentPost},
 		write: permission.PaymentWrite, approve: permission.PaymentApprove, post: permission.PaymentPost,
+		approvalType: approval.Payment,
 	},
 }
 
@@ -616,6 +621,22 @@ func (m *Module) settlementAction(cfg sideCfg) gin.HandlerFunc {
 			if err != nil {
 				return err
 			}
+			amount := decimal.Zero
+			if action == docstate.Submit { // 只有送審時才需要金額(依規則快照簽核流程)
+				if amount, err = baseAmountOf(ctx, q, a.CompanyID, cur); err != nil {
+					return err
+				}
+			}
+			if partial, msg, err := approval.Intercept(ctx, q, a, cfg.approvalType, id, action, amount); err != nil {
+				return err
+			} else if partial {
+				if dto, err = loadSettlement(ctx, q, a, cfg, id); err != nil {
+					return err
+				}
+				return audit.Record(ctx, q, audit.Entry{
+					Action: "approve_step", EntityType: "settlement", EntityID: &id, Summary: msg + " " + cfg.label + " " + cur.DocNo,
+				})
+			}
 			if err := applySettlementAction(ctx, q, a, cfg, cur, doc, action); err != nil {
 				return err
 			}
@@ -640,6 +661,15 @@ func (m *Module) settlementAction(cfg sideCfg) gin.HandlerFunc {
 		}
 		response.OK(c, dto)
 	}
+}
+
+// baseAmountOf 單據金額換算為本位幣(依單據日期的匯率),供簽核規則的金額門檻使用。
+func baseAmountOf(ctx context.Context, q *db.Queries, companyID int64, cur db.Settlement) (decimal.Decimal, error) {
+	rate, err := masterdata.RateOn(ctx, q, companyID, cur.Currency, cur.DocDate)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return cur.Amount.Mul(rate), nil
 }
 
 // addPaid 依沖帳明細更新應收 / 應付的已沖金額(sign 為 +1 過帳、-1 反過帳)。

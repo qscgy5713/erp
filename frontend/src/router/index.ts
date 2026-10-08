@@ -347,6 +347,11 @@ const router = createRouter({
       meta: { title: '單號規則', perm: ['system.docno.read', 'system.docno.write'] },
     },
     {
+      path: '/system/approval-rules',
+      component: () => import('@/views/system/ApprovalRulesView.vue'),
+      meta: { title: '簽核規則', perm: ['system.approval.read'] },
+    },
+    {
       path: '/system/audit-logs',
       component: () => import('@/views/system/AuditLogsView.vue'),
       meta: { title: '稽核日誌', perm: ['system.audit.read'] },

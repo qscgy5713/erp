@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"erp/internal/approval"
 	"erp/internal/auth"
 	"erp/internal/costing"
 	"erp/internal/dashboard"
@@ -43,6 +44,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	costingModule := costing.New(store)
 	importsModule := imports.New(store)
 	dashboardModule := dashboard.New(store)
+	approvalModule := approval.New(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
 		DB:             pool,
@@ -62,6 +64,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 			costingModule.Register(protected)
 			importsModule.Register(protected)
 			dashboardModule.Register(protected)
+			approvalModule.Register(protected)
 		},
 	})
 }

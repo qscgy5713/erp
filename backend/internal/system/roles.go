@@ -274,6 +274,11 @@ func (m *Module) deleteRole(c *gin.Context) {
 		if n > 0 {
 			return errRoleInUse
 		}
+		if used, err := q.RoleCountInApprovalRules(ctx, id); err != nil {
+			return err
+		} else if used > 0 {
+			return apperr.Conflict("SYS-021", "此角色被簽核規則使用,請先調整簽核規則")
+		}
 		if _, err := q.DeleteRole(ctx, db.DeleteRoleParams{ID: id, CompanyID: a.CompanyID}); err != nil {
 			return err
 		}

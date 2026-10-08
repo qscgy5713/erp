@@ -14,6 +14,8 @@ const (
 	DocNumberRead   = "system.docno.read"
 	DocNumberWrite  = "system.docno.write"
 	ImportRun       = "system.import.run" // 資料匯入(主檔、期初餘額)
+	ApprovalRead    = "system.approval.read"
+	ApprovalWrite   = "system.approval.write" // 簽核規則(誰在多大金額要幾層核准)
 
 	// 基本資料
 	ItemRead       = "masterdata.item.read" // 料品、分類、單位
@@ -93,6 +95,7 @@ var Groups = []Group{
 	{"系統管理", "角色權限", []Permission{{RoleRead, "檢視"}, {RoleWrite, "新增/修改/刪除"}}},
 	{"系統管理", "稽核日誌", []Permission{{AuditRead, "檢視"}}},
 	{"系統管理", "單號規則", []Permission{{DocNumberRead, "檢視"}, {DocNumberWrite, "修改"}}},
+	{"系統管理", "簽核規則", []Permission{{ApprovalRead, "檢視"}, {ApprovalWrite, "新增/修改/刪除"}}},
 	{"系統管理", "資料匯入", []Permission{{ImportRun, "匯入 Excel(主檔、期初餘額)"}}},
 	{"基本資料", "料品(含分類、單位)", []Permission{{ItemRead, "檢視"}, {ItemWrite, "新增/修改"}}},
 	{"基本資料", "倉庫", []Permission{{WarehouseRead, "檢視"}, {WarehouseWrite, "新增/修改"}}},

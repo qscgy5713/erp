@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/db"
 	"erp/internal/finance"
 	"erp/internal/gl"
@@ -589,6 +590,16 @@ func (m *Module) receiptAction(c *gin.Context) {
 		next, err := trade.PostingTransition(docstate.Status(cur.Status), action)
 		if err != nil {
 			return err
+		}
+		if partial, msg, err := approval.Intercept(ctx, q, a, approval.GoodsReceipt, id, action, cur.BaseTotal); err != nil {
+			return err
+		} else if partial {
+			if dto, err = loadReceipt(ctx, q, a.CompanyID, id); err != nil {
+				return err
+			}
+			return audit.Record(ctx, q, audit.Entry{
+				Action: "approve_step", EntityType: "goods_receipt", EntityID: &id, Summary: msg + " 進貨單 " + cur.DocNo,
+			})
 		}
 		doc, err := loadReceipt(ctx, q, a.CompanyID, id)
 		if err != nil {

@@ -85,6 +85,24 @@ type AccountsReceivable struct {
 	ImportBatchID *int64
 }
 
+type ApprovalRule struct {
+	ID        int64
+	CompanyID int64
+	DocType   string
+	MinAmount decimal.Decimal
+	CreatedBy *int64
+	UpdatedBy *int64
+	Version   int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ApprovalRuleStep struct {
+	RuleID int64
+	StepNo int32
+	RoleID int64
+}
+
 type AuditLog struct {
 	ID         int64
 	CompanyID  int64
@@ -247,6 +265,18 @@ type DocNumberRule struct {
 	UpdatedBy  *int64
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+type DocumentApproval struct {
+	ID         int64
+	CompanyID  int64
+	DocType    string
+	DocID      int64
+	StepNo     int32
+	RoleID     *int64
+	RoleName   string
+	ApproverID *int64
+	ApprovedAt *time.Time
 }
 
 type ExchangeRate struct {

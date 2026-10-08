@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/db"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
@@ -489,6 +490,16 @@ func (m *Module) orderAction(c *gin.Context) {
 		next, err := trade.OrderTransition(docstate.Status(cur.Status), action)
 		if err != nil {
 			return err
+		}
+		if partial, msg, err := approval.Intercept(ctx, q, a, approval.SalesOrder, id, action, cur.TotalAmount.Mul(cur.ExchangeRate)); err != nil {
+			return err
+		} else if partial {
+			if dto, err = loadOrder(ctx, q, a, id); err != nil {
+				return err
+			}
+			return audit.Record(ctx, q, audit.Entry{
+				Action: "approve_step", EntityType: "sales_order", EntityID: &id, Summary: msg + " 訂單 " + cur.DocNo,
+			})
 		}
 		switch action {
 		case docstate.Submit:

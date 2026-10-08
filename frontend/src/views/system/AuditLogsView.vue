@@ -22,6 +22,9 @@ const actionLabels: Record<string, string> = {
   submit: '送審',
   reject: '退回',
   approve: '核准',
+  approve_step: '分層核准',
+  year_end: '年度結帳',
+  undo_year_end: '撤銷年度結帳',
   unapprove: '取消核准',
   post: '過帳',
   unpost: '反過帳',
@@ -43,6 +46,8 @@ const entityLabels: Record<string, string> = {
   tax_type: '稅別',
   payment_term: '付款條件',
   stock_document: '庫存單據',
+  approval_rule: '簽核規則',
+  accounting_year: '會計年度',
 }
 
 const query = reactive({
