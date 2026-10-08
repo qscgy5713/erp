@@ -66,6 +66,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/reports/journal", report, m.journal)
 	g.GET("/reports/income-statement", report, m.incomeStatement)
 	g.GET("/reports/balance-sheet", report, m.balanceSheet)
+	g.GET("/reports/vat401", report, m.vat401)
 
 	// 年度結帳:與期間關帳同屬結帳權限
 	g.GET("/year-end", auth.Require(permission.PeriodRead, permission.PeriodClose), m.listYears)

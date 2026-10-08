@@ -67,6 +67,53 @@ export interface Statement {
   lines: StmtLine[]
 }
 
+export interface VatSummary {
+  taxable_triplicate: Decimal
+  taxable_duplicate: Decimal
+  taxable_sales: Decimal
+  zero_sales: Decimal
+  exempt_sales: Decimal
+  total_sales: Decimal
+  output_tax: Decimal
+  deductible_goods: Decimal
+  deductible_expense: Decimal
+  input_tax: Decimal
+  non_tax_purchase: Decimal
+  net_tax: Decimal
+}
+
+export interface VatDetail {
+  doc_no: string
+  doc_type: string
+  date: string
+  invoice_no: string
+  tax_kind: 'taxable' | 'zero' | 'exempt'
+  partner: string
+  partner_tax_id: string
+  untaxed: Decimal
+  tax: Decimal
+}
+
+export interface VatIssue {
+  kind: 'sales_no_invoice' | 'purchase_no_invoice'
+  doc_no: string
+  date: string
+  partner: string
+  untaxed: Decimal
+  tax: Decimal
+}
+
+export interface VatReport {
+  year: number
+  period: number
+  from: string
+  to: string
+  summary: VatSummary
+  issues: VatIssue[]
+  sales: VatDetail[]
+  purchases: VatDetail[]
+}
+
 export interface YearEnd {
   year: number
   status: 'closed' | 'open' | 'not_ended'
@@ -251,6 +298,13 @@ export const glApi = {
     params: Record<string, string | boolean>,
     name: string,
   ) => download(`/gl/reports/${kind}${qs({ ...params, format: 'xlsx' })}`, name),
+  vat401: (year: number, period: number) =>
+    http.get<VatReport>(`/gl/reports/vat401${qs({ year, period })}`),
+  exportVat401: (year: number, period: number) =>
+    download(
+      `/gl/reports/vat401${qs({ year, period, format: 'xlsx' })}`,
+      `營業稅401_${year}年第${period}期.xlsx`,
+    ),
   years: () => http.get<YearEnd[]>('/gl/year-end'),
   yearEnd: (year: number, action: 'close' | 'undo') =>
     http.post<unknown>(`/gl/year-end/${year}/${action}`),

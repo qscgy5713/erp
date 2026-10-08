@@ -115,6 +115,7 @@ export const navigation: NavItem[] = [
       { title: '傳票', path: '/gl/vouchers', perm: VOUCHER_ANY },
       { title: '會計報表', path: '/gl/reports', perm: ['gl.report.read'] },
       { title: '財務報表', path: '/gl/statements', perm: ['gl.report.read'] },
+      { title: '營業稅申報', path: '/gl/vat', perm: ['gl.report.read'] },
       { title: '對帳檢查', path: '/costing/reconcile', perm: ['costing.read', 'costing.close'] },
       { title: '會計期間', path: '/gl/periods', perm: ['gl.period.read', 'gl.period.close'] },
       { title: '會計科目', path: '/gl/accounts', perm: ['gl.account.read', 'gl.account.write'] },
