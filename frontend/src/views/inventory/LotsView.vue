@@ -193,6 +193,17 @@ onMounted(async () => {
               >效期 {{ trace.data.expiry_date }}</span
             >
           </p>
+          <div v-if="trace.data.bins.length" class="mb">
+            儲位:
+            <el-tag
+              v-for="b in trace.data.bins"
+              :key="b.bin_code"
+              style="margin-right: 6px"
+              effect="plain"
+            >
+              {{ b.bin_code }} × {{ b.qty }}
+            </el-tag>
+          </div>
           <el-table :data="trace.data.moves" border size="small">
             <el-table-column prop="date" label="日期" width="105" />
             <el-table-column label="來源" min-width="170">

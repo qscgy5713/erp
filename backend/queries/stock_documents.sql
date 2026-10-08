@@ -112,6 +112,28 @@ WHERE b.company_id = @company_id AND b.warehouse_id = @warehouse_id AND i.item_t
   AND (sqlc.narg(category_id)::bigint IS NULL OR i.category_id IN (SELECT cat_id FROM cats))
 ORDER BY i.code;
 
+-- name: CountBinSnapshot :many
+-- 啟用儲位的倉庫:非批號管理料品的盤點快照,依儲位逐筆(有庫存的儲位)
+WITH RECURSIVE cats (cat_id) AS (
+    SELECT item_categories.id FROM item_categories WHERE item_categories.id = sqlc.narg(category_id)::bigint
+    UNION ALL
+    SELECT item_categories.id FROM item_categories, cats WHERE item_categories.parent_id = cats.cat_id
+)
+SELECT b.item_id, i.base_unit_id, bn.code AS bin_code, b.qty
+FROM inventory_bin_balances b
+JOIN bins bn ON bn.id = b.bin_id
+JOIN items i ON i.id = b.item_id
+WHERE b.company_id = @company_id AND b.warehouse_id = @warehouse_id AND i.item_type = 'goods'
+  AND i.lot_control = 'none' AND b.qty > 0
+  AND (sqlc.narg(category_id)::bigint IS NULL OR i.category_id IN (SELECT cat_id FROM cats))
+ORDER BY i.code, bn.code;
+
+-- name: GetBinBalanceQtyByCode :one
+-- 某儲位代號的料品現有量(儲位不存在為 0)
+SELECT COALESCE((SELECT b.qty FROM inventory_bin_balances b JOIN bins bn ON bn.id = b.bin_id
+                 WHERE bn.company_id = @company_id AND bn.warehouse_id = @warehouse_id AND bn.code = @code
+                   AND b.item_id = @item_id), 0)::numeric;
+
 -- name: GetBalanceQty :one
 SELECT COALESCE((SELECT qty FROM inventory_balances WHERE item_id = @item_id AND warehouse_id = @warehouse_id), 0)::numeric;
 

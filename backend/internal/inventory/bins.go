@@ -19,7 +19,9 @@ import (
 //   - 出庫可指定儲位,留空則「庫存多的儲位先出」自動分配,不足時可拆到多個儲位;
 //   - 儲位庫存不可為負(即使倉庫允許負庫存);
 //   - 沒有啟用儲位的倉庫不可指定儲位。
-// 儲位與批號各自獨立:先依儲位拆分,再依批號分配(先到期先出),所以批號庫存不分儲位。
+// 批號管理的料品在啟用儲位的倉庫,批號與儲位一起記錄(inventory_lot_bin_balances,D70):
+// 出庫可指定批號、儲位或兩者,未指定的部分由 expand 聯合分配(先到期先出、同批號內庫存多的儲位先出)。
+// 盤點:每個有庫存的(料品, 儲位)或(料品, 批號, 儲位)一行。
 
 var (
 	errBinNotUsed  = apperr.New(http.StatusUnprocessableEntity, "INV-016", "這個倉庫沒有啟用儲位,不能指定儲位")
@@ -27,7 +29,6 @@ var (
 	errBinShort    = apperr.New(http.StatusUnprocessableEntity, "INV-018", "儲位庫存不足")
 	errBinUnknown  = apperr.New(http.StatusUnprocessableEntity, "INV-019", "找不到這個儲位,或儲位已停用")
 	errBinSameMove = apperr.New(http.StatusUnprocessableEntity, "INV-020", "同一倉庫的調撥須指定不同的來源與目的儲位")
-	errBinCounting = apperr.New(http.StatusUnprocessableEntity, "INV-021", "啟用儲位的倉庫目前不支援盤點單,請用庫存調整單修正差異")
 )
 
 // NormalizeBinCode 儲位代號統一為大寫。
@@ -102,6 +103,10 @@ func expandBins(ctx context.Context, q *db.Queries, opt Options, moves []Movemen
 				return nil, errBinSameMove
 			}
 			m.binID, m.toBinID = &id, toID
+			out = append(out, m)
+		case lotControlled(it):
+			// 批號管理的料品:儲位與批號一起分配(expand 的聯合分配,先到期先出、同批號內庫存多的儲位先出)
+			m.toBinID = toID
 			out = append(out, m)
 		default:
 			k := allocKey{m.ItemID, m.WarehouseID}

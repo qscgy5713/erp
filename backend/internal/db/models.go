@@ -429,6 +429,16 @@ type InventoryLotBalance struct {
 	UpdatedAt   time.Time
 }
 
+type InventoryLotBinBalance struct {
+	CompanyID   int64
+	ItemID      int64
+	WarehouseID int64
+	LotID       int64
+	BinID       int64
+	Qty         decimal.Decimal
+	UpdatedAt   time.Time
+}
+
 type InventoryTransaction struct {
 	ID           int64
 	CompanyID    int64

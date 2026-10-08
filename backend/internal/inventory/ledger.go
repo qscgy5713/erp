@@ -237,6 +237,9 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 	if err := applyLotBalances(ctx, q, opt, posts, itemByID, whByID); err != nil {
 		return err
 	}
+	if err := applyLotBinBalances(ctx, q, opt, posts, itemByID, whByID); err != nil {
+		return err
+	}
 
 	for _, k := range ordered {
 		if err := q.SetBalance(ctx, db.SetBalanceParams{Qty: newQty[k], ItemID: k.item, WarehouseID: k.warehouse}); err != nil {

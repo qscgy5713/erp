@@ -28,6 +28,10 @@ if [ "$MODE" = "--verify" ]; then
     UNION ALL SELECT '客戶', count(*) FROM customers
     UNION ALL SELECT '出貨單', count(*) FROM deliveries
     UNION ALL SELECT '庫存流水', count(*) FROM inventory_transactions
+    UNION ALL SELECT '批號庫存列', count(*) FROM inventory_lot_balances
+    UNION ALL SELECT '儲位庫存列', count(*) FROM inventory_bin_balances
+    UNION ALL SELECT '工單', count(*) FROM work_orders
+    UNION ALL SELECT '已啟用 2FA 的使用者', count(*) FROM users WHERE totp_enabled
     UNION ALL SELECT '已過帳傳票', count(*) FROM vouchers WHERE status = 'posted'
     UNION ALL SELECT '傳票借貸不平衡', count(*) FROM (SELECT v.id FROM vouchers v JOIN voucher_lines l ON l.voucher_id = v.id
         WHERE v.status = 'posted' GROUP BY v.id HAVING SUM(l.debit) <> SUM(l.credit)) x;"

@@ -58,6 +58,8 @@ export interface LotLedger {
   item_code: string
   item_name: string
   moves: LotMove[]
+  /** 啟用儲位的倉庫:這個批號目前放在哪些儲位 */
+  bins: { warehouse_id: number; bin_code: string; bin_name: string; qty: Decimal }[]
 }
 
 export interface LotOption {

@@ -170,8 +170,14 @@ const binStore = useBinStore()
 const binTick = ref(0)
 void binStore.ensureWarehouses().then(() => binTick.value++)
 const usesBins = (id: number | null) => binTick.value >= 0 && !!id && binStore.usesBins(id)
-const binColumn = computed(() => docType.value !== 'count' && usesBins(form.warehouse_id))
+const binColumn = computed(() => usesBins(form.warehouse_id))
 const toBinColumn = computed(() => docType.value === 'transfer' && usesBins(form.to_warehouse_id))
+
+/** 盤點:啟用儲位的倉庫以(料品[, 批號], 儲位)為一行,必填;快照列的儲位不可改 */
+function binMode(row: LineRow): 'in' | 'out' {
+  return docType.value === 'count' ? 'in' : lotMode(row)
+}
+const binLocked = (row: LineRow) => docType.value === 'count' && !!row.id && row.system_qty != null
 
 // ---- 批號與效期 ----
 const lotControlled = (row: LineRow) => !!row.item_lot_control && row.item_lot_control !== 'none'
@@ -413,7 +419,7 @@ onMounted(async () => {
         type="info"
         :closable="false"
         show-icon
-        title="建立後系統會依倉庫目前的現有量產生盤點明細(帳面數快照),並凍結該倉庫的庫存異動。"
+        title="建立後系統會依倉庫目前的現有量產生盤點明細(帳面數快照),並凍結該倉庫的庫存異動。啟用儲位的倉庫:每個有庫存的(料品、批號)× 儲位一行;盤盈的儲位請新增一行。"
       />
     </el-card>
 
@@ -449,8 +455,8 @@ onMounted(async () => {
             <BinCell
               v-model:code="row.bin_code"
               :warehouse-id="form.warehouse_id"
-              :mode="lotMode(row)"
-              :editable="editable"
+              :mode="binMode(row)"
+              :editable="editable && !binLocked(row)"
             />
           </template>
         </el-table-column>

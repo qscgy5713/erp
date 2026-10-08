@@ -369,7 +369,7 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 				fields[key] = "盤點請以基本單位輸入"
 				continue
 			}
-			dup := fmt.Sprintf("%d/%s", l.ItemID, strings.ToUpper(strings.TrimSpace(l.LotNo)))
+			dup := fmt.Sprintf("%d/%s/%s", l.ItemID, strings.ToUpper(strings.TrimSpace(l.LotNo)), NormalizeBinCode(l.BinCode))
 			if seenCount[dup] {
 				fields[key] = it.Code + " 重複"
 				continue
@@ -428,11 +428,12 @@ func prepareLines(ctx context.Context, q *db.Queries, companyID int64, docType s
 			out[i].LotNo, out[i].expiry = checked[i].LotNo, checked[i].Expiry
 		}
 	}
-	if len(fields) == 0 && docType != TypeCount {
+	if len(fields) == 0 {
 		binInputs := make([]BinInput, len(out))
 		for i, p := range out {
+			// 盤點:啟用儲位的倉庫以(料品[, 批號], 儲位)為一行,儲位須指定
 			bi := BinInput{ItemID: p.ItemID, WarehouseID: warehouseID, BinCode: p.BinCode,
-				Inbound: docType == TypeAdjustment && p.baseQty != nil && p.baseQty.IsPositive()}
+				Inbound: (docType == TypeAdjustment && p.baseQty != nil && p.baseQty.IsPositive()) || docType == TypeCount}
 			if docType == TypeTransfer {
 				bi.ToWarehouseID, bi.ToBinCode = toWarehouseID, p.ToBinCode
 			}
@@ -495,9 +496,6 @@ func checkHeader(ctx context.Context, q *db.Queries, companyID int64, in *docume
 	if in.DocType == TypeTransfer && *in.ToWarehouseID == in.WarehouseID && !useBins[in.WarehouseID] {
 		return date, fieldErr("to_warehouse_id", "調入倉不可與調出倉相同(只有啟用儲位的倉庫可在同倉不同儲位之間調撥)")
 	}
-	if in.DocType == TypeCount && useBins[in.WarehouseID] {
-		return date, errBinCounting
-	}
 	return date, nil
 }
 
@@ -518,7 +516,19 @@ func saveLines(ctx context.Context, q *db.Queries, docID int64, lines []prepared
 }
 
 // countLines 盤點單:以建立當下的帳面數量為快照;已傳入的實盤數保留,新增的料品以目前現有量為帳面數。
+func warehouseUsesBins(ctx context.Context, q *db.Queries, companyID, warehouseID int64) (bool, error) {
+	whs, err := q.ListWarehouseFlags(ctx, db.ListWarehouseFlagsParams{CompanyID: companyID, Ids: []int64{warehouseID}})
+	if err != nil || len(whs) == 0 {
+		return false, err
+	}
+	return whs[0].UseBins, nil
+}
+
 func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64, categoryID *int64, given []preparedLine, generate bool) ([]preparedLine, error) {
+	useBins, err := warehouseUsesBins(ctx, q, companyID, warehouseID)
+	if err != nil {
+		return nil, err
+	}
 	if !generate {
 		for i := range given {
 			if given[i].systemQty != nil {
@@ -526,7 +536,13 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 			}
 			var bal decimal.Decimal
 			var err error
-			if given[i].LotNo != "" { // 批號管理的料品:帳面數為該批號的現有量
+			if given[i].LotNo != "" && given[i].BinCode != "" { // 啟用儲位的倉庫:批號料品的帳面數為該批號在該儲位的現有量
+				bal, err = q.GetLotBinBalanceQtyByNo(ctx, db.GetLotBinBalanceQtyByNoParams{
+					CompanyID: companyID, ItemID: given[i].ItemID, LotNo: given[i].LotNo, WarehouseID: warehouseID, Code: given[i].BinCode})
+			} else if given[i].LotNo == "" && given[i].BinCode != "" { // 非批號料品的帳面數為該儲位的現有量
+				bal, err = q.GetBinBalanceQtyByCode(ctx, db.GetBinBalanceQtyByCodeParams{
+					CompanyID: companyID, WarehouseID: warehouseID, Code: given[i].BinCode, ItemID: given[i].ItemID})
+			} else if given[i].LotNo != "" { // 批號管理的料品:帳面數為該批號的現有量
 				bal, err = q.GetLotBalanceQtyByNo(ctx, db.GetLotBalanceQtyByNoParams{
 					CompanyID: companyID, ItemID: given[i].ItemID, LotNo: given[i].LotNo, WarehouseID: warehouseID})
 			} else {
@@ -543,6 +559,16 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 	if err != nil {
 		return nil, err
 	}
+	binsOf := map[int64][]db.CountBinSnapshotRow{}
+	if useBins {
+		rows, err := q.CountBinSnapshot(ctx, db.CountBinSnapshotParams{CompanyID: companyID, WarehouseID: warehouseID, CategoryID: categoryID})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			binsOf[r.ItemID] = append(binsOf[r.ItemID], r)
+		}
+	}
 	lotItems := []int64{}
 	for _, s := range snap {
 		if s.LotControl != "none" {
@@ -550,7 +576,16 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 		}
 	}
 	lotsOf := map[int64][]db.CountLotSnapshotRow{}
-	if len(lotItems) > 0 {
+	lotBinsOf := map[int64][]db.CountLotBinSnapshotRow{}
+	if len(lotItems) > 0 && useBins {
+		rows, err := q.CountLotBinSnapshot(ctx, db.CountLotBinSnapshotParams{CompanyID: companyID, WarehouseID: warehouseID, ItemIds: lotItems})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			lotBinsOf[r.ItemID] = append(lotBinsOf[r.ItemID], r)
+		}
+	} else if len(lotItems) > 0 {
 		rows, err := q.CountLotSnapshot(ctx, db.CountLotSnapshotParams{CompanyID: companyID, WarehouseID: warehouseID, ItemIds: lotItems})
 		if err != nil {
 			return nil, err
@@ -561,6 +596,16 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 	}
 	out := make([]preparedLine, 0, len(snap))
 	for _, s := range snap {
+		if s.LotControl == "none" && useBins { // 非批號料品:每個有庫存的儲位一行
+			for _, b := range binsOf[s.ItemID] {
+				sys := b.Qty
+				out = append(out, preparedLine{
+					lineInput: lineInput{ItemID: s.ItemID, UnitID: s.BaseUnitID, BinCode: b.BinCode},
+					factor:    decimal.NewFromInt(1), systemQty: &sys,
+				})
+			}
+			continue
+		}
 		if s.LotControl == "none" {
 			sys := s.Qty
 			out = append(out, preparedLine{
@@ -569,7 +614,14 @@ func countLines(ctx context.Context, q *db.Queries, companyID, warehouseID int64
 			})
 			continue
 		}
-		// 批號管理的料品:每個有庫存的批號一行
+		// 批號管理的料品:啟用儲位的倉庫每個有庫存的(批號, 儲位)一行,否則每個批號一行
+		for _, l := range lotBinsOf[s.ItemID] {
+			sys := l.Qty
+			out = append(out, preparedLine{
+				lineInput: lineInput{ItemID: s.ItemID, UnitID: s.BaseUnitID, LotNo: l.LotNo, BinCode: l.BinCode},
+				factor:    decimal.NewFromInt(1), systemQty: &sys, expiry: l.ExpiryDate,
+			})
+		}
 		for _, l := range lotsOf[s.ItemID] {
 			sys := l.Qty
 			out = append(out, preparedLine{
@@ -700,22 +752,22 @@ func (m *Module) updateDocument(c *gin.Context) {
 		}
 		if in.DocType == TypeCount {
 			// 保留原快照的帳面數;新加入的料品(批號)以目前現有量為帳面數。批號管理的料品依 (料品, 批號) 對應
-			lineKey := func(item int64, lot string) string { return fmt.Sprintf("%d/%s", item, lot) }
+			lineKey := func(item int64, lot, bin string) string { return fmt.Sprintf("%d/%s/%s", item, lot, bin) }
 			snap := map[string]*decimal.Decimal{}
 			for _, l := range before.Lines {
-				snap[lineKey(l.ItemID, l.LotNo)] = l.SystemQty
+				snap[lineKey(l.ItemID, l.LotNo, l.BinCode)] = l.SystemQty
 			}
 			kept := map[string]bool{}
 			for _, l := range lines {
-				kept[lineKey(l.ItemID, l.LotNo)] = true
+				kept[lineKey(l.ItemID, l.LotNo, l.BinCode)] = true
 			}
 			for _, l := range before.Lines {
-				if !kept[lineKey(l.ItemID, l.LotNo)] {
-					return errCountLineRemoved.WithDetails(map[string]string{"item": l.ItemCode + " " + l.ItemName + " " + l.LotNo})
+				if !kept[lineKey(l.ItemID, l.LotNo, l.BinCode)] {
+					return errCountLineRemoved.WithDetails(map[string]string{"item": l.ItemCode + " " + l.ItemName + " " + l.LotNo + " " + l.BinCode})
 				}
 			}
 			for i := range lines {
-				lines[i].systemQty = snap[lineKey(lines[i].ItemID, lines[i].LotNo)]
+				lines[i].systemQty = snap[lineKey(lines[i].ItemID, lines[i].LotNo, lines[i].BinCode)]
 			}
 			if lines, err = countLines(ctx, q, a.CompanyID, cur.WarehouseID, nil, lines, false); err != nil {
 				return err
@@ -900,7 +952,7 @@ func movementsOf(cur db.StockDocument, doc documentDTO) []Movement {
 		case TypeCount:
 			if l.DiffQty != nil && !l.DiffQty.IsZero() {
 				moves = append(moves, Movement{ItemID: l.ItemID, WarehouseID: cur.WarehouseID, Qty: *l.DiffQty, SourceLineID: &lineID,
-					LotNo: l.LotNo, Expiry: exp, AllowExpired: true})
+					LotNo: l.LotNo, Expiry: exp, AllowExpired: true, BinCode: l.BinCode})
 			}
 		}
 	}

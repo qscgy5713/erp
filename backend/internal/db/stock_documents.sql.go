@@ -54,6 +54,61 @@ func (q *Queries) AddStockDocumentLine(ctx context.Context, arg AddStockDocument
 	return err
 }
 
+const countBinSnapshot = `-- name: CountBinSnapshot :many
+WITH RECURSIVE cats (cat_id) AS (
+    SELECT item_categories.id FROM item_categories WHERE item_categories.id = $3::bigint
+    UNION ALL
+    SELECT item_categories.id FROM item_categories, cats WHERE item_categories.parent_id = cats.cat_id
+)
+SELECT b.item_id, i.base_unit_id, bn.code AS bin_code, b.qty
+FROM inventory_bin_balances b
+JOIN bins bn ON bn.id = b.bin_id
+JOIN items i ON i.id = b.item_id
+WHERE b.company_id = $1 AND b.warehouse_id = $2 AND i.item_type = 'goods'
+  AND i.lot_control = 'none' AND b.qty > 0
+  AND ($3::bigint IS NULL OR i.category_id IN (SELECT cat_id FROM cats))
+ORDER BY i.code, bn.code
+`
+
+type CountBinSnapshotParams struct {
+	CompanyID   int64
+	WarehouseID int64
+	CategoryID  *int64
+}
+
+type CountBinSnapshotRow struct {
+	ItemID     int64
+	BaseUnitID int64
+	BinCode    string
+	Qty        decimal.Decimal
+}
+
+// 啟用儲位的倉庫:非批號管理料品的盤點快照,依儲位逐筆(有庫存的儲位)
+func (q *Queries) CountBinSnapshot(ctx context.Context, arg CountBinSnapshotParams) ([]CountBinSnapshotRow, error) {
+	rows, err := q.db.Query(ctx, countBinSnapshot, arg.CompanyID, arg.WarehouseID, arg.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountBinSnapshotRow{}
+	for rows.Next() {
+		var i CountBinSnapshotRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.BaseUnitID,
+			&i.BinCode,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countLotSnapshot = `-- name: CountLotSnapshot :many
 SELECT b.item_id, l.lot_no, l.expiry_date, b.qty
 FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
@@ -269,6 +324,32 @@ type GetBalanceQtyParams struct {
 
 func (q *Queries) GetBalanceQty(ctx context.Context, arg GetBalanceQtyParams) (decimal.Decimal, error) {
 	row := q.db.QueryRow(ctx, getBalanceQty, arg.ItemID, arg.WarehouseID)
+	var column_1 decimal.Decimal
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const getBinBalanceQtyByCode = `-- name: GetBinBalanceQtyByCode :one
+SELECT COALESCE((SELECT b.qty FROM inventory_bin_balances b JOIN bins bn ON bn.id = b.bin_id
+                 WHERE bn.company_id = $1 AND bn.warehouse_id = $2 AND bn.code = $3
+                   AND b.item_id = $4), 0)::numeric
+`
+
+type GetBinBalanceQtyByCodeParams struct {
+	CompanyID   int64
+	WarehouseID int64
+	Code        string
+	ItemID      int64
+}
+
+// 某儲位代號的料品現有量(儲位不存在為 0)
+func (q *Queries) GetBinBalanceQtyByCode(ctx context.Context, arg GetBinBalanceQtyByCodeParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, getBinBalanceQtyByCode,
+		arg.CompanyID,
+		arg.WarehouseID,
+		arg.Code,
+		arg.ItemID,
+	)
 	var column_1 decimal.Decimal
 	err := row.Scan(&column_1)
 	return column_1, err

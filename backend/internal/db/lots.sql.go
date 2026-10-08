@@ -54,6 +54,56 @@ func (q *Queries) CountLotBalances(ctx context.Context, arg CountLotBalancesPara
 	return count, err
 }
 
+const countLotBinSnapshot = `-- name: CountLotBinSnapshot :many
+SELECT b.item_id, l.lot_no, l.expiry_date, bn.code AS bin_code, b.qty
+FROM inventory_lot_bin_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN bins bn ON bn.id = b.bin_id
+WHERE b.company_id = $1 AND b.warehouse_id = $2 AND b.item_id = ANY($3::bigint[]) AND b.qty > 0
+ORDER BY b.item_id, l.expiry_date NULLS LAST, l.id, bn.code
+`
+
+type CountLotBinSnapshotParams struct {
+	CompanyID   int64
+	WarehouseID int64
+	ItemIds     []int64
+}
+
+type CountLotBinSnapshotRow struct {
+	ItemID     int64
+	LotNo      string
+	ExpiryDate *time.Time
+	BinCode    string
+	Qty        decimal.Decimal
+}
+
+// 啟用儲位的倉庫:批號管理料品的盤點快照,依(批號, 儲位)逐筆
+func (q *Queries) CountLotBinSnapshot(ctx context.Context, arg CountLotBinSnapshotParams) ([]CountLotBinSnapshotRow, error) {
+	rows, err := q.db.Query(ctx, countLotBinSnapshot, arg.CompanyID, arg.WarehouseID, arg.ItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountLotBinSnapshotRow{}
+	for rows.Next() {
+		var i CountLotBinSnapshotRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.LotNo,
+			&i.ExpiryDate,
+			&i.BinCode,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ensureLotBalance = `-- name: EnsureLotBalance :exec
 INSERT INTO inventory_lot_balances (company_id, item_id, warehouse_id, lot_id, qty)
 VALUES ($1, $2, $3, $4, 0)
@@ -73,6 +123,31 @@ func (q *Queries) EnsureLotBalance(ctx context.Context, arg EnsureLotBalancePara
 		arg.ItemID,
 		arg.WarehouseID,
 		arg.LotID,
+	)
+	return err
+}
+
+const ensureLotBinBalance = `-- name: EnsureLotBinBalance :exec
+INSERT INTO inventory_lot_bin_balances (company_id, item_id, warehouse_id, lot_id, bin_id, qty)
+VALUES ($1, $2, $3, $4, $5, 0)
+ON CONFLICT (lot_id, bin_id) DO NOTHING
+`
+
+type EnsureLotBinBalanceParams struct {
+	CompanyID   int64
+	ItemID      int64
+	WarehouseID int64
+	LotID       int64
+	BinID       int64
+}
+
+func (q *Queries) EnsureLotBinBalance(ctx context.Context, arg EnsureLotBinBalanceParams) error {
+	_, err := q.db.Exec(ctx, ensureLotBinBalance,
+		arg.CompanyID,
+		arg.ItemID,
+		arg.WarehouseID,
+		arg.LotID,
+		arg.BinID,
 	)
 	return err
 }
@@ -133,6 +208,35 @@ func (q *Queries) GetLot(ctx context.Context, arg GetLotParams) (ItemLot, error)
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getLotBinBalanceQtyByNo = `-- name: GetLotBinBalanceQtyByNo :one
+SELECT COALESCE((SELECT b.qty FROM inventory_lot_bin_balances b
+                 JOIN item_lots l ON l.id = b.lot_id JOIN bins bn ON bn.id = b.bin_id
+                 WHERE l.company_id = $1 AND l.item_id = $2 AND l.lot_no = $3
+                   AND bn.warehouse_id = $4 AND bn.code = $5), 0)::numeric
+`
+
+type GetLotBinBalanceQtyByNoParams struct {
+	CompanyID   int64
+	ItemID      int64
+	LotNo       string
+	WarehouseID int64
+	Code        string
+}
+
+// 某批號在某儲位的現有量(不存在為 0)
+func (q *Queries) GetLotBinBalanceQtyByNo(ctx context.Context, arg GetLotBinBalanceQtyByNoParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, getLotBinBalanceQtyByNo,
+		arg.CompanyID,
+		arg.ItemID,
+		arg.LotNo,
+		arg.WarehouseID,
+		arg.Code,
+	)
+	var column_1 decimal.Decimal
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const getLotByNo = `-- name: GetLotByNo :one
@@ -379,6 +483,103 @@ func (q *Queries) ListLotBalancesForAllocation(ctx context.Context, arg ListLotB
 	return items, nil
 }
 
+const listLotBinBalancesForAllocation = `-- name: ListLotBinBalancesForAllocation :many
+SELECT b.lot_id, b.bin_id, b.qty, l.lot_no, l.expiry_date, bn.code AS bin_code
+FROM inventory_lot_bin_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN bins bn ON bn.id = b.bin_id
+WHERE b.item_id = $1 AND b.warehouse_id = $2 AND b.qty > 0
+ORDER BY l.expiry_date NULLS LAST, l.id, b.qty DESC, bn.code
+FOR UPDATE OF b
+`
+
+type ListLotBinBalancesForAllocationParams struct {
+	ItemID      int64
+	WarehouseID int64
+}
+
+type ListLotBinBalancesForAllocationRow struct {
+	LotID      int64
+	BinID      int64
+	Qty        decimal.Decimal
+	LotNo      string
+	ExpiryDate *time.Time
+	BinCode    string
+}
+
+// 啟用儲位的倉庫出庫:先到期先出(批號依效期,沒有效期的排最後);同一批號內庫存多的儲位先出。鎖定這些列
+func (q *Queries) ListLotBinBalancesForAllocation(ctx context.Context, arg ListLotBinBalancesForAllocationParams) ([]ListLotBinBalancesForAllocationRow, error) {
+	rows, err := q.db.Query(ctx, listLotBinBalancesForAllocation, arg.ItemID, arg.WarehouseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLotBinBalancesForAllocationRow{}
+	for rows.Next() {
+		var i ListLotBinBalancesForAllocationRow
+		if err := rows.Scan(
+			&i.LotID,
+			&i.BinID,
+			&i.Qty,
+			&i.LotNo,
+			&i.ExpiryDate,
+			&i.BinCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLotBinStock = `-- name: ListLotBinStock :many
+SELECT bn.code AS bin_code, bn.name AS bin_name, b.warehouse_id, b.qty
+FROM inventory_lot_bin_balances b JOIN bins bn ON bn.id = b.bin_id
+WHERE b.company_id = $1 AND b.lot_id = $2 AND b.qty > 0
+ORDER BY b.warehouse_id, bn.code
+`
+
+type ListLotBinStockParams struct {
+	CompanyID int64
+	LotID     int64
+}
+
+type ListLotBinStockRow struct {
+	BinCode     string
+	BinName     string
+	WarehouseID int64
+	Qty         decimal.Decimal
+}
+
+// 某批號在各儲位的現有量
+func (q *Queries) ListLotBinStock(ctx context.Context, arg ListLotBinStockParams) ([]ListLotBinStockRow, error) {
+	rows, err := q.db.Query(ctx, listLotBinStock, arg.CompanyID, arg.LotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLotBinStockRow{}
+	for rows.Next() {
+		var i ListLotBinStockRow
+		if err := rows.Scan(
+			&i.BinCode,
+			&i.BinName,
+			&i.WarehouseID,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLotOptions = `-- name: ListLotOptions :many
 SELECT b.lot_id, l.lot_no, l.expiry_date, b.qty
 FROM inventory_lot_balances b JOIN item_lots l ON l.id = b.lot_id
@@ -518,6 +719,50 @@ func (q *Queries) LockLotBalance(ctx context.Context, arg LockLotBalanceParams) 
 	return qty, err
 }
 
+const lockLotBinBalance = `-- name: LockLotBinBalance :one
+SELECT qty FROM inventory_lot_bin_balances WHERE lot_id = $1 AND bin_id = $2 FOR UPDATE
+`
+
+type LockLotBinBalanceParams struct {
+	LotID int64
+	BinID int64
+}
+
+func (q *Queries) LockLotBinBalance(ctx context.Context, arg LockLotBinBalanceParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, lockLotBinBalance, arg.LotID, arg.BinID)
+	var qty decimal.Decimal
+	err := row.Scan(&qty)
+	return qty, err
+}
+
+const lotBinBalanceMismatches = `-- name: LotBinBalanceMismatches :one
+SELECT (
+    (SELECT count(*) FROM (
+        SELECT b.lot_id, b.warehouse_id FROM inventory_lot_balances b JOIN warehouses w ON w.id = b.warehouse_id
+        LEFT JOIN (SELECT lb.lot_id, lb.warehouse_id, SUM(lb.qty) AS q FROM inventory_lot_bin_balances lb
+                   WHERE lb.company_id = $1 GROUP BY lb.lot_id, lb.warehouse_id) x
+               ON x.lot_id = b.lot_id AND x.warehouse_id = b.warehouse_id
+        WHERE b.company_id = $1 AND w.use_bins AND b.qty <> COALESCE(x.q, 0)
+    ) a)
+    +
+    (SELECT count(*) FROM (
+        SELECT bb.bin_id, bb.item_id FROM inventory_bin_balances bb JOIN items i ON i.id = bb.item_id
+        LEFT JOIN (SELECT lb.bin_id, lb.item_id, SUM(lb.qty) AS q FROM inventory_lot_bin_balances lb
+                   WHERE lb.company_id = $1 GROUP BY lb.bin_id, lb.item_id) y
+               ON y.bin_id = bb.bin_id AND y.item_id = bb.item_id
+        WHERE bb.company_id = $1 AND i.lot_control <> 'none' AND bb.qty <> COALESCE(y.q, 0)
+    ) c)
+)::bigint AS mismatches
+`
+
+// 完整性:①各(批號, 倉庫)的儲位合計 = 批號現有量(啟用儲位的倉庫);②各(料品, 儲位)的批號合計 = 儲位現有量(批號管理料品)。筆數應為 0
+func (q *Queries) LotBinBalanceMismatches(ctx context.Context, companyID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lotBinBalanceMismatches, companyID)
+	var mismatches int64
+	err := row.Scan(&mismatches)
+	return mismatches, err
+}
+
 const lotLedger = `-- name: LotLedger :many
 SELECT t.id, t.doc_date, t.qty, t.source_type, t.source_id, t.source_no, t.warehouse_id, w.name AS warehouse_name,
        t.reversal_of, COALESCE(s.name, '')::text AS supplier_name, COALESCE(c.name, '')::text AS customer_name,
@@ -601,5 +846,20 @@ type SetLotBalanceParams struct {
 
 func (q *Queries) SetLotBalance(ctx context.Context, arg SetLotBalanceParams) error {
 	_, err := q.db.Exec(ctx, setLotBalance, arg.Qty, arg.LotID, arg.WarehouseID)
+	return err
+}
+
+const setLotBinBalance = `-- name: SetLotBinBalance :exec
+UPDATE inventory_lot_bin_balances SET qty = $1, updated_at = now() WHERE lot_id = $2 AND bin_id = $3
+`
+
+type SetLotBinBalanceParams struct {
+	Qty   decimal.Decimal
+	LotID int64
+	BinID int64
+}
+
+func (q *Queries) SetLotBinBalance(ctx context.Context, arg SetLotBinBalanceParams) error {
+	_, err := q.db.Exec(ctx, setLotBinBalance, arg.Qty, arg.LotID, arg.BinID)
 	return err
 }

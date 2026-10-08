@@ -59,6 +59,7 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 	items map[int64]db.ListStockItemsRow, whs map[int64]db.ListWarehouseFlagsRow) ([]posting, error) {
 	var out []posting
 	avail := map[allocKey][]lotAvail{} // 先到期先出的剩餘量(同一張單據內多行共用)
+	jointAvail := map[allocKey][]lotBinAvail{}
 	for _, m := range moves {
 		if m.Qty.IsZero() {
 			continue
@@ -83,13 +84,13 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 			}
 			out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: m.Qty, cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: lotID, binID: m.binID})
 		default:
-			parts, err := outboundParts(ctx, q, opt, src, m, it, whs[m.WarehouseID], avail)
+			parts, err := outboundParts(ctx, q, opt, src, m, it, whs[m.WarehouseID], avail, jointAvail)
 			if err != nil {
 				return nil, err
 			}
 			for _, p := range parts {
 				lot := p.lotID
-				out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: p.qty.Neg(), cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: &lot, binID: m.binID})
+				out = append(out, posting{item: m.ItemID, wh: m.WarehouseID, qty: p.qty.Neg(), cost: m.UnitCost, line: m.SourceLineID, reversalOf: m.reversalOf, lotID: &lot, binID: p.binID})
 				if m.TransferTo != nil {
 					out = append(out, posting{item: m.ItemID, wh: *m.TransferTo, qty: p.qty, cost: m.UnitCost, line: m.SourceLineID, lotID: &lot, binID: m.toBinID})
 				}
@@ -101,16 +102,26 @@ func expand(ctx context.Context, q *db.Queries, opt Options, src Source, moves [
 
 type part struct {
 	lotID int64
+	binID *int64          // 啟用儲位的倉庫:這一份來自哪個儲位
 	qty   decimal.Decimal // 正數
+}
+
+// lotBinAvail 啟用儲位的倉庫:某批號在某儲位的剩餘量(先到期先出的聯合分配用)。
+type lotBinAvail struct {
+	lotID, binID int64
+	qty          decimal.Decimal
+	expiry       *time.Time
+	lotNo, bin   string
 }
 
 // outboundParts 決定一筆出庫從哪些批號出:沖銷沿用原批號、指定批號、否則先到期先出。
 func outboundParts(ctx context.Context, q *db.Queries, opt Options, src Source, m Movement, it db.ListStockItemsRow,
-	wh db.ListWarehouseFlagsRow, avail map[allocKey][]lotAvail) ([]part, error) {
+	wh db.ListWarehouseFlagsRow, avail map[allocKey][]lotAvail, jointAvail map[allocKey][]lotBinAvail) ([]part, error) {
 	need := m.Qty.Neg()
+	var onlyLot *int64 // 指定的批號
 	switch {
 	case m.lotID != nil:
-		return []part{{*m.lotID, need}}, nil
+		return []part{{*m.lotID, m.binID, need}}, nil
 	case strings.TrimSpace(m.LotNo) != "":
 		no, err := NormalizeLotNo(m.LotNo)
 		if err != nil {
@@ -123,7 +134,13 @@ func outboundParts(ctx context.Context, q *db.Queries, opt Options, src Source, 
 		if !m.AllowExpired && expired(lot.ExpiryDate, src.DocDate) {
 			return nil, errLotExpired.WithDetails(map[string]string{"item": itemLabel(it), "lot_no": no})
 		}
-		return []part{{lot.ID, need}}, nil
+		if !wh.UseBins {
+			return []part{{lot.ID, nil, need}}, nil
+		}
+		onlyLot = &lot.ID
+	}
+	if wh.UseBins {
+		return jointParts(ctx, q, src, m, it, wh, onlyLot, jointAvail)
 	}
 	k := allocKey{m.ItemID, m.WarehouseID}
 	if _, ok := avail[k]; !ok {
@@ -155,10 +172,67 @@ func outboundParts(ctx context.Context, q *db.Queries, opt Options, src Source, 
 		take := decimal.Min(list[i].qty, remain)
 		list[i].qty = list[i].qty.Sub(take)
 		remain = remain.Sub(take)
-		parts = append(parts, part{list[i].lotID, take})
+		parts = append(parts, part{list[i].lotID, m.binID, take})
 	}
 	if remain.IsPositive() {
 		msg := fmt.Sprintf("%s 在 %s 可出庫的批號庫存不足,需要 %s,還差 %s", itemLabel(it), wh.Name, need.String(), remain.String())
+		if skipped.IsPositive() {
+			msg += fmt.Sprintf("(另有已過期批號庫存 %s 不可出庫)", skipped.String())
+		}
+		return nil, errLotShort.WithMessage(msg).WithDetails(map[string]string{"item": itemLabel(it)})
+	}
+	return parts, nil
+}
+
+// jointParts 啟用儲位的倉庫:從(批號, 儲位)庫存聯合分配出庫。
+// 指定批號只取該批號、指定儲位只取該儲位;都沒指定則先到期先出,同批號內庫存多的儲位先出。
+// 同倉的儲位間調撥不會從目的儲位取貨。
+func jointParts(ctx context.Context, q *db.Queries, src Source, m Movement, it db.ListStockItemsRow,
+	wh db.ListWarehouseFlagsRow, onlyLot *int64, jointAvail map[allocKey][]lotBinAvail) ([]part, error) {
+	need := m.Qty.Neg()
+	k := allocKey{m.ItemID, m.WarehouseID}
+	if _, ok := jointAvail[k]; !ok {
+		rows, err := q.ListLotBinBalancesForAllocation(ctx, db.ListLotBinBalancesForAllocationParams{ItemID: m.ItemID, WarehouseID: m.WarehouseID})
+		if err != nil {
+			return nil, err
+		}
+		list := make([]lotBinAvail, len(rows))
+		for i, r := range rows {
+			list[i] = lotBinAvail{lotID: r.LotID, binID: r.BinID, qty: r.Qty, expiry: r.ExpiryDate, lotNo: r.LotNo, bin: r.BinCode}
+		}
+		jointAvail[k] = list
+	}
+	var parts []part
+	remain := need
+	skipped := decimal.Zero
+	list := jointAvail[k]
+	for i := range list {
+		if !remain.IsPositive() {
+			break
+		}
+		a := &list[i]
+		switch {
+		case a.qty.IsZero(),
+			onlyLot != nil && a.lotID != *onlyLot,
+			m.binID != nil && a.binID != *m.binID,
+			m.TransferTo != nil && *m.TransferTo == m.WarehouseID && m.toBinID != nil && a.binID == *m.toBinID:
+			continue
+		}
+		if onlyLot == nil && !m.AllowExpired && expired(a.expiry, src.DocDate) {
+			skipped = skipped.Add(a.qty)
+			continue
+		}
+		take := decimal.Min(a.qty, remain)
+		a.qty = a.qty.Sub(take)
+		remain = remain.Sub(take)
+		bin := a.binID
+		parts = append(parts, part{a.lotID, &bin, take})
+	}
+	if remain.IsPositive() {
+		msg := fmt.Sprintf("%s 在 %s 可出庫的批號庫存不足,需要 %s,還差 %s", itemLabel(it), wh.Name, need.String(), remain.String())
+		if m.binID != nil || onlyLot != nil {
+			msg += "(已依指定的批號 / 儲位限縮範圍)"
+		}
 		if skipped.IsPositive() {
 			msg += fmt.Sprintf("(另有已過期批號庫存 %s 不可出庫)", skipped.String())
 		}
@@ -258,6 +332,70 @@ func applyLotBalances(ctx context.Context, q *db.Queries, opt Options, posts []p
 				WithDetails(map[string]string{"item": itemLabel(it), "lot_no": lotNo[k.lot]})
 		}
 		if err := q.SetLotBalance(ctx, db.SetLotBalanceParams{Qty: next, LotID: k.lot, WarehouseID: k.wh}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type lotBinKey struct{ lot, bin int64 }
+
+// applyLotBinBalances 更新(批號, 儲位)現有量:批號管理料品在啟用儲位的倉庫,不可為負。
+func applyLotBinBalances(ctx context.Context, q *db.Queries, opt Options, posts []posting,
+	items map[int64]db.ListStockItemsRow, whs map[int64]db.ListWarehouseFlagsRow) error {
+	net := map[lotBinKey]decimal.Decimal{}
+	itemOf, whOf := map[int64]int64{}, map[int64]int64{}
+	for _, p := range posts {
+		if p.lotID == nil || p.binID == nil {
+			continue
+		}
+		k := lotBinKey{*p.lotID, *p.binID}
+		net[k] = net[k].Add(p.qty)
+		itemOf[*p.lotID], whOf[*p.binID] = p.item, p.wh
+	}
+	if len(net) == 0 {
+		return nil
+	}
+	ordered := make([]lotBinKey, 0, len(net))
+	lotIDs, binIDs := make([]int64, 0, len(net)), make([]int64, 0, len(net))
+	for k := range net {
+		ordered = append(ordered, k)
+		lotIDs, binIDs = append(lotIDs, k.lot), append(binIDs, k.bin)
+	}
+	slices.SortFunc(ordered, func(a, b lotBinKey) int { return cmp.Or(cmp.Compare(a.lot, b.lot), cmp.Compare(a.bin, b.bin)) })
+	lots, err := q.ListLotsByIDs(ctx, lotIDs)
+	if err != nil {
+		return err
+	}
+	bins, err := q.ListBinsByIDs(ctx, binIDs)
+	if err != nil {
+		return err
+	}
+	lotNo, binCode := map[int64]string{}, map[int64]string{}
+	for _, l := range lots {
+		lotNo[l.ID] = l.LotNo
+	}
+	for _, b := range bins {
+		binCode[b.ID] = b.Code
+	}
+	for _, k := range ordered {
+		if net[k].IsZero() {
+			continue
+		}
+		if err := q.EnsureLotBinBalance(ctx, db.EnsureLotBinBalanceParams{CompanyID: opt.CompanyID, ItemID: itemOf[k.lot], WarehouseID: whOf[k.bin], LotID: k.lot, BinID: k.bin}); err != nil {
+			return err
+		}
+		cur, err := q.LockLotBinBalance(ctx, db.LockLotBinBalanceParams{LotID: k.lot, BinID: k.bin})
+		if err != nil {
+			return err
+		}
+		next := cur.Add(net[k])
+		if next.IsNegative() {
+			return errLotShort.WithMessage(fmt.Sprintf("%s 批號 %s 在儲位 %s 現有 %s,需要 %s",
+				itemLabel(items[itemOf[k.lot]]), lotNo[k.lot], binCode[k.bin], cur.String(), net[k].Neg().String())).
+				WithDetails(map[string]string{"lot_no": lotNo[k.lot], "bin": binCode[k.bin]})
+		}
+		if err := q.SetLotBinBalance(ctx, db.SetLotBinBalanceParams{Qty: next, LotID: k.lot, BinID: k.bin}); err != nil {
 			return err
 		}
 	}

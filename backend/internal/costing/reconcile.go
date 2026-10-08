@@ -147,6 +147,12 @@ func (m *Module) reconcile(c *gin.Context) {
 		return
 	}
 	checks = append(checks, countCheck("bins", "儲位現有量 vs 流水帳 / 料品現有量", n, "儲位庫存與流水帳或料品現有量不一致,請立即通知系統管理員"))
+	n, err = q.LotBinBalanceMismatches(ctx, companyID)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	checks = append(checks, countCheck("lotbins", "批號 × 儲位庫存 vs 批號 / 儲位現有量", n, "批號與儲位的庫存對應不一致,請立即通知系統管理員"))
 	n, err = q.UnbalancedVouchers(ctx, companyID)
 	if err != nil {
 		response.Error(c, err)

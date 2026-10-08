@@ -227,10 +227,6 @@ func TestBinAllocationTransferAndReverse(t *testing.T) {
 		t.Fatalf("調回後 A-03=%s", c.binQty(wh, "A-03", "P1"))
 	}
 
-	// 盤點:啟用儲位的倉庫不支援
-	if _, r := c.createDoc(map[string]any{"doc_type": "count", "doc_date": today, "warehouse_id": wh}); r.status != http.StatusUnprocessableEntity || r.code() != "INV-021" {
-		t.Fatalf("盤點應被擋: %d %s", r.status, r.code())
-	}
 	assertReconcileOK(t, c, "bins")
 	assertReconcileOK(t, c, "stock")
 }
@@ -362,3 +358,197 @@ func TestConcurrentBinPostingsNeverOversell(t *testing.T) {
 	}
 	assertReconcileOK(t, c, "bins")
 }
+
+// 啟用儲位的倉庫盤點:非批號料品每個儲位一行;批號料品每個批號一行,盤盈須指定儲位
+func TestBinWarehouseStockCount(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	wh, plain := e.seedWarehouse("A", false), e.seedWarehouse("B", false)
+	e.setUseBins(wh, true)
+	expect(t, c.addBin(wh, "A-01"), http.StatusCreated, "")
+	expect(t, c.addBin(wh, "A-02"), http.StatusCreated, "")
+	p1, m1 := e.seedItem("P1", "goods"), e.seedItem("M1", "goods")
+	e.setLotControl(m1, "lot_expiry")
+	pcs := e.unitID("PCS")
+	expect(t, c.postBin(wh, p1, pcs, "10", "A-01"), http.StatusOK, "")
+	expect(t, c.postBin(wh, p1, pcs, "5", "A-02"), http.StatusOK, "")
+	lotIn, res := c.createDoc(map[string]any{"doc_type": "adjustment", "doc_date": today, "warehouse_id": wh, "lines": []map[string]any{
+		{"item_id": m1, "unit_id": pcs, "qty": "8", "lot_no": "L1", "expiry_date": "2027-12-31", "bin_code": "A-01"}}})
+	expect(t, res, http.StatusCreated, "")
+	expect(t, c.postAll(&lotIn), http.StatusOK, "")
+
+	type countLine struct {
+		ItemID    int64   `json:"item_id"`
+		LotNo     string  `json:"lot_no"`
+		BinCode   string  `json:"bin_code"`
+		SystemQty *string `json:"system_qty"`
+	}
+	type countFull struct {
+		ID      int64       `json:"id"`
+		Version int32       `json:"version"`
+		Lines   []countLine `json:"lines"`
+	}
+	cd, res := c.createDoc(map[string]any{"doc_type": "count", "doc_date": today, "warehouse_id": wh})
+	expect(t, res, http.StatusCreated, "")
+	full := decode[countFull](t, c.do(http.MethodGet, "/inventory/documents/"+itoa(cd.ID), nil).Data)
+	// 帳面快照:P1 在 A-01=10、A-02=5(依儲位各一行);M1 批號 L1 在 A-01=8
+	got := map[string]string{}
+	for _, l := range full.Lines {
+		got[itoa(l.ItemID)+"/"+l.LotNo+"/"+l.BinCode] = *l.SystemQty
+	}
+	if len(got) != 3 || got[itoa(p1)+"//A-01"] != "10" || got[itoa(p1)+"//A-02"] != "5" || got[itoa(m1)+"/L1/A-01"] != "8" {
+		t.Fatalf("盤點快照 = %v", got)
+	}
+
+	put := func(lines []map[string]any) apiResp {
+		return c.do(http.MethodPut, "/inventory/documents/"+itoa(cd.ID), map[string]any{
+			"doc_type": "count", "doc_date": today, "warehouse_id": wh, "lines": lines, "version": full.Version})
+	}
+	cl := func(item int64, qty, lot, bin string) map[string]any {
+		l := map[string]any{"item_id": item, "unit_id": pcs, "qty": qty}
+		if lot != "" {
+			l["lot_no"] = lot
+		}
+		if bin != "" {
+			l["bin_code"] = bin
+		}
+		return l
+	}
+	// 缺儲位 / 重複 / 儲位不存在 都會被擋
+	expect(t, put([]map[string]any{cl(p1, "9", "", ""), cl(p1, "7", "", "A-02"), cl(m1, "8", "L1", "A-01")}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, put([]map[string]any{cl(p1, "9", "", "A-01"), cl(p1, "9", "", "A-01"), cl(m1, "8", "L1", "A-01")}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, put([]map[string]any{cl(p1, "9", "", "NOPE"), cl(p1, "7", "", "A-02"), cl(m1, "8", "L1", "A-01")}), http.StatusUnprocessableEntity, "SYS-422")
+	// 不可拿掉快照內的行
+	expect(t, put([]map[string]any{cl(p1, "9", "", "A-01"), cl(m1, "8", "L1", "A-01")}), http.StatusUnprocessableEntity, "STK-006")
+
+	// A-01 盤虧 1、A-02 盤盈 2;M1 批號 L1 在 A-01 盤虧 1,另在 A-02 新增一行盤盈 3(帳面 0)
+	expect(t, put([]map[string]any{cl(p1, "9", "", "A-01"), cl(p1, "7", "", "A-02"), cl(m1, "7", "L1", "A-01"), cl(m1, "3", "L1", "A-02")}), http.StatusOK, "")
+	cd, _ = c.createDocReload(cd.ID)
+	expect(t, c.postAll(&cd), http.StatusOK, "")
+	if c.binQty(wh, "A-01", "P1") != "9" || c.binQty(wh, "A-02", "P1") != "7" || e.balance(p1, wh) != "16" {
+		t.Fatalf("盤點後 P1 A-01=%s A-02=%s total=%s", c.binQty(wh, "A-01", "P1"), c.binQty(wh, "A-02", "P1"), e.balance(p1, wh))
+	}
+	if c.binQty(wh, "A-01", "M1") != "7" || c.binQty(wh, "A-02", "M1") != "3" || e.balance(m1, wh) != "10" || c.lotQty(m1, wh, "L1") != "10" {
+		t.Fatalf("盤點後 M1 A-01=%s A-02=%s total=%s lot=%s", c.binQty(wh, "A-01", "M1"), c.binQty(wh, "A-02", "M1"), e.balance(m1, wh), c.lotQty(m1, wh, "L1"))
+	}
+	assertReconcileOK(t, c, "bins")
+	assertReconcileOK(t, c, "lotbins")
+	assertReconcileOK(t, c, "stock")
+
+	// 反過帳還原
+	expect(t, c.act(&cd, "unpost"), http.StatusOK, "")
+	if c.binQty(wh, "A-01", "P1") != "10" || c.binQty(wh, "A-02", "P1") != "5" || c.binQty(wh, "A-02", "M1") != "0" || c.binQty(wh, "A-01", "M1") != "8" {
+		t.Fatalf("反過帳後 A-01=%s A-02=%s", c.binQty(wh, "A-01", "P1"), c.binQty(wh, "A-02", "P1"))
+	}
+	assertReconcileOK(t, c, "bins")
+	assertReconcileOK(t, c, "lotbins")
+
+	// 沒啟用儲位的倉庫:盤點行不可帶儲位
+	expect(t, c.postBin(plain, p1, pcs, "3", ""), http.StatusOK, "")
+	pc, res := c.createDoc(map[string]any{"doc_type": "count", "doc_date": today, "warehouse_id": plain})
+	expect(t, res, http.StatusCreated, "")
+	pf := decode[countFull](t, c.do(http.MethodGet, "/inventory/documents/"+itoa(pc.ID), nil).Data)
+	expect(t, c.do(http.MethodPut, "/inventory/documents/"+itoa(pc.ID), map[string]any{
+		"doc_type": "count", "doc_date": today, "warehouse_id": plain, "version": pf.Version,
+		"lines": []map[string]any{cl(p1, "3", "", "A-01")}}), http.StatusUnprocessableEntity, "SYS-422")
+}
+
+func (e *env) lotBinQty(item int64, lot, bin string) string {
+	e.t.Helper()
+	var q string
+	err := e.pool.QueryRow(context.Background(), `SELECT trim_scale(COALESCE((SELECT b.qty FROM inventory_lot_bin_balances b
+		JOIN item_lots l ON l.id = b.lot_id JOIN bins bn ON bn.id = b.bin_id
+		WHERE b.item_id = $1 AND l.lot_no = $2 AND bn.code = $3), 0))::text`, item, lot, bin).Scan(&q)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return q
+}
+
+// 批號 × 儲位:入庫須批號與儲位;出庫先到期先出、同批號內庫存多的儲位先出;可只指定批號或儲位
+func TestLotBinJointAllocation(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	wh := e.seedWarehouse("A", false)
+	e.setUseBins(wh, true)
+	for _, b := range []string{"B1", "B2", "B3"} {
+		expect(t, c.addBin(wh, b), http.StatusCreated, "")
+	}
+	m := e.seedItem("M1", "goods")
+	e.setLotControl(m, "lot_expiry")
+	pcs := e.unitID("PCS")
+	adj := func(qty, lot, bin string) apiResp {
+		l := map[string]any{"item_id": m, "unit_id": pcs, "qty": qty}
+		if lot != "" {
+			l["lot_no"] = lot
+			if qty[0] != '-' {
+				l["expiry_date"] = map[string]string{"E1": "2027-01-31", "E2": "2027-06-30"}[lot]
+			}
+		}
+		if bin != "" {
+			l["bin_code"] = bin
+		}
+		d, res := c.createDoc(map[string]any{"doc_type": "adjustment", "doc_date": today, "warehouse_id": wh, "lines": []map[string]any{l}})
+		if res.status != http.StatusCreated {
+			return res
+		}
+		r := c.postAll(&d)
+		if r.status == http.StatusOK && qty[0] == '-' {
+			lastAdj = d
+		}
+		return r
+	}
+	expect(t, adj("10", "E1", "B1"), http.StatusOK, "")
+	expect(t, adj("5", "E1", "B2"), http.StatusOK, "")
+	expect(t, adj("20", "E2", "B2"), http.StatusOK, "")
+	expect(t, adj("5", "E1", ""), http.StatusUnprocessableEntity, "SYS-422") // 入庫缺儲位
+	assertReconcileOK(t, c, "lotbins")
+
+	// 都不指定:先到期的 E1 先出,E1 內庫存多的 B1 先出(10),再 B2(2)
+	expect(t, adj("-12", "", ""), http.StatusOK, "")
+	if e.lotBinQty(m, "E1", "B1") != "0" || e.lotBinQty(m, "E1", "B2") != "3" || e.lotBinQty(m, "E2", "B2") != "20" {
+		t.Fatalf("聯合分配後 E1/B1=%s E1/B2=%s E2/B2=%s", e.lotBinQty(m, "E1", "B1"), e.lotBinQty(m, "E1", "B2"), e.lotBinQty(m, "E2", "B2"))
+	}
+	undo := lastAdj
+	// 只指定儲位 B2:該儲位內先到期先出(E1 3 → E2 2)
+	expect(t, adj("-5", "", "B2"), http.StatusOK, "")
+	if e.lotBinQty(m, "E1", "B2") != "0" || e.lotBinQty(m, "E2", "B2") != "18" {
+		t.Fatalf("指定儲位後 E1/B2=%s E2/B2=%s", e.lotBinQty(m, "E1", "B2"), e.lotBinQty(m, "E2", "B2"))
+	}
+	// 只指定批號 E2:從有該批號的儲位出
+	expect(t, adj("-4", "E2", ""), http.StatusOK, "")
+	if e.lotBinQty(m, "E2", "B2") != "14" {
+		t.Fatalf("指定批號後 E2/B2=%s", e.lotBinQty(m, "E2", "B2"))
+	}
+	// 批號 + 儲位組合沒有庫存:即使該批號在別處有、該儲位也有別的批號,仍被擋
+	expect(t, adj("-1", "E2", "B1"), http.StatusUnprocessableEntity, "INV-012")
+	expect(t, adj("-1", "", "B3"), http.StatusUnprocessableEntity, "INV-012")
+	assertReconcileOK(t, c, "lotbins")
+	assertReconcileOK(t, c, "bins")
+	assertReconcileOK(t, c, "lots")
+
+	// 同倉儲位間調撥:B2 → B3 搬 6(沿用批號)
+	tr, res := c.createDoc(map[string]any{"doc_type": "transfer", "doc_date": today, "warehouse_id": wh, "to_warehouse_id": wh, "lines": []map[string]any{
+		{"item_id": m, "unit_id": pcs, "qty": "6", "bin_code": "B2", "to_bin_code": "B3"}}})
+	expect(t, res, http.StatusCreated, "")
+	expect(t, c.postAll(&tr), http.StatusOK, "")
+	if e.lotBinQty(m, "E2", "B2") != "8" || e.lotBinQty(m, "E2", "B3") != "6" {
+		t.Fatalf("儲位間調撥後 E2/B2=%s E2/B3=%s", e.lotBinQty(m, "E2", "B2"), e.lotBinQty(m, "E2", "B3"))
+	}
+	expect(t, c.act(&tr, "unpost"), http.StatusOK, "")
+	if e.lotBinQty(m, "E2", "B2") != "14" || e.lotBinQty(m, "E2", "B3") != "0" {
+		t.Fatalf("調撥反過帳後 E2/B2=%s E2/B3=%s", e.lotBinQty(m, "E2", "B2"), e.lotBinQty(m, "E2", "B3"))
+	}
+	// 第一筆自動分配的出庫反過帳:還原到原本的(批號, 儲位)
+	expect(t, c.act(&undo, "unpost"), http.StatusOK, "")
+	if e.lotBinQty(m, "E1", "B1") != "10" || e.lotBinQty(m, "E1", "B2") != "2" {
+		t.Fatalf("反過帳後 E1/B1=%s E1/B2=%s", e.lotBinQty(m, "E1", "B1"), e.lotBinQty(m, "E1", "B2"))
+	}
+	assertReconcileOK(t, c, "lotbins")
+	assertReconcileOK(t, c, "bins")
+	assertReconcileOK(t, c, "lots")
+}
+
+var lastAdj stockDoc

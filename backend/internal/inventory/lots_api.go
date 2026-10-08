@@ -140,6 +140,14 @@ type lotLedgerDTO struct {
 	ItemCode   string       `json:"item_code"`
 	ItemName   string       `json:"item_name"`
 	Moves      []lotMoveDTO `json:"moves"`
+	Bins       []lotBinDTO  `json:"bins"` // 啟用儲位的倉庫:這個批號目前放在哪些儲位
+}
+
+type lotBinDTO struct {
+	WarehouseID int64           `json:"warehouse_id"`
+	BinCode     string          `json:"bin_code"`
+	BinName     string          `json:"bin_name"`
+	Qty         decimal.Decimal `json:"qty"`
 }
 
 // lotLedger GET /inventory/lots/:id/ledger 批號追溯:這個批號從哪裡進、出到哪裡。
@@ -162,7 +170,15 @@ func (m *Module) lotLedger(c *gin.Context) {
 		return
 	}
 	out := lotLedgerDTO{LotID: lot.ID, LotNo: lot.LotNo, ExpiryDate: dateStr(lot.ExpiryDate), ItemID: lot.ItemID,
-		ItemCode: lot.ItemCode, ItemName: lot.ItemName, Moves: make([]lotMoveDTO, 0, len(rows))}
+		ItemCode: lot.ItemCode, ItemName: lot.ItemName, Moves: make([]lotMoveDTO, 0, len(rows)), Bins: []lotBinDTO{}}
+	bins, err := m.store.ListLotBinStock(ctx, db.ListLotBinStockParams{CompanyID: a.CompanyID, LotID: id})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	for _, b := range bins {
+		out.Bins = append(out.Bins, lotBinDTO{WarehouseID: b.WarehouseID, BinCode: b.BinCode, BinName: b.BinName, Qty: b.Qty})
+	}
 	bal := decimal.Zero
 	for _, r := range rows {
 		bal = bal.Add(r.Qty)

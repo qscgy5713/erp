@@ -109,3 +109,67 @@ ORDER BY l.expiry_date NULLS LAST, l.id;
 SELECT l.id, l.lot_no, l.expiry_date FROM item_lots l
 WHERE l.company_id = @company_id AND l.item_id = @item_id
 ORDER BY l.expiry_date NULLS LAST, l.id DESC LIMIT 50;
+
+-- name: EnsureLotBinBalance :exec
+INSERT INTO inventory_lot_bin_balances (company_id, item_id, warehouse_id, lot_id, bin_id, qty)
+VALUES (@company_id, @item_id, @warehouse_id, @lot_id, @bin_id, 0)
+ON CONFLICT (lot_id, bin_id) DO NOTHING;
+
+-- name: LockLotBinBalance :one
+SELECT qty FROM inventory_lot_bin_balances WHERE lot_id = @lot_id AND bin_id = @bin_id FOR UPDATE;
+
+-- name: SetLotBinBalance :exec
+UPDATE inventory_lot_bin_balances SET qty = @qty, updated_at = now() WHERE lot_id = @lot_id AND bin_id = @bin_id;
+
+-- name: ListLotBinBalancesForAllocation :many
+-- 啟用儲位的倉庫出庫:先到期先出(批號依效期,沒有效期的排最後);同一批號內庫存多的儲位先出。鎖定這些列
+SELECT b.lot_id, b.bin_id, b.qty, l.lot_no, l.expiry_date, bn.code AS bin_code
+FROM inventory_lot_bin_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN bins bn ON bn.id = b.bin_id
+WHERE b.item_id = @item_id AND b.warehouse_id = @warehouse_id AND b.qty > 0
+ORDER BY l.expiry_date NULLS LAST, l.id, b.qty DESC, bn.code
+FOR UPDATE OF b;
+
+-- name: LotBinBalanceMismatches :one
+-- 完整性:①各(批號, 倉庫)的儲位合計 = 批號現有量(啟用儲位的倉庫);②各(料品, 儲位)的批號合計 = 儲位現有量(批號管理料品)。筆數應為 0
+SELECT (
+    (SELECT count(*) FROM (
+        SELECT b.lot_id, b.warehouse_id FROM inventory_lot_balances b JOIN warehouses w ON w.id = b.warehouse_id
+        LEFT JOIN (SELECT lb.lot_id, lb.warehouse_id, SUM(lb.qty) AS q FROM inventory_lot_bin_balances lb
+                   WHERE lb.company_id = @company_id GROUP BY lb.lot_id, lb.warehouse_id) x
+               ON x.lot_id = b.lot_id AND x.warehouse_id = b.warehouse_id
+        WHERE b.company_id = @company_id AND w.use_bins AND b.qty <> COALESCE(x.q, 0)
+    ) a)
+    +
+    (SELECT count(*) FROM (
+        SELECT bb.bin_id, bb.item_id FROM inventory_bin_balances bb JOIN items i ON i.id = bb.item_id
+        LEFT JOIN (SELECT lb.bin_id, lb.item_id, SUM(lb.qty) AS q FROM inventory_lot_bin_balances lb
+                   WHERE lb.company_id = @company_id GROUP BY lb.bin_id, lb.item_id) y
+               ON y.bin_id = bb.bin_id AND y.item_id = bb.item_id
+        WHERE bb.company_id = @company_id AND i.lot_control <> 'none' AND bb.qty <> COALESCE(y.q, 0)
+    ) c)
+)::bigint AS mismatches;
+
+-- name: CountLotBinSnapshot :many
+-- 啟用儲位的倉庫:批號管理料品的盤點快照,依(批號, 儲位)逐筆
+SELECT b.item_id, l.lot_no, l.expiry_date, bn.code AS bin_code, b.qty
+FROM inventory_lot_bin_balances b
+JOIN item_lots l ON l.id = b.lot_id
+JOIN bins bn ON bn.id = b.bin_id
+WHERE b.company_id = @company_id AND b.warehouse_id = @warehouse_id AND b.item_id = ANY(@item_ids::bigint[]) AND b.qty > 0
+ORDER BY b.item_id, l.expiry_date NULLS LAST, l.id, bn.code;
+
+-- name: GetLotBinBalanceQtyByNo :one
+-- 某批號在某儲位的現有量(不存在為 0)
+SELECT COALESCE((SELECT b.qty FROM inventory_lot_bin_balances b
+                 JOIN item_lots l ON l.id = b.lot_id JOIN bins bn ON bn.id = b.bin_id
+                 WHERE l.company_id = @company_id AND l.item_id = @item_id AND l.lot_no = @lot_no
+                   AND bn.warehouse_id = @warehouse_id AND bn.code = @code), 0)::numeric;
+
+-- name: ListLotBinStock :many
+-- 某批號在各儲位的現有量
+SELECT bn.code AS bin_code, bn.name AS bin_name, b.warehouse_id, b.qty
+FROM inventory_lot_bin_balances b JOIN bins bn ON bn.id = b.bin_id
+WHERE b.company_id = @company_id AND b.lot_id = @lot_id AND b.qty > 0
+ORDER BY b.warehouse_id, bn.code;
