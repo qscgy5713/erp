@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -416,4 +418,150 @@ func (c *client) getAccount(id int64) map[string]any {
 
 func (c *client) putAccount(id int64, body map[string]any) apiResp {
 	return c.do(http.MethodPut, "/gl/accounts/"+itoa(id), body)
+}
+
+func (c *client) yearEnd(year int, action string) apiResp {
+	return c.do(http.MethodPost, "/gl/year-end/"+itoa(int64(year))+"/"+action, nil)
+}
+
+type stmtLine struct {
+	Kind   string `json:"kind"`
+	Label  string `json:"label"`
+	Amount string `json:"amount"`
+}
+
+func (c *client) statement(path string) (lines []stmtLine, balanced *bool) {
+	c.e.t.Helper()
+	res := c.do(http.MethodGet, path, nil)
+	expect(c.e.t, res, http.StatusOK, "")
+	out := decode[struct {
+		Lines    []stmtLine `json:"lines"`
+		Balanced *bool      `json:"balanced"`
+	}](c.e.t, res.Data)
+	return out.Lines, out.Balanced
+}
+
+func stmtAmount(t *testing.T, lines []stmtLine, label string) string {
+	t.Helper()
+	for _, l := range lines {
+		if l.Label == label {
+			return l.Amount
+		}
+	}
+	t.Fatalf("報表沒有「%s」", label)
+	return ""
+}
+
+// 損益表、資產負債表與年度結帳:結帳前後損益表不變、資產負債表恆平衡、可撤銷、權限與年度檢查
+func TestFinancialStatementsAndYearEnd(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	cash, sales, rent, capital := e.idByCode("accounts", "1101"), e.idByCode("accounts", "4101"), e.idByCode("accounts", "6102"), e.idByCode("accounts", "3101")
+	post := func(date string, lines ...map[string]any) {
+		t.Helper()
+		v, res := c.createVoucherAPI(manualVoucher(date, lines...))
+		expect(t, res, http.StatusCreated, "")
+		expect(t, c.actVoucher(&v, "post"), http.StatusOK, "")
+	}
+	post("2025-01-02", vl(cash, "5000", "0"), vl(capital, "0", "5000")) // 股本
+	post("2025-06-10", vl(cash, "3000", "0"), vl(sales, "0", "3000"))   // 收入
+	post("2025-07-10", vl(rent, "1200", "0"), vl(cash, "0", "1200"))    // 費用
+	post("2026-02-10", vl(cash, "500", "0"), vl(sales, "0", "500"))     // 次年收入
+
+	income := func(from, to string) []stmtLine {
+		l, _ := c.statement("/gl/reports/income-statement?from=" + from + "&to=" + to)
+		return l
+	}
+	bs := func(asOf string) []stmtLine {
+		l, ok := c.statement("/gl/reports/balance-sheet?as_of=" + asOf)
+		if ok == nil || !*ok {
+			t.Fatalf("資產負債表 %s 不平衡", asOf)
+		}
+		return l
+	}
+	if got := stmtAmount(t, income("2025-01-01", "2025-12-31"), "本期淨利(損)"); got != "1800" {
+		t.Fatalf("2025 淨利 = %s", got)
+	}
+	if got := stmtAmount(t, bs("2025-12-31"), "權益總計"); got != "6800" {
+		t.Fatalf("結帳前權益 = %s", got)
+	}
+
+	// 權限:沒有結帳權限的人不能年結
+	e.seedUser("viewer", pw, false, false)
+	v := e.loggedIn("viewer", pw)
+	expect(t, v.yearEnd(2025, "close"), http.StatusForbidden, "SYS-403")
+
+	// 尚未結束的年度、不存在損益的年度
+	expect(t, c.yearEnd(2026, "close"), http.StatusUnprocessableEntity, "GL-030")
+	expect(t, c.yearEnd(2024, "close"), http.StatusUnprocessableEntity, "GL-032")
+	expect(t, c.yearEnd(2025, "undo"), http.StatusConflict, "GL-033")
+
+	// 年度結帳:產生一張傳票;不可重複
+	expect(t, c.yearEnd(2025, "close"), http.StatusOK, "")
+	expect(t, c.yearEnd(2025, "close"), http.StatusConflict, "GL-031")
+	if got := stmtAmount(t, income("2025-01-01", "2025-12-31"), "本期淨利(損)"); got != "1800" {
+		t.Fatalf("年結後 2025 損益表應不變,淨利 = %s", got)
+	}
+	l := bs("2025-12-31")
+	if got := stmtAmount(t, l, "權益總計"); got != "6800" {
+		t.Fatalf("年結後權益 = %s", got)
+	}
+	if got := stmtAmount(t, l, "保留盈餘(累積盈虧)"); got != "1800" {
+		t.Fatalf("保留盈餘 = %s", got)
+	}
+	// 2026 年的收入不受 2025 年結影響
+	if got := stmtAmount(t, income("2026-01-01", "2026-12-31"), "本期淨利(損)"); got != "500" {
+		t.Fatalf("2026 淨利 = %s", got)
+	}
+	bs("2026-06-30")
+
+	// 年度清單
+	res := c.do(http.MethodGet, "/gl/year-end", nil)
+	expect(t, res, http.StatusOK, "")
+	years := decode[[]struct {
+		Year   int    `json:"year"`
+		Status string `json:"status"`
+	}](t, res.Data)
+	st := map[int]string{}
+	for _, y := range years {
+		st[y.Year] = y.Status
+	}
+	if st[2025] != "closed" || st[2026] != "not_ended" {
+		t.Fatalf("年度狀態 = %v", st)
+	}
+
+	// 撤銷後回到結帳前,可再次年結
+	expect(t, c.yearEnd(2025, "undo"), http.StatusOK, "")
+	if got := stmtAmount(t, bs("2025-12-31"), "權益總計"); got != "6800" {
+		t.Fatalf("撤銷後權益 = %s", got)
+	}
+	expect(t, c.yearEnd(2025, "close"), http.StatusOK, "")
+
+	// 損益剛好為零的年度(2023)與虧損年度(2024)都可結帳
+	post("2023-03-01", vl(cash, "100", "0"), vl(sales, "0", "100"))
+	post("2023-04-01", vl(rent, "100", "0"), vl(cash, "0", "100"))
+	expect(t, c.yearEnd(2023, "close"), http.StatusOK, "")
+	post("2024-03-01", vl(rent, "400", "0"), vl(cash, "0", "400"))
+	expect(t, c.yearEnd(2024, "close"), http.StatusOK, "")
+	if got := stmtAmount(t, income("2024-01-01", "2024-12-31"), "本期淨利(損)"); got != "-400" {
+		t.Fatalf("2024 淨利 = %s", got)
+	}
+	if re := stmtAmount(t, bs("2024-12-31"), "保留盈餘(累積盈虧)"); re != "-400" { // 截至 2024 底:2023 結零、2024 虧損 400(2025 的年結傳票日期在之後)
+		t.Fatalf("2024 底保留盈餘 = %q", re)
+	}
+
+	// 年結傳票日期是 12/31:12 月已關帳就不能年結,也不能撤銷
+	expect(t, c.do(http.MethodPost, "/gl/periods/2025-12/close", nil), http.StatusOK, "")
+	expect(t, c.yearEnd(2025, "undo"), http.StatusConflict, "GL-001")
+	expect(t, c.do(http.MethodPost, "/gl/periods/2025-12/reopen", nil), http.StatusOK, "")
+
+	// 匯出 Excel
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gl/reports/balance-sheet?as_of=2025-12-31&format=xlsx", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	w := httptest.NewRecorder()
+	e.r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || w.Body.Len() < 1000 || !strings.Contains(w.Header().Get("Content-Type"), "spreadsheetml") {
+		t.Fatalf("匯出失敗 %d len=%d", w.Code, w.Body.Len())
+	}
 }

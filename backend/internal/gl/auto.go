@@ -27,6 +27,7 @@ var MappingKeys = []struct{ Key, Label string }{
 	{"cost.cogs", "月結:銷貨成本"},
 	{"cost.inventory", "月結:存貨"},
 	{"cost.adjustment", "月結:存貨盤損(盈)"},
+	{"year.retained", "年度結帳:保留盈餘(累積盈虧)"},
 	{"settle.cash", "收付款:現金"},
 	{"settle.bank", "收付款:銀行存款(匯款、支票、其他)"},
 }

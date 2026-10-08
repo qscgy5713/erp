@@ -237,3 +237,33 @@ LIMIT @lim OFFSET @off;
 SELECT count(*) FROM vouchers v JOIN voucher_lines l ON l.voucher_id = v.id
 WHERE v.company_id = @company_id AND v.status = 'posted'
   AND v.voucher_date BETWEEN sqlc.arg(from_date)::date AND sqlc.arg(to_date)::date;
+
+-- ======== 財務報表 ========
+
+-- name: AccountActivity :many
+-- 各科目在期間內(from_date 為空表示自有帳以來)已過帳傳票的借貸合計。exclude_year_end 排除年度結帳傳票
+-- (含其沖銷),損益表才看得到該年度真正的收入與費用。
+SELECT a.id, a.code, a.name, a.acct_type,
+       COALESCE(SUM(l.debit), 0)::numeric AS debit, COALESCE(SUM(l.credit), 0)::numeric AS credit
+FROM accounts a
+JOIN voucher_lines l ON l.account_id = a.id
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+WHERE a.company_id = @company_id
+  AND (sqlc.narg(from_date)::date IS NULL OR v.voucher_date >= sqlc.narg(from_date))
+  AND v.voucher_date <= sqlc.arg(to_date)::date
+  AND (NOT @exclude_year_end::boolean OR v.source_type <> 'year_end')
+GROUP BY a.id
+ORDER BY a.code;
+
+-- name: OpenYearEndVoucher :one
+-- 某年度尚未被沖銷的年度結帳傳票
+SELECT v.id, v.doc_no FROM vouchers v
+WHERE v.company_id = @company_id AND v.source_type = 'year_end' AND v.source_id = @year::bigint
+  AND v.status = 'posted' AND v.reversal_of IS NULL
+  AND NOT EXISTS (SELECT 1 FROM vouchers r WHERE r.reversal_of = v.id)
+LIMIT 1;
+
+-- name: YearsWithVouchers :many
+SELECT DISTINCT EXTRACT(YEAR FROM v.voucher_date)::int AS year FROM vouchers v
+WHERE v.company_id = @company_id AND v.status = 'posted' AND v.source_type <> 'year_end'
+ORDER BY year DESC;

@@ -12,6 +12,72 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const accountActivity = `-- name: AccountActivity :many
+
+SELECT a.id, a.code, a.name, a.acct_type,
+       COALESCE(SUM(l.debit), 0)::numeric AS debit, COALESCE(SUM(l.credit), 0)::numeric AS credit
+FROM accounts a
+JOIN voucher_lines l ON l.account_id = a.id
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+WHERE a.company_id = $1
+  AND ($2::date IS NULL OR v.voucher_date >= $2)
+  AND v.voucher_date <= $3::date
+  AND (NOT $4::boolean OR v.source_type <> 'year_end')
+GROUP BY a.id
+ORDER BY a.code
+`
+
+type AccountActivityParams struct {
+	CompanyID      int64
+	FromDate       *time.Time
+	ToDate         time.Time
+	ExcludeYearEnd bool
+}
+
+type AccountActivityRow struct {
+	ID       int64
+	Code     string
+	Name     string
+	AcctType string
+	Debit    decimal.Decimal
+	Credit   decimal.Decimal
+}
+
+// ======== 財務報表 ========
+// 各科目在期間內(from_date 為空表示自有帳以來)已過帳傳票的借貸合計。exclude_year_end 排除年度結帳傳票
+// (含其沖銷),損益表才看得到該年度真正的收入與費用。
+func (q *Queries) AccountActivity(ctx context.Context, arg AccountActivityParams) ([]AccountActivityRow, error) {
+	rows, err := q.db.Query(ctx, accountActivity,
+		arg.CompanyID,
+		arg.FromDate,
+		arg.ToDate,
+		arg.ExcludeYearEnd,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AccountActivityRow{}
+	for rows.Next() {
+		var i AccountActivityRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.AcctType,
+			&i.Debit,
+			&i.Credit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const accountParentCycle = `-- name: AccountParentCycle :one
 WITH RECURSIVE chain (cid) AS (
     SELECT $2::bigint
@@ -1090,6 +1156,32 @@ func (q *Queries) OpenVouchersBySource(ctx context.Context, arg OpenVouchersBySo
 	return items, nil
 }
 
+const openYearEndVoucher = `-- name: OpenYearEndVoucher :one
+SELECT v.id, v.doc_no FROM vouchers v
+WHERE v.company_id = $1 AND v.source_type = 'year_end' AND v.source_id = $2::bigint
+  AND v.status = 'posted' AND v.reversal_of IS NULL
+  AND NOT EXISTS (SELECT 1 FROM vouchers r WHERE r.reversal_of = v.id)
+LIMIT 1
+`
+
+type OpenYearEndVoucherParams struct {
+	CompanyID int64
+	Year      int64
+}
+
+type OpenYearEndVoucherRow struct {
+	ID    int64
+	DocNo string
+}
+
+// 某年度尚未被沖銷的年度結帳傳票
+func (q *Queries) OpenYearEndVoucher(ctx context.Context, arg OpenYearEndVoucherParams) (OpenYearEndVoucherRow, error) {
+	row := q.db.QueryRow(ctx, openYearEndVoucher, arg.CompanyID, arg.Year)
+	var i OpenYearEndVoucherRow
+	err := row.Scan(&i.ID, &i.DocNo)
+	return i, err
+}
+
 const setAccountMapping = `-- name: SetAccountMapping :exec
 INSERT INTO account_mappings (company_id, map_key, account_id, updated_by)
 VALUES ($1, $2, $3, $4)
@@ -1351,4 +1443,30 @@ func (q *Queries) UpdateVoucherHeader(ctx context.Context, arg UpdateVoucherHead
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const yearsWithVouchers = `-- name: YearsWithVouchers :many
+SELECT DISTINCT EXTRACT(YEAR FROM v.voucher_date)::int AS year FROM vouchers v
+WHERE v.company_id = $1 AND v.status = 'posted' AND v.source_type <> 'year_end'
+ORDER BY year DESC
+`
+
+func (q *Queries) YearsWithVouchers(ctx context.Context, companyID int64) ([]int32, error) {
+	rows, err := q.db.Query(ctx, yearsWithVouchers, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int32{}
+	for rows.Next() {
+		var year int32
+		if err := rows.Scan(&year); err != nil {
+			return nil, err
+		}
+		items = append(items, year)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

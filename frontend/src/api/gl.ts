@@ -1,4 +1,4 @@
-import { http, qs, requestPage } from './http'
+import { download, http, qs, requestPage } from './http'
 import type { Decimal } from './masterdata'
 
 export type AcctType = 'asset' | 'liability' | 'equity' | 'revenue' | 'cost' | 'expense'
@@ -47,6 +47,33 @@ export interface Mapping {
 
 export type VoucherStatus = 'draft' | 'posted' | 'voided'
 
+export interface StmtLine {
+  kind: 'header' | 'account' | 'total'
+  level: number
+  code?: string
+  label: string
+  amount: Decimal
+  prev: Decimal
+}
+
+export interface Statement {
+  title: string
+  from?: string
+  to: string
+  compare: boolean
+  prev_from?: string
+  prev_to?: string
+  balanced?: boolean
+  lines: StmtLine[]
+}
+
+export interface YearEnd {
+  year: number
+  status: 'closed' | 'open' | 'not_ended'
+  voucher_no?: string
+  profit: Decimal
+}
+
 export const sourceLabels: Record<string, string> = {
   manual: '手動',
   goods_receipt: '進貨',
@@ -56,6 +83,7 @@ export const sourceLabels: Record<string, string> = {
   collection: '收款',
   payment: '付款',
   cost_closing: '月結成本',
+  year_end: '年度結帳',
   opening_balance: '期初科目餘額',
 }
 
@@ -213,6 +241,19 @@ export const glApi = {
     version: number,
     date?: string,
   ) => http.post<Voucher>(`/gl/vouchers/${id}/actions/${action}`, { version, date }),
+
+  incomeStatement: (from: string, to: string, compare: boolean) =>
+    http.get<Statement>(`/gl/reports/income-statement${qs({ from, to, compare })}`),
+  balanceSheet: (as_of: string, compare: boolean) =>
+    http.get<Statement>(`/gl/reports/balance-sheet${qs({ as_of, compare })}`),
+  exportStatement: (
+    kind: 'income-statement' | 'balance-sheet',
+    params: Record<string, string | boolean>,
+    name: string,
+  ) => download(`/gl/reports/${kind}${qs({ ...params, format: 'xlsx' })}`, name),
+  years: () => http.get<YearEnd[]>('/gl/year-end'),
+  yearEnd: (year: number, action: 'close' | 'undo') =>
+    http.post<unknown>(`/gl/year-end/${year}/${action}`),
 
   periods: () => http.get<Period[]>('/gl/periods'),
   changePeriod: (period: string, action: 'close' | 'reopen') =>

@@ -297,6 +297,11 @@ const router = createRouter({
       meta: { title: '會計報表', perm: ['gl.report.read'] },
     },
     {
+      path: '/gl/statements',
+      component: () => import('@/views/gl/StatementsView.vue'),
+      meta: { title: '財務報表', perm: ['gl.report.read'] },
+    },
+    {
       path: '/gl/periods',
       component: () => import('@/views/gl/PeriodsView.vue'),
       meta: { title: '會計期間', perm: ['gl.period.read', 'gl.period.close'] },
