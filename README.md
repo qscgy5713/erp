@@ -2,7 +2,7 @@
 
 給台灣中小企業(買賣業為主、預留輕製造)使用的 ERP 系統,串起採購、庫存、銷售、應收應付與會計總帳。
 
-> 目前狀態:**M6 會計總帳完成;M7 進行中(月結成本、對帳檢查、Excel 匯入、儀表板、壓力測試已完成)**。下一步:部署與操作文件。規劃見 [doc/plan.md](doc/plan.md)。
+> 目前狀態:**M6 會計總帳完成;M7 完成(月結成本、對帳檢查、Excel 匯入、儀表板、壓力測試、部署與操作文件)——第一期全部完成**。規劃見 [doc/plan.md](doc/plan.md)。
 
 ## 功能
 
@@ -268,3 +268,5 @@ erp/
 - [doc/todo.md](doc/todo.md):待辦清單
 - [doc/worklog.md](doc/worklog.md):工作日誌
 - [doc/perf.md](doc/perf.md):效能與壓力測試(併發正確性、負載測試、優化數據)
+- [doc/deploy.md](doc/deploy.md):部署與維運(正式環境、HTTPS、備份還原、升級、上線檢查清單)
+- [doc/manual.md](doc/manual.md):操作手冊(使用者與管理員)

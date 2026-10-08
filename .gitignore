@@ -1,4 +1,6 @@
 .env
+.env.prod
+backups/
 .DS_Store
 .idea/
 

@@ -91,3 +91,8 @@ jobs:
         run: |
           docker build --target prod -t erp-api backend
           docker build --target prod -t erp-web frontend
+      - name: 驗證正式環境 compose 設定
+        run: |
+          docker compose -f docker-compose.prod.yml --env-file .env.prod.example config --quiet
+          # 映像內須有維運指令(建立管理員用),且正式映像不可帶開發用的 air
+          docker run --rm --entrypoint sh erp-api -c 'test -x /usr/local/bin/cli && test -x /usr/local/bin/api'

@@ -1,5 +1,19 @@
 # 工作日誌
 
+## 2026-10-08 M7(第五段)部署與操作文件 — 第一期完成
+- 已 push 第四段到 `origin/main`(9a681e4);CI 結果依指示未追蹤。
+- 部署產物:`docker-compose.prod.yml`、`.env.prod.example`、強化 `frontend/nginx.conf`(**`client_max_body_size 6m`**:資料匯入上限 5 MB,nginx 預設只有 1 MB 會直接擋掉;gzip、安全標頭、`/assets` 長期快取、`index.html` 不快取、API 不快取)、`backend/Dockerfile` 的 prod 映像加入 `cli`(原本映像內沒有建立管理員的工具,正式環境無法建立第一個管理員)、`scripts/backup.sh`、`scripts/restore.sh`;`.gitignore` 排除 `.env.prod` 與 `backups/`。
+- 文件:`doc/deploy.md`(架構、首次部署、HTTPS、設定參考、日常維運、備份還原、升級與回滾、上線檢查清單、疑難排解、已知限制)、`doc/manual.md`(依實際行為撰寫的操作手冊,含角色建議、每月結帳順序、錯誤訊息對照)。
+- **實跑驗證**(以獨立的 `erp-prodtest` 專案與埠號建置真正的 prod 映像並啟動,完全不碰開發環境,驗完整個刪除):
+  - 建置與啟動:postgres → migrate → api(healthcheck 通過,唯讀檔案系統)→ web;
+  - `cli create-admin` 在 prod 映像內可用;登入經 nginx 成功,**refresh cookie 確實帶 `Secure`**(所以正式環境必須走 HTTPS);首頁與 SPA 路由 200,安全標頭與快取標頭正確;
+  - 上傳 4 MB 通過 nginx(後端再依權限 / 格式處理),8 MB 被 nginx 直接 413;
+  - 備份 → `--verify`(暫存資料庫還原,migration 版本 11、各表筆數、傳票借貸不平衡 0)→ 不輸入確認字串會取消 → **真正還原**:放標記資料、備份、刪除標記、還原,標記回來、服務與登入正常。
+- 驗證過程中自己的錯:第一次測還原時,我的 shell 輔助函式在 zsh 下失效,標記資料根本沒寫入,卻看到腳本「成功」——差點把「腳本跑完」當成「資料真的還原」。改用正確寫法重做,先確認標記存在、刪除後為 0、還原後為 1,才算證明。
+- CI 新增:驗證正式 compose 設定可解析,並確認 prod 映像內有 `cli` 與 `api`。
+- **未實測**(文件已標明):HTTPS 代理(Caddy 範例)、cron 排程與異地同步。
+- 第一期 M0–M7 全部完成。
+
 ## 2026-10-08 M7(第四段)壓力測試
 - 已 push 第三段到 `origin/main`(55143f6);CI 結果依指示未追蹤。完整數據與方法見 `doc/perf.md`。
 - **併發正確性**(`concurrency_test.go`,8 項):出貨不超賣、進貨不超收、收款不超沖、信用額度、單號不重複、月結與過帳、兩個確定性鎖測試。每項都做突變測試(暫時拿掉鎖,確認測試失敗再還原)。
