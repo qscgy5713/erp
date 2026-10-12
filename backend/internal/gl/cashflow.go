@@ -172,26 +172,44 @@ func (m *Module) departmentPnl(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
+	entries := make([]pnlEntry, len(rows))
+	for i, r := range rows {
+		entries[i] = pnlEntry{ID: r.DepartmentID, Code: deref(r.DepartmentCode), Name: deref(r.DepartmentName), AcctType: r.AcctType, Amount: r.Amount}
+	}
+	out, total := buildPnl(entries, "未指定部門")
+	response.OK(c, gin.H{"from": from.Format(time.DateOnly), "to": to.Format(time.DateOnly), "rows": out, "total": total})
+}
+
+type pnlEntry struct {
+	ID       *int64
+	Code     string
+	Name     string
+	AcctType string
+	Amount   decimal.Decimal
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// buildPnl 把「維度 × 科目類別」的金額彙整成損益列;ID 為 nil 的歸在「未指定」並排在最後。
+func buildPnl(rows []pnlEntry, unassignedName string) ([]*deptPnlRow, deptPnlRow) {
 	out := []*deptPnlRow{}
 	idx := map[int64]*deptPnlRow{}
 	var unassigned *deptPnlRow
 	for _, r := range rows {
 		var d *deptPnlRow
-		if r.DepartmentID == nil {
+		if r.ID == nil {
 			if unassigned == nil {
-				unassigned = &deptPnlRow{Name: "未指定部門"}
+				unassigned = &deptPnlRow{Name: unassignedName}
 			}
 			d = unassigned
-		} else if d = idx[*r.DepartmentID]; d == nil {
-			code, name := "", ""
-			if r.DepartmentCode != nil {
-				code = *r.DepartmentCode
-			}
-			if r.DepartmentName != nil {
-				name = *r.DepartmentName
-			}
-			d = &deptPnlRow{DepartmentID: r.DepartmentID, Code: code, Name: name}
-			idx[*r.DepartmentID] = d
+		} else if d = idx[*r.ID]; d == nil {
+			d = &deptPnlRow{DepartmentID: r.ID, Code: r.Code, Name: r.Name}
+			idx[*r.ID] = d
 			out = append(out, d)
 		}
 		switch r.AcctType {
@@ -212,5 +230,5 @@ func (m *Module) departmentPnl(c *gin.Context) {
 		total.Revenue, total.Cost = total.Revenue.Add(d.Revenue), total.Cost.Add(d.Cost)
 		total.Expense, total.Profit = total.Expense.Add(d.Expense), total.Profit.Add(d.Profit)
 	}
-	response.OK(c, gin.H{"from": from.Format(time.DateOnly), "to": to.Format(time.DateOnly), "rows": out, "total": total})
+	return out, total
 }

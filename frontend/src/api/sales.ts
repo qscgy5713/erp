@@ -201,13 +201,40 @@ export interface CustomerOption {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface SalesPrice {
+  id: number
+  customer_id: number | null
+  customer_name: string | null
+  item_id: number
+  item_code: string
+  item_name: string
+  currency: string
+  min_qty: string
+  unit_price: string
+  valid_from: string | null
+  valid_to: string | null
+  note: string
+}
+
+export interface PriceLookup {
+  unit_price: string
+  source: 'customer' | 'general' | 'list' | 'none'
+}
+
 export const salesApi = {
+  prices: (q: Q) => http.get<SalesPrice[]>(`/sales/prices${qs(q)}`),
+  createPrice: (input: unknown) => http.post<{ id: number }>('/sales/prices', input),
+  deletePrice: (id: number) => http.delete<void>(`/sales/prices/${id}`),
+  lookupPrice: (q: Q) => http.get<PriceLookup>(`/sales/price${qs(q)}`),
   orders: (q: Q) => requestPage<SalesOrderRow>(`/sales/orders${qs(q)}`),
   order: (id: number) => http.get<SalesOrder>(`/sales/orders/${id}`),
   createOrder: (input: unknown) => http.post<SalesOrder>('/sales/orders', input),
   updateOrder: (id: number, input: unknown) => http.put<SalesOrder>(`/sales/orders/${id}`, input),
-  orderAction: (id: number, action: DocAction, version: number) =>
-    http.post<SalesOrder>(`/sales/orders/${id}/actions/${action}`, { version }),
+  orderAction: (id: number, action: DocAction, version: number, creditOverrideReason?: string) =>
+    http.post<SalesOrder>(`/sales/orders/${id}/actions/${action}`, {
+      version,
+      credit_override_reason: creditOverrideReason,
+    }),
   unshipped: (q: Q) => requestPage<UnshippedLine>(`/sales/unshipped-lines${qs(q)}`),
   availability: (warehouseId: number, itemIds: number[], excludeOrderId?: number) =>
     http.get<Availability[]>(

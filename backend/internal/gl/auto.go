@@ -31,6 +31,12 @@ var MappingKeys = []struct{ Key, Label string }{
 	{"year.retained", "年度結帳:保留盈餘(累積盈虧)"},
 	{"settle.cash", "收付款:現金"},
 	{"settle.bank", "收付款:銀行存款(匯款、支票、其他)"},
+	{"settle.advance_received", "收款:預收款項"},
+	{"settle.advance_paid", "付款:預付款項"},
+	{"settle.notes_receivable", "收款:應收票據(支票)"},
+	{"settle.notes_payable", "付款:應付票據(支票)"},
+	{"fx.gain", "外幣收付款:兌換利益"},
+	{"fx.loss", "外幣收付款:兌換損失"},
 }
 
 func mappingLabel(key string) string {
@@ -216,7 +222,7 @@ func reverseVoucher(ctx context.Context, q *db.Queries, opt Options, orig db.Vou
 	for _, l := range lines {
 		if err := q.AddVoucherLine(ctx, db.AddVoucherLineParams{
 			VoucherID: rv.ID, LineNo: l.LineNo, AccountID: l.AccountID, Debit: l.Credit, Credit: l.Debit,
-			Description: l.Description, CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID,
+			Description: l.Description, CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID, ProjectID: l.ProjectID,
 		}); err != nil {
 			return err
 		}

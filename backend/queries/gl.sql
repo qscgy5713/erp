@@ -160,12 +160,13 @@ RETURNING *;
 
 -- name: ListVoucherLines :many
 SELECT l.*, a.code AS account_code, a.name AS account_name, c.name AS customer_name, s.name AS supplier_name,
-       d.name AS department_name
+       d.name AS department_name, pj.name AS project_name
 FROM voucher_lines l
 JOIN accounts a ON a.id = l.account_id
 LEFT JOIN customers c ON c.id = l.customer_id
 LEFT JOIN suppliers s ON s.id = l.supplier_id
 LEFT JOIN departments d ON d.id = l.department_id
+LEFT JOIN projects pj ON pj.id = l.project_id
 WHERE l.voucher_id = @voucher_id
 ORDER BY l.line_no;
 
@@ -173,9 +174,9 @@ ORDER BY l.line_no;
 DELETE FROM voucher_lines WHERE voucher_id = @voucher_id;
 
 -- name: AddVoucherLine :exec
-INSERT INTO voucher_lines (voucher_id, line_no, account_id, debit, credit, description, customer_id, supplier_id, department_id)
+INSERT INTO voucher_lines (voucher_id, line_no, account_id, debit, credit, description, customer_id, supplier_id, department_id, project_id)
 VALUES (@voucher_id, @line_no, @account_id, @debit, @credit, @description, sqlc.narg(customer_id),
-        sqlc.narg(supplier_id), sqlc.narg(department_id));
+        sqlc.narg(supplier_id), sqlc.narg(department_id), sqlc.narg(project_id));
 
 -- name: OpenVouchersBySource :many
 -- 某張業務單據尚未被沖銷的已過帳傳票(反過帳時沖銷)
@@ -192,7 +193,9 @@ SELECT
     COALESCE(sqlc.narg(supplier_id)::bigint IS NULL OR EXISTS (
         SELECT 1 FROM suppliers WHERE id = sqlc.narg(supplier_id)::bigint AND company_id = @company_id::bigint), FALSE)::boolean AS supplier_ok,
     COALESCE(sqlc.narg(department_id)::bigint IS NULL OR EXISTS (
-        SELECT 1 FROM departments WHERE id = sqlc.narg(department_id)::bigint AND company_id = @company_id::bigint), FALSE)::boolean AS department_ok;
+        SELECT 1 FROM departments WHERE id = sqlc.narg(department_id)::bigint AND company_id = @company_id::bigint), FALSE)::boolean AS department_ok,
+    COALESCE(sqlc.narg(project_id)::bigint IS NULL OR EXISTS (
+        SELECT 1 FROM projects WHERE id = sqlc.narg(project_id)::bigint AND company_id = @company_id::bigint), FALSE)::boolean AS project_ok;
 
 -- ======== 報表(只計已過帳傳票) ========
 

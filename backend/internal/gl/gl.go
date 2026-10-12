@@ -61,6 +61,10 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/vouchers/:id/attachments/:aid", voucherRead, m.downloadAttachment)
 	g.DELETE("/vouchers/:id/attachments/:aid", auth.Require(permission.VoucherWrite), m.deleteAttachment)
 
+	g.GET("/projects", auth.Require(permission.AccountRead, permission.AccountWrite, permission.VoucherWrite, permission.ReportRead), m.listProjects)
+	g.POST("/projects", auth.Require(permission.AccountWrite), m.createProject)
+	g.PUT("/projects/:id", auth.Require(permission.AccountWrite), m.updateProject)
+
 	g.GET("/periods", auth.Require(permission.PeriodRead, permission.PeriodClose), m.listPeriods)
 	g.POST("/periods/:period/:action", auth.Require(permission.PeriodClose), m.changePeriod)
 
@@ -72,6 +76,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/reports/balance-sheet", report, m.balanceSheet)
 	g.GET("/reports/cash-flow", report, m.cashFlow)
 	g.GET("/reports/department-pnl", report, m.departmentPnl)
+	g.GET("/reports/project-pnl", report, m.projectPnl)
 	g.GET("/reports/vat401", report, m.vat401)
 	g.GET("/reports/vat401/media", report, m.vat401Media)
 	g.PUT("/reports/vat401/settings", auth.Require(permission.VoucherPost), m.saveVatSettings)

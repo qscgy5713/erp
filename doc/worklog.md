@@ -1,5 +1,17 @@
 # 工作日誌
 
+## 2026-10-12 把「需要使用者決定」的待辦以預設方案做完(D79–D83)
+使用者授權我自行決定規格,以下為採用的預設方案(詳見 plan.md D79–D83):
+- **信用額度超額覆核**:新權限 `sales.order.credit_override`;核准訂單被擋(SAL-003)時,有權限者在前端填寫原因後以 `credit_override_reason` 重送放行,並寫入稽核紀錄。
+- **售價表**:migration 25 `sales_prices`、`GET /sales/price` 查價、`/sales/prices` 維護(`sales.price.write`)、售價表維護頁;開單選料品時自動帶入。
+- **含稅單價輸入**:開單頁稅別旁「含稅輸入」勾選,單價欄畫面換算,存入仍為未稅。
+- **專案別損益**:migration 26 `projects` + `voucher_lines.project_id`;傳票明細專案欄、專案維護頁、財務報表「專案別損益」分頁;部門別損益的彙整邏輯抽成 `buildPnl` 共用。
+- **外幣已實現匯兌損益**:migration 27 新增科目 4902 / 7102 與拋轉規則 `fx.gain` / `fx.loss`;收付款過帳依當日匯率算現金,差額入匯兌損益。
+- **預收 / 預付款**:migration 28;收付款單可新增預收(付)與抵用餘額;`GET .../advance-balance` 查餘額;收付款單頁加欄位。
+- **票據管理**:migration 29 `checks` 與 1121 / 2141;支票收付款過帳登錄票據,票據頁(應收 / 應付)可兌現 / 取消兌現,逾期標示。
+- 測試:`TestCreditOverride`、`TestSalesPriceLookup`、`TestProjectPnl`、`TestAdvanceReceipt`、`TestCheckCollection`、`finance/TestSettleEntriesFx`;`make lint`、後端全部測試、vitest 皆通過。前端未做瀏覽器實測(沒有本機測試帳號)。
+- **仍未做**:生產進階(WIP / 分批完工 / 委外 / 標準成本 / 替代料 / MRP)、批號序號屬性、揀貨單 / 儲位容量、簽核進階(會簽 / 代理人 / 待我核准收件匣)、媒體申報檔其他類型、未出貨清單已交量欄位——規格龐大,需要另行討論範圍;電子發票、Email / LINE、WebAuthn 等需外部服務者維持未做。
+
 ## 2026-10-12 清空「不需要使用者決定」的待辦(D74–D78)
 - **帳齡回推歷史餘額**:`ReceivableAging` / `PayableAging` 以 `LATERAL` 子查詢重算截止日當天的已沖金額(只算收付款日期 ≤ 截止日、目前仍為已過帳的沖帳)。測試把收款日期改到 12/01,驗證 11/20 的帳齡仍含該筆應收。
 - **匯入擴充**:料品新增「預設倉庫代號」「多單位換算」欄;新增倉庫、料品分類兩種匯入;料品 / 客戶 / 供應商支援 `mode=update` 覆蓋更新(空白欄位保留原值,既有料品不可改基本單位 / 類型 / 批號管理);舊範本缺少新增的選填欄位仍可上傳;前端匯入頁加「已存在的代號:視為錯誤 / 覆蓋更新」選項。

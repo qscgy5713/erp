@@ -122,7 +122,7 @@ export interface Flow {
   importers: Partial<Record<string, Importer>>
   load: (id: number) => Promise<TradeDoc>
   save: (id: number | null, input: Record<string, unknown>) => Promise<TradeDoc>
-  action: (id: number, action: DocAction, version: number) => Promise<TradeDoc>
+  action: (id: number, action: DocAction, version: number, reason?: string) => Promise<TradeDoc>
 }
 
 const base = (d: PurchaseOrder | GoodsReceipt | SalesOrder | Delivery) => ({
@@ -358,7 +358,8 @@ export const flows: Record<FlowKind, Flow> = {
     load: async (id) => fromSalesOrder(await salesApi.order(id)),
     save: async (id, input) =>
       fromSalesOrder(await (id ? salesApi.updateOrder(id, input) : salesApi.createOrder(input))),
-    action: async (id, a, v) => fromSalesOrder(await salesApi.orderAction(id, a, v)),
+    action: async (id, a, v, reason) =>
+      fromSalesOrder(await salesApi.orderAction(id, a, v, reason)),
   },
   delivery: {
     kind: 'delivery',

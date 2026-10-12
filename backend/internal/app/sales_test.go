@@ -354,3 +354,72 @@ func TestSalesDataScope(t *testing.T) {
 		t.Fatalf("root 看到 %d 張訂單", n)
 	}
 }
+
+// 超額度訂單:無權限不可覆核;有權限且填原因才放行,並留下稽核紀錄(D79)。
+func TestCreditOverride(t *testing.T) {
+	s := newSalCtx(t)
+	e, c := s.e, s.c
+	s.cust = e.seedCustomer("C3", "1000", nil)
+	so, res := c.createPur(salesOrders, s.header(map[string]any{
+		"doc_type": "order", "lines": []map[string]any{line(s.item, s.box, "2", "1000", nil)},
+	}))
+	expect(t, res, http.StatusCreated, "")
+	expect(t, c.actPur(salesOrders, &so, "submit"), http.StatusOK, "")
+
+	body := func(reason string) map[string]any {
+		return map[string]any{"version": so.Version, "credit_override_reason": reason}
+	}
+	path := "/sales/orders/" + itoa(so.ID) + "/actions/approve"
+	expect(t, c.do(http.MethodPost, path, body("")), http.StatusUnprocessableEntity, "SAL-003")
+	expect(t, c.do(http.MethodPost, path, body("董事長口頭同意")), http.StatusOK, "")
+	var n int
+	if err := e.pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM audit_logs WHERE action = 'credit_override'").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("稽核紀錄 %d 筆,err=%v", n, err)
+	}
+}
+
+// 售價表:客戶專屬價 > 一般價 > 建議售價;數量階梯;有效期間(D79)。
+func TestSalesPriceLookup(t *testing.T) {
+	s := newSalCtx(t)
+	e, c := s.e, s.c
+	other := e.seedCustomer("C9", "0", nil)
+	add := func(cust *int64, minQty, price string, from, to any) {
+		expect(t, c.do(http.MethodPost, "/sales/prices", map[string]any{
+			"customer_id": cust, "item_id": s.item, "currency": "TWD", "min_qty": minQty, "unit_price": price,
+			"valid_from": from, "valid_to": to,
+		}), http.StatusCreated, "")
+	}
+	add(nil, "0", "100", nil, nil)
+	add(nil, "10", "90", nil, nil)
+	add(&s.cust, "0", "95", nil, nil)
+	add(&s.cust, "0", "50", "2000-01-01", "2000-12-31") // 已過期
+	look := func(cust int64, qty string) (string, string) {
+		res := c.do(http.MethodGet, "/sales/price?customer_id="+itoa(cust)+"&item_id="+itoa(s.item)+"&currency=TWD&qty="+qty, nil)
+		expect(t, res, http.StatusOK, "")
+		d := decode[struct {
+			UnitPrice string `json:"unit_price"`
+			Source    string `json:"source"`
+		}](t, res.Data)
+		return d.UnitPrice, d.Source
+	}
+	if p, src := look(other, "1"); p != "100" || src != "general" {
+		t.Fatalf("一般價 %s %s", p, src)
+	}
+	if p, _ := look(other, "10"); p != "90" {
+		t.Fatalf("階梯價 %s", p)
+	}
+	if p, src := look(s.cust, "10"); p != "95" || src != "customer" { // 客戶專屬價優先於一般階梯
+		t.Fatalf("專屬價 %s %s", p, src)
+	}
+	res := c.do(http.MethodGet, "/sales/prices?item_id="+itoa(s.item), nil)
+	expect(t, res, http.StatusOK, "")
+	rows := decode[[]struct {
+		ID int64 `json:"id"`
+	}](t, res.Data)
+	if len(rows) != 4 {
+		t.Fatalf("列表 %d 筆", len(rows))
+	}
+	expect(t, c.do(http.MethodDelete, "/sales/prices/"+itoa(rows[0].ID), nil), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodDelete, "/sales/prices/"+itoa(rows[0].ID), nil), http.StatusNotFound, "SYS-404")
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,6 +104,9 @@ type settlementDTO struct {
 	Method          string              `json:"method"`
 	Reference       string              `json:"reference"`
 	Amount          decimal.Decimal     `json:"amount"`
+	AdvanceAmount   decimal.Decimal     `json:"advance_amount"` // 本單新增的預收 / 預付
+	AdvanceUsed     decimal.Decimal     `json:"advance_used"`   // 本單抵用的既有預收 / 預付
+	CheckDueDate    *string             `json:"check_due_date"`
 	Status          string              `json:"status"`
 	Note            string              `json:"note"`
 	CreatedByName   *string             `json:"created_by_name"`
@@ -156,7 +160,8 @@ func loadSettlement(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg si
 	return settlementDTO{
 		ID: s.ID, Side: s.Side, DocNo: s.DocNo, DocDate: s.DocDate.Format(time.DateOnly), PartnerID: partner,
 		PartnerCode: s.PartnerCode, PartnerName: s.PartnerName, SalesUserName: s.SalesUserName, Currency: s.Currency,
-		Method: s.Method, Reference: s.Reference, Amount: s.Amount, Status: s.Status, Note: s.Note,
+		Method: s.Method, Reference: s.Reference, Amount: s.Amount, AdvanceAmount: s.AdvanceAmount, AdvanceUsed: s.AdvanceUsed, CheckDueDate: trade.DateString(s.CheckDueDate),
+		Status: s.Status, Note: s.Note,
 		CreatedByName: s.CreatedByName, SubmittedByName: s.SubmittedByName, SubmittedAt: s.SubmittedAt,
 		ApprovedByName: s.ApprovedByName, ApprovedAt: s.ApprovedAt, PostedByName: s.PostedByName, PostedAt: s.PostedAt,
 		Lines: lines, Version: s.Version, UpdatedAt: s.UpdatedAt,
@@ -268,6 +273,11 @@ type settlementInput struct {
 	Note      string      `json:"note" binding:"max=2000"`
 	Lines     []lineInput `json:"lines" binding:"dive"`
 	Version   int32       `json:"version"`
+	// 預收 / 預付款(D82):僅本位幣;AdvanceAmount 為多收 / 多付的新預收(付)款,AdvanceUsed 為抵用既有餘額
+	AdvanceAmount decimal.Decimal `json:"advance_amount"`
+	AdvanceUsed   decimal.Decimal `json:"advance_used"`
+	// 支票到期日(付款方式為 check 時必填,預設單據日期)
+	CheckDueDate *string `json:"check_due_date"`
 }
 
 // target 沖帳目標(應收或應付)的共同欄位。
@@ -374,6 +384,7 @@ type preparedSettlement struct {
 	supplierID  *int64
 	salesUserID *int64
 	total       decimal.Decimal
+	checkDue    *time.Time
 }
 
 func prepareSettlement(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg sideCfg, in *settlementInput) (preparedSettlement, error) {
@@ -411,6 +422,28 @@ func prepareSettlement(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg
 		}
 		p.supplierID = &in.PartnerID
 	}
+	if in.Method == "check" {
+		due := p.date
+		if in.CheckDueDate != nil && *in.CheckDueDate != "" {
+			if due, err = trade.ParseDate("check_due_date", *in.CheckDueDate); err != nil {
+				return p, err
+			}
+		}
+		p.checkDue = &due
+	}
+	hasAdvance := in.AdvanceAmount.IsPositive() || in.AdvanceUsed.IsPositive()
+	if in.AdvanceAmount.IsNegative() || in.AdvanceUsed.IsNegative() {
+		return p, fieldErr("advance_amount", "預收 / 預付金額不可為負")
+	}
+	if hasAdvance && in.Currency != masterdata.BaseCurrency {
+		return p, fieldErr("advance_amount", "預收 / 預付款僅支援本位幣")
+	}
+	if !in.AdvanceAmount.Round(int32(cur.Decimals)).Equal(in.AdvanceAmount) || !in.AdvanceUsed.Round(int32(cur.Decimals)).Equal(in.AdvanceUsed) {
+		return p, fieldErr("advance_amount", fmt.Sprintf("金額最多 %d 位小數", cur.Decimals))
+	}
+	if len(in.Lines) == 0 && in.AdvanceAmount.IsPositive() {
+		return p, nil // 純預收 / 預付,沒有沖帳明細
+	}
 	total, _, errs, err := checkLines(ctx, q, cfg, a.CompanyID, in.PartnerID, in.Currency, int32(cur.Decimals), in.Lines)
 	if err != nil {
 		return p, err
@@ -422,6 +455,9 @@ func prepareSettlement(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg
 		return p, fieldErr("lines", "沖帳合計不可為負數")
 	}
 	p.total = total
+	if total.Add(in.AdvanceAmount).Sub(in.AdvanceUsed).IsNegative() {
+		return p, fieldErr("advance_used", "抵用金額不可超過沖帳合計與新增預收 / 預付的總和")
+	}
 	return p, nil
 }
 
@@ -466,7 +502,8 @@ func (m *Module) createSettlement(cfg sideCfg) gin.HandlerFunc {
 			s, err := q.CreateSettlement(ctx, db.CreateSettlementParams{
 				CompanyID: a.CompanyID, Side: cfg.side, DocNo: no, DocDate: p.date, CustomerID: p.customerID,
 				SupplierID: p.supplierID, SalesUserID: p.salesUserID, Currency: in.Currency, Method: in.Method,
-				Reference: in.Reference, Amount: p.total, Note: in.Note, CreatedBy: &a.UserID,
+				Reference: in.Reference, Amount: p.total, AdvanceAmount: in.AdvanceAmount, AdvanceUsed: in.AdvanceUsed,
+				CheckDueDate: p.checkDue, Note: in.Note, CreatedBy: &a.UserID,
 			})
 			if err != nil {
 				return err
@@ -529,7 +566,8 @@ func (m *Module) updateSettlement(cfg sideCfg) gin.HandlerFunc {
 			if _, err := q.UpdateSettlementHeader(ctx, db.UpdateSettlementHeaderParams{
 				ID: id, CompanyID: a.CompanyID, DocDate: p.date, CustomerID: p.customerID, SupplierID: p.supplierID,
 				SalesUserID: p.salesUserID, Currency: in.Currency, Method: in.Method, Reference: in.Reference,
-				Amount: p.total, Note: in.Note, Version: in.Version, UpdatedBy: &a.UserID,
+				Amount: p.total, AdvanceAmount: in.AdvanceAmount, AdvanceUsed: in.AdvanceUsed, CheckDueDate: p.checkDue, Note: in.Note,
+				Version: in.Version, UpdatedBy: &a.UserID,
 			}); err != nil {
 				if database.IsNoRows(err) {
 					return apperr.ErrVersionConflict
@@ -692,7 +730,7 @@ func addPaid(ctx context.Context, q *db.Queries, cfg sideCfg, lines []settlement
 func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor, cfg sideCfg, cur db.Settlement, doc settlementDTO, action docstate.Action) error {
 	switch action {
 	case docstate.Submit, docstate.Approve:
-		if len(doc.Lines) == 0 {
+		if len(doc.Lines) == 0 && !doc.AdvanceAmount.IsPositive() {
 			return fieldErr("lines", "請選擇要沖帳的明細")
 		}
 	case docstate.Post:
@@ -704,29 +742,96 @@ func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor,
 		for i, l := range doc.Lines {
 			lines[i] = lineInput{TargetID: l.TargetID, Amount: l.Amount}
 		}
-		// 鎖定帳款後重新檢查餘額(草稿期間可能已被其他收付款沖掉)
-		_, base, errs, err := checkLines(ctx, q, cfg, a.CompanyID, doc.PartnerID, cur.Currency, int32(cu.Decimals), lines)
-		if err != nil {
-			return err
-		}
-		if len(errs) > 0 {
-			msgs := make([]string, 0, len(errs))
-			details := map[string]string{}
-			for i, l := range doc.Lines {
-				if msg, ok := errs[i]; ok {
-					msgs = append(msgs, fmt.Sprintf("第 %d 行 %s", l.LineNo, msg))
-					details[fmt.Sprintf("lines.%d", i)] = msg
-				}
+		base := decimal.Zero
+		if len(lines) > 0 {
+			// 鎖定帳款後重新檢查餘額(草稿期間可能已被其他收付款沖掉)
+			var errs map[int]string
+			_, base, errs, err = checkLines(ctx, q, cfg, a.CompanyID, doc.PartnerID, cur.Currency, int32(cu.Decimals), lines)
+			if err != nil {
+				return err
 			}
-			return apperr.New(http.StatusUnprocessableEntity, errSettlementCannotPost, "無法過帳:"+strings.Join(msgs, ";")).WithDetails(details)
+			if len(errs) > 0 {
+				msgs := make([]string, 0, len(errs))
+				details := map[string]string{}
+				for i, l := range doc.Lines {
+					if msg, ok := errs[i]; ok {
+						msgs = append(msgs, fmt.Sprintf("第 %d 行 %s", l.LineNo, msg))
+						details[fmt.Sprintf("lines.%d", i)] = msg
+					}
+				}
+				return apperr.New(http.StatusUnprocessableEntity, errSettlementCannotPost, "無法過帳:"+strings.Join(msgs, ";")).WithDetails(details)
+			}
+		}
+		if cur.AdvanceUsed.IsPositive() {
+			// 抵用既有預收 / 預付:鎖定對象後檢查餘額,避免兩張單同時抵用同一筆
+			if err := lockPartner(ctx, q, cfg, a.CompanyID, doc.PartnerID); err != nil {
+				return err
+			}
+			bal, err := q.PartnerAdvanceBalance(ctx, db.PartnerAdvanceBalanceParams{CompanyID: a.CompanyID, Side: cfg.side, PartnerID: &doc.PartnerID})
+			if err != nil {
+				return err
+			}
+			if cur.AdvanceUsed.GreaterThan(bal) {
+				return apperr.New(http.StatusUnprocessableEntity, errSettlementCannotPost, fmt.Sprintf("抵用的預收 / 預付 %s 超過可用餘額 %s", cur.AdvanceUsed, bal))
+			}
+		}
+		// 現金 / 銀行實收實付 = 沖帳 + 新增預收(付) − 抵用;外幣依收付款日匯率換算,
+		// 與帳款入帳金額的差額為已實現匯兌損益(D81,外幣不支援預收 / 預付)
+		cash := base.Add(cur.AdvanceAmount).Sub(cur.AdvanceUsed)
+		if cur.Currency != masterdata.BaseCurrency {
+			rate, err := masterdata.RateOn(ctx, q, a.CompanyID, cur.Currency, cur.DocDate)
+			if err != nil {
+				return err
+			}
+			total := decimal.Zero
+			for _, l := range doc.Lines {
+				total = total.Add(l.Amount)
+			}
+			cash = money.Amount(total.Mul(rate))
 		}
 		if err := addPaid(ctx, q, cfg, doc.Lines, 1); err != nil {
 			return err
 		}
+		if cur.Method == "check" && cash.IsPositive() {
+			due := cur.DocDate
+			if cur.CheckDueDate != nil {
+				due = *cur.CheckDueDate
+			}
+			if err := q.CreateCheck(ctx, db.CreateCheckParams{
+				CompanyID: a.CompanyID, Side: cfg.side, SettlementID: cur.ID, CustomerID: cur.CustomerID,
+				SupplierID: cur.SupplierID, CheckNo: cur.Reference, Amount: cash, DueDate: due,
+			}); err != nil {
+				return err
+			}
+		}
 		return gl.PostSource(ctx, q, gl.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}, gl.Source{
 			Type: glSourceType(cfg), ID: cur.ID, No: cur.DocNo, Date: cur.DocDate, Desc: cfg.label + " " + cur.DocNo,
-		}, settleEntries(cfg, cur, base))
+		}, settleEntries(cfg, cur, base, cash))
 	case docstate.Unpost:
+		if cur.Method == "check" {
+			// 已兌現的票據不可反過帳(請先取消兌現);未兌現(含退票)可直接反過帳並移除票據登錄
+			if k, err := q.GetCheckBySettlement(ctx, cur.ID); err == nil && k.Status == "cleared" {
+				return apperr.New(http.StatusConflict, "FIN-006", "支票已兌現,請先取消兌現再反過帳")
+			} else if err != nil && !database.IsNoRows(err) {
+				return err
+			}
+			if err := q.DeleteCheckBySettlement(ctx, cur.ID); err != nil {
+				return err
+			}
+		}
+		if cur.AdvanceAmount.IsPositive() {
+			// 本單新增的預收 / 預付若已被其他單據抵用,不可反過帳
+			if err := lockPartner(ctx, q, cfg, a.CompanyID, doc.PartnerID); err != nil {
+				return err
+			}
+			bal, err := q.PartnerAdvanceBalance(ctx, db.PartnerAdvanceBalanceParams{CompanyID: a.CompanyID, Side: cfg.side, PartnerID: &doc.PartnerID})
+			if err != nil {
+				return err
+			}
+			if bal.Sub(cur.AdvanceAmount).Add(cur.AdvanceUsed).IsNegative() {
+				return apperr.New(http.StatusConflict, "FIN-005", "本單新增的預收 / 預付已被其他單據抵用,請先處理該單據")
+			}
+		}
 		ids := make([]int64, len(doc.Lines))
 		for i, l := range doc.Lines {
 			ids[i] = l.TargetID
@@ -747,10 +852,12 @@ func applySettlementAction(ctx context.Context, q *db.Queries, a *authctx.Actor,
 func (m *Module) registerSettlements(g *gin.RouterGroup, path string, cfg sideCfg) {
 	read := auth.Require(cfg.read...)
 	g.GET(path, read, m.listSettlements(cfg))
+	g.GET(path+"/advance-balance", read, m.advanceBalance(cfg))
 	g.GET(path+"/:id", read, m.getSettlement(cfg))
 	g.POST(path, auth.Require(cfg.write), m.createSettlement(cfg))
 	g.PUT(path+"/:id", auth.Require(cfg.write), m.updateSettlement(cfg))
 	g.POST(path+"/:id/actions/:action", read, m.settlementAction(cfg))
+	m.registerChecks(g, path, cfg)
 }
 
 func glSourceType(cfg sideCfg) string {
@@ -761,17 +868,77 @@ func glSourceType(cfg sideCfg) string {
 }
 
 // settleEntries 收款:借 現金 / 銀行存款,貸 應收帳款;付款:借 應付帳款,貸 現金 / 銀行存款。
-// 金額為所沖帳款的本位幣金額(不計匯兌損益),淨額為 0 時不產生傳票。
-func settleEntries(cfg sideCfg, cur db.Settlement, base decimal.Decimal) []gl.Entry {
-	cash := gl.SettleKey(cur.Method)
-	if cfg.side == SideReceipt {
-		return []gl.Entry{
-			{Key: cash, Debit: base},
-			{Key: "sales.receivable", Credit: base, CustomerID: cur.CustomerID},
+// base 為所沖帳款入帳時的本位幣金額,cash 為收付款日實際的本位幣金額;
+// 兩者(扣除預收 / 預付的影響後)的差額為已實現匯兌損益(收款多收 / 付款少付為利益,反之為損失)。
+// 新增預收(付)款:收款貸 預收款項、付款借 預付款項;抵用則相反方向沖回。
+func settleEntries(cfg sideCfg, cur db.Settlement, base, cash decimal.Decimal) []gl.Entry {
+	key := gl.SettleKey(cur.Method)
+	if cur.Method == "check" { // 支票先記入應收 / 應付票據,兌現時才轉入銀行存款(D83)
+		key = "settle.notes_payable"
+		if cfg.side == SideReceipt {
+			key = "settle.notes_receivable"
 		}
 	}
-	return []gl.Entry{
+	adv, used := cur.AdvanceAmount, cur.AdvanceUsed
+	diff := cash.Sub(base).Sub(adv).Add(used)
+	if cfg.side == SideReceipt {
+		out := []gl.Entry{
+			{Key: key, Debit: cash},
+			{Key: "settle.advance_received", Debit: used, CustomerID: cur.CustomerID},
+			{Key: "sales.receivable", Credit: base, CustomerID: cur.CustomerID},
+			{Key: "settle.advance_received", Credit: adv, CustomerID: cur.CustomerID},
+		}
+		return append(out, fxEntry(diff)...) // 收到的比帳面多(diff>0)→ 貸 利益
+	}
+	out := []gl.Entry{
 		{Key: "purchase.payable", Debit: base, SupplierID: cur.SupplierID},
-		{Key: cash, Credit: base},
+		{Key: "settle.advance_paid", Debit: adv, SupplierID: cur.SupplierID},
+		{Key: key, Credit: cash},
+		{Key: "settle.advance_paid", Credit: used, SupplierID: cur.SupplierID},
+	}
+	return append(out, fxEntry(diff.Neg())...) // 付出的比帳面多(diff>0)→ 借 損失
+}
+
+// fxEntry gain>0 貸兌換利益;gain<0 借兌換損失。
+func fxEntry(gain decimal.Decimal) []gl.Entry {
+	switch {
+	case gain.IsPositive():
+		return []gl.Entry{{Key: "fx.gain", Credit: gain}}
+	case gain.IsNegative():
+		return []gl.Entry{{Key: "fx.loss", Debit: gain.Neg()}}
+	}
+	return nil
+}
+
+// lockPartner 鎖定客戶 / 供應商列,同一對象的預收(付)款異動依序進行。
+func lockPartner(ctx context.Context, q *db.Queries, cfg sideCfg, companyID, partnerID int64) error {
+	if cfg.side == SideReceipt {
+		return q.LockCustomer(ctx, db.LockCustomerParams{ID: partnerID, CompanyID: companyID})
+	}
+	return q.LockSupplier(ctx, db.LockSupplierParams{ID: partnerID, CompanyID: companyID})
+}
+
+// advanceBalance GET /finance/{collections,payments}/advance-balance?partner_id= 已過帳的預收 / 預付餘額。
+func (m *Module) advanceBalance(cfg sideCfg) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Query("partner_id"), 10, 64)
+		if err != nil || id <= 0 {
+			response.Error(c, fieldErr("partner_id", "請指定對象"))
+			return
+		}
+		a := authctx.ActorFrom(c.Request.Context())
+		if cfg.side == SideReceipt { // 客戶依資料範圍過濾
+			cust, err := m.store.CustomerForDoc(c.Request.Context(), db.CustomerForDocParams{ID: id, CompanyID: a.CompanyID})
+			if err != nil || !masterdata.CustomerVisible(a, cust.SalesUserID, cust.SalesDepartmentID) {
+				response.Error(c, apperr.ErrNotFound)
+				return
+			}
+		}
+		bal, err := m.store.PartnerAdvanceBalance(c.Request.Context(), db.PartnerAdvanceBalanceParams{CompanyID: a.CompanyID, Side: cfg.side, PartnerID: &id})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"partner_id": id, "balance": bal})
 	}
 }

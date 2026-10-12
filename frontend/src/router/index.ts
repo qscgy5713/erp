@@ -246,9 +246,24 @@ const router = createRouter({
       meta: { title: '銷售報表', perm: DELIVERY_ANY, side: 'sales' },
     },
     {
+      path: '/sales/prices',
+      component: () => import('@/views/sales/PricesView.vue'),
+      meta: { title: '售價表', perm: [...SALES_ORDER_ANY, 'sales.price.write'] },
+    },
+    {
       path: '/sales/unshipped',
       component: () => import('@/views/sales/UnshippedView.vue'),
       meta: { title: '未出貨清單', perm: [...SALES_ORDER_ANY, 'sales.delivery.write'] },
+    },
+    {
+      path: '/finance/checks/collection',
+      component: () => import('@/views/finance/ChecksView.vue'),
+      meta: { title: '應收票據', perm: ['finance.collection.post'], settle: 'collection' },
+    },
+    {
+      path: '/finance/checks/payment',
+      component: () => import('@/views/finance/ChecksView.vue'),
+      meta: { title: '應付票據', perm: ['finance.payment.post'], settle: 'payment' },
     },
     {
       path: '/finance/collections',
@@ -363,6 +378,11 @@ const router = createRouter({
       path: '/gl/periods',
       component: () => import('@/views/gl/PeriodsView.vue'),
       meta: { title: '會計期間', perm: ['gl.period.read', 'gl.period.close'] },
+    },
+    {
+      path: '/gl/projects',
+      component: () => import('@/views/gl/ProjectsView.vue'),
+      meta: { title: '專案', perm: ['gl.account.read', 'gl.account.write'] },
     },
     {
       path: '/gl/accounts',

@@ -4,6 +4,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ApiRequestError } from '@/api/http'
 import { inventoryApi, type DocAction, type ItemOption } from '@/api/inventory'
 import {
   masterdataApi,
@@ -72,6 +73,8 @@ interface LineRow {
   unit_id: number | null
   qty: string
   unit_price: string
+  /** 含稅輸入時使用者正在輸入的原文(避免輸入「10.」被換算結果覆蓋) */
+  price_input?: string
   note: string
   item_code?: string
   item_name?: string
@@ -235,6 +238,7 @@ function onPickItem(row: LineRow, item: ItemOption | null) {
   row.unitOptions = unitOptionsOf(item)
   row.unit_id = item.base_unit_id
   fillLastPrice(row)
+  fillSalesPrice(row)
 }
 
 /** 採購單 / 進貨單:單價空白時帶入同供應商、同幣別的最近進價(連同當時的單位);失敗不影響開單 */
@@ -251,6 +255,33 @@ async function fillLastPrice(row: LineRow) {
     row.unit_id = found.unit_id
     row.unit_price = String(Number(found.unit_price))
     ElMessage.info(`已帶入最近進價(${found.doc_date} ${found.doc_no})`)
+  } catch {
+    // 僅為輔助,查不到就維持空白
+  }
+}
+
+/** 銷售報價 / 訂單 / 出貨:單價空白時依客戶、幣別、數量查售價表(再退回料品建議售價);失敗不影響開單 */
+async function fillSalesPrice(row: LineRow) {
+  const sales =
+    flow.kind === 'sales-order' || (flow.kind === 'delivery' && docType.value === 'delivery')
+  if (!sales || !row.item_id || !form.partner_id || row.unit_price !== '' || linked(row)) return
+  if (!auth.can(['sales.order.write', 'sales.delivery.write'])) return
+  try {
+    const itemId = row.item_id
+    const found = await salesApi.lookupPrice({
+      customer_id: form.partner_id,
+      item_id: itemId,
+      currency: form.currency,
+      qty: row.qty || '1',
+      date: form.doc_date,
+    })
+    if (row.item_id !== itemId || row.unit_price !== '' || found.source === 'none') return
+    row.unit_price = String(Number(found.unit_price))
+    ElMessage.info(
+      { customer: '已帶入客戶專屬價', general: '已帶入售價表價格', list: '已帶入料品建議售價' }[
+        found.source
+      ] ?? '',
+    )
   } catch {
     // 僅為輔助,查不到就維持空白
   }
@@ -281,6 +312,31 @@ function amountOf(row: LineRow): number | null {
   const p = Number(row.unit_price)
   if (row.qty === '' || row.unit_price === '' || Number.isNaN(q) || Number.isNaN(p)) return null
   return round(q * p, decimals.value)
+}
+
+// ---- 含稅單價輸入:畫面以含稅輸入,內部仍存未稅單價(換算至小數 6 位) ----
+const taxIncluded = ref(false)
+const taxRate = computed(() =>
+  Number(taxTypes.value.find((t) => t.id === form.tax_type_id)?.rate ?? 0),
+)
+
+function priceShown(row: LineRow): string {
+  if (!taxIncluded.value || row.unit_price === '' || Number.isNaN(Number(row.unit_price)))
+    return row.unit_price
+  const typed = row.price_input
+  if (typed !== undefined && toNet(typed) === row.unit_price) return typed
+  return String(Number((Number(row.unit_price) * (1 + taxRate.value)).toFixed(6)))
+}
+
+const toNet = (v: string) => String(Number((Number(v) / (1 + taxRate.value)).toFixed(6)))
+
+function setPrice(row: LineRow, v: string) {
+  if (!taxIncluded.value || v === '' || Number.isNaN(Number(v))) {
+    row.unit_price = v
+    return
+  }
+  row.price_input = v
+  row.unit_price = toNet(v)
 }
 
 const preview = computed(() => {
@@ -694,7 +750,30 @@ async function runAction(action: DocAction) {
   if (dirty.value && editable.value && !(await save())) return
   acting.value = action
   try {
-    const next = await flow.action(doc.value.id, action, doc.value.version)
+    let next: TradeDoc
+    try {
+      next = await flow.action(doc.value.id, action, doc.value.version)
+    } catch (e) {
+      // 超過信用額度:有覆核權限者可填寫原因後強行核准
+      if (
+        !(e instanceof ApiRequestError && e.code === 'SAL-003' && action === 'approve') ||
+        !auth.can(['sales.order.credit_override'])
+      )
+        throw e
+      let reason: string
+      try {
+        const r = await ElMessageBox.prompt(`${e.message}\n請輸入超額度覆核原因`, '超額度覆核', {
+          confirmButtonText: '覆核核准',
+          cancelButtonText: '取消',
+          inputPattern: /\S/,
+          inputErrorMessage: '請輸入原因',
+        })
+        reason = r.value
+      } catch {
+        return
+      }
+      next = await flow.action(doc.value.id, action, doc.value.version, reason)
+    }
     applyDoc(next)
     ElMessage.success(
       action === 'approve' && next.status === 'pending'
@@ -955,6 +1034,14 @@ autoClear(form)
           </el-col>
           <el-col :xs="24" :sm="12" :md="6">
             <el-form-item label="稅別" :error="fieldErrors.tax_type_id">
+              <template #label
+                >稅別
+                <el-tooltip content="勾選後單價欄以含稅金額輸入,系統自動換算成未稅儲存">
+                  <el-checkbox v-if="editable" v-model="taxIncluded" size="small"
+                    >含稅輸入</el-checkbox
+                  >
+                </el-tooltip>
+              </template>
               <el-select v-model="form.tax_type_id" style="width: 100%">
                 <el-option
                   v-for="t in taxTypes.filter((x) => x.is_active || x.id === form.tax_type_id)"
@@ -1097,9 +1184,17 @@ autoClear(form)
             <span v-if="stockOf(row) !== undefined" class="hint"> {{ row.base_unit_name }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="`單價(${form.currency},未稅)`" width="150">
+        <el-table-column
+          :label="`單價(${form.currency},${taxIncluded ? '含稅' : '未稅'})`"
+          width="150"
+        >
           <template #default="{ row }">
-            <el-input v-if="editable" v-model="row.unit_price" size="small" />
+            <el-input
+              v-if="editable"
+              :model-value="priceShown(row)"
+              size="small"
+              @update:model-value="setPrice(row, $event)"
+            />
             <span v-else>{{ fmt(row.unit_price, 0) }}</span>
           </template>
         </el-table-column>

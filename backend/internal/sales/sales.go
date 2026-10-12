@@ -49,6 +49,11 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/deliveries/:id/invoice", auth.Require(permission.DeliveryWrite), m.setInvoice)
 	g.POST("/deliveries/:id/actions/:action", deliveryRead, m.deliveryAction)
 	g.GET("/returnable-lines", auth.Require(permission.DeliveryWrite), m.returnableLines)
+	// 售價表:查價給開單用,維護需專屬權限(D79)
+	g.GET("/price", auth.Require(permission.SalesOrderWrite, permission.DeliveryWrite), m.lookupPrice)
+	g.GET("/prices", auth.Require(permission.SalesOrderRead, permission.SalesOrderWrite, permission.SalesPriceWrite), m.listPrices)
+	g.POST("/prices", auth.Require(permission.SalesPriceWrite), m.createPrice)
+	g.DELETE("/prices/:id", auth.Require(permission.SalesPriceWrite), m.deletePrice)
 	// 銷售報表:客戶 / 料品排行與明細,依出貨單的檢視權限與資料範圍
 	g.GET("/reports", deliveryRead, m.salesReport)
 }
@@ -64,6 +69,8 @@ var (
 
 type actionInput struct {
 	Version int32 `json:"version" binding:"required"`
+	// CreditOverrideReason 核准訂單超過信用額度時的覆核原因(需 sales.order.credit_override 權限)。
+	CreditOverrideReason string `json:"credit_override_reason"`
 }
 
 // headerInput 銷售單據共用的單頭欄位。

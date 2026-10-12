@@ -78,6 +78,15 @@ export interface VoucherAttachment {
   uploaded_by_name: string | null
 }
 
+export interface Project {
+  id: number
+  /** 專案不做樂觀鎖,僅為符合 useFormDialog 的型別;後端不回傳也不檢查 */
+  version: number
+  code: string
+  name: string
+  is_active: boolean
+}
+
 export interface DeptPnlRow {
   department_id: number | null
   code: string
@@ -218,6 +227,8 @@ export interface VoucherLine {
   supplier_name?: string | null
   department_id: number | null
   department_name?: string | null
+  project_id: number | null
+  project_name?: string | null
 }
 
 export interface Voucher {
@@ -267,6 +278,7 @@ export interface VoucherInput {
     customer_id: number | null
     supplier_id: number | null
     department_id: number | null
+    project_id: number | null
   }[]
   version?: number
 }
@@ -370,6 +382,13 @@ export const glApi = {
     download(`/gl/vouchers/${id}/attachments/${a.id}`, a.filename),
   cashFlow: (from: string, to: string, compare: boolean) =>
     http.get<Statement>(`/gl/reports/cash-flow${qs({ from, to, compare })}`),
+  projects: () => http.get<Project[]>('/gl/projects'),
+  createProject: (input: { code: string; name: string }) =>
+    http.post<Project>('/gl/projects', input),
+  updateProject: (id: number, input: { code: string; name: string; is_active: boolean }) =>
+    http.put<Project>(`/gl/projects/${id}`, input),
+  projectPnl: (from: string, to: string) =>
+    http.get<DeptPnl>(`/gl/reports/project-pnl${qs({ from, to })}`),
   departmentPnl: (from: string, to: string) =>
     http.get<DeptPnl>(`/gl/reports/department-pnl${qs({ from, to })}`),
   balanceSheet: (as_of: string, compare: boolean) =>

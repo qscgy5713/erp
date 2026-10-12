@@ -72,6 +72,9 @@ export interface Settlement {
   method: SettleMethod
   reference: string
   amount: Decimal
+  advance_amount: Decimal
+  advance_used: Decimal
+  check_due_date: string | null
   status: DocStatus
   note: string
   created_by_name: string | null
@@ -110,6 +113,9 @@ export interface SettlementInput {
   reference: string
   note: string
   lines: { target_id: number; amount: Decimal }[]
+  advance_amount?: Decimal
+  advance_used?: Decimal
+  check_due_date?: string | null
   version?: number
 }
 
@@ -148,7 +154,27 @@ export interface AgingRow {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface CheckRow {
+  id: number
+  side: 'receipt' | 'payment'
+  settlement_id: number
+  settlement_no: string
+  check_no: string
+  partner_code: string
+  partner_name: string
+  amount: Decimal
+  due_date: string
+  status: 'pending' | 'cleared'
+  cleared_date: string | null
+  overdue: boolean
+}
+
 export const settlementApi = {
+  checks: (side: SettleSide, q: Q) => http.get<CheckRow[]>(`/finance/${side}s/checks${qs(q)}`),
+  checkAction: (side: SettleSide, id: number, action: 'clear' | 'unclear', clearDate?: string) =>
+    http.post<{ id: number; status: string }>(`/finance/${side}s/checks/${id}/${action}`, {
+      clear_date: clearDate,
+    }),
   list: (side: SettleSide, q: Q) => requestPage<SettlementRow>(`/finance/${side}s${qs(q)}`),
   get: (side: SettleSide, id: number) => http.get<Settlement>(`/finance/${side}s/${id}`),
   create: (side: SettleSide, input: SettlementInput) =>
@@ -157,6 +183,10 @@ export const settlementApi = {
     http.put<Settlement>(`/finance/${side}s/${id}`, input),
   action: (side: SettleSide, id: number, action: DocAction, version: number) =>
     http.post<Settlement>(`/finance/${side}s/${id}/actions/${action}`, { version }),
+  advanceBalance: (side: SettleSide, partnerId: number) =>
+    http.get<{ partner_id: number; balance: Decimal }>(
+      `/finance/${side}s/advance-balance${qs({ partner_id: partnerId })}`,
+    ),
   statement: (q: Q) => http.get<Statement>(`/finance/statements${qs(q)}`),
   exportStatement: (q: Q, name: string) =>
     download(`/finance/statements${qs({ ...q, format: 'xlsx' })}`, name),

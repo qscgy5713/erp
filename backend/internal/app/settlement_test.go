@@ -374,3 +374,125 @@ func TestSettlementPermissionsAndScope(t *testing.T) {
 	// 另一個業務的收款單看不到
 	_ = context.Background()
 }
+
+// 預收款:多收一筆預收、之後抵用;抵用不可超過餘額;已被抵用的預收不可反過帳(D82)。
+func TestAdvanceReceipt(t *testing.T) {
+	s := newSalCtx(t)
+	c := s.c
+	s.twoDeliveries()
+	ids := c.arIDs()
+	const path = "/finance/collections"
+	balance := func() string {
+		res := c.do(http.MethodGet, path+"/advance-balance?partner_id="+itoa(s.cust), nil)
+		expect(t, res, http.StatusOK, "")
+		return decode[struct {
+			Balance string `json:"balance"`
+		}](t, res.Data).Balance
+	}
+
+	// 純預收 1000
+	body := settleBody(s.cust)
+	body["advance_amount"] = "1000"
+	adv, res := c.createSettle(path, body)
+	expect(t, res, http.StatusCreated, "")
+	c.approveSettle(path, &adv)
+	expect(t, c.actSettle(path, &adv, "post"), http.StatusOK, "")
+	if b := balance(); b != "1000" {
+		t.Fatalf("預收餘額 %s", b)
+	}
+	var cash, advAcct string
+	q := func(code string) string {
+		var v string
+		if err := s.e.pool.QueryRow(context.Background(),
+			`SELECT COALESCE(SUM(l.debit - l.credit), 0)::text FROM voucher_lines l JOIN accounts a ON a.id = l.account_id WHERE a.code = $1`, code).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	cash, advAcct = q("1102"), q("2121")
+	if cash != "1000.0000" && cash != "1000" || (advAcct != "-1000.0000" && advAcct != "-1000") {
+		t.Fatalf("預收分錄 現金 %s 預收款項 %s", cash, advAcct)
+	}
+
+	// 抵用 1500 > 餘額 1000:過帳被擋
+	use := settleBody(s.cust, sl(ids[0], "1500"))
+	use["advance_used"] = "1500"
+	over, res := c.createSettle(path, use)
+	expect(t, res, http.StatusCreated, "")
+	c.approveSettle(path, &over)
+	expect(t, c.actSettle(path, &over, "post"), http.StatusUnprocessableEntity, "FIN-004")
+
+	// 抵用 800:沖應收 1500,實收現金 700
+	use = settleBody(s.cust, sl(ids[0], "1500"))
+	use["advance_used"] = "800"
+	ok, res := c.createSettle(path, use)
+	expect(t, res, http.StatusCreated, "")
+	c.approveSettle(path, &ok)
+	expect(t, c.actSettle(path, &ok, "post"), http.StatusOK, "")
+	if b := balance(); b != "200" {
+		t.Fatalf("抵用後餘額 %s", b)
+	}
+	// 預收已被抵用 800,反過帳會使餘額為負 → 擋下
+	expect(t, c.actSettle(path, &adv, "unpost"), http.StatusConflict, "FIN-005")
+	// 抵用單反過帳後即可
+	expect(t, c.actSettle(path, &ok, "unpost"), http.StatusOK, "")
+	expect(t, c.actSettle(path, &adv, "unpost"), http.StatusOK, "")
+
+	// 抵用超過沖帳合計 + 預收 → 驗證錯誤
+	bad := settleBody(s.cust, sl(ids[1], "100"))
+	bad["advance_used"] = "500"
+	_, res = c.createSettle(path, bad)
+	expect(t, res, http.StatusUnprocessableEntity, "SYS-422")
+}
+
+// 支票收款:過帳記應收票據並登錄票據;兌現轉入銀行存款;已兌現不可反過帳(D83)。
+func TestCheckCollection(t *testing.T) {
+	s := newSalCtx(t)
+	c := s.c
+	s.twoDeliveries()
+	ids := c.arIDs()
+	const path = "/finance/collections"
+	body := settleBody(s.cust, sl(ids[0], "1000"))
+	body["method"], body["reference"], body["check_due_date"] = "check", "AB123456", "2099-01-31"
+	d, res := c.createSettle(path, body)
+	expect(t, res, http.StatusCreated, "")
+	c.approveSettle(path, &d)
+	expect(t, c.actSettle(path, &d, "post"), http.StatusOK, "")
+
+	bal := func(code string) string {
+		var v string
+		if err := s.e.pool.QueryRow(context.Background(),
+			`SELECT COALESCE(SUM(l.debit - l.credit), 0)::numeric(18,0)::text FROM voucher_lines l JOIN accounts a ON a.id = l.account_id WHERE a.code = $1`, code).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if bal("1121") != "1000" || bal("1102") != "0" {
+		t.Fatalf("過帳後 應收票據 %s 銀行 %s", bal("1121"), bal("1102"))
+	}
+	res = c.do(http.MethodGet, path+"/checks?status=pending", nil)
+	expect(t, res, http.StatusOK, "")
+	checks := decode[[]struct {
+		ID      int64  `json:"id"`
+		CheckNo string `json:"check_no"`
+		DueDate string `json:"due_date"`
+	}](t, res.Data)
+	if len(checks) != 1 || checks[0].CheckNo != "AB123456" || checks[0].DueDate != "2099-01-31" {
+		t.Fatalf("票據 %+v", checks)
+	}
+	cp := path + "/checks/" + itoa(checks[0].ID)
+	expect(t, c.do(http.MethodPost, cp+"/clear", map[string]any{}), http.StatusOK, "")
+	expect(t, c.do(http.MethodPost, cp+"/clear", map[string]any{}), http.StatusConflict, "FIN-007")
+	if bal("1121") != "0" || bal("1102") != "1000" {
+		t.Fatalf("兌現後 應收票據 %s 銀行 %s", bal("1121"), bal("1102"))
+	}
+	expect(t, c.actSettle(path, &d, "unpost"), http.StatusConflict, "FIN-006")
+	expect(t, c.do(http.MethodPost, cp+"/unclear", map[string]any{}), http.StatusOK, "")
+	expect(t, c.actSettle(path, &d, "unpost"), http.StatusOK, "") // 未兌現(退票)可反過帳
+	res = c.do(http.MethodGet, path+"/checks", nil)
+	if n := len(decode[[]struct{}](t, res.Data)); n != 0 {
+		t.Fatalf("反過帳後票據應移除,仍有 %d 筆", n)
+	}
+	// 付款端點看不到收款票據
+	expect(t, c.do(http.MethodPost, "/finance/payments/checks/"+itoa(checks[0].ID)+"/clear", map[string]any{}), http.StatusNotFound, "SYS-404")
+}

@@ -157,6 +157,22 @@ type BomLine struct {
 	ScrapPct decimal.Decimal
 }
 
+type Check struct {
+	ID           int64
+	CompanyID    int64
+	Side         string
+	SettlementID int64
+	CustomerID   *int64
+	SupplierID   *int64
+	CheckNo      string
+	Amount       decimal.Decimal
+	DueDate      time.Time
+	Status       string
+	ClearedDate  *time.Time
+	ClearedBy    *int64
+	CreatedAt    time.Time
+}
+
 type Company struct {
 	ID         int64
 	Code       string
@@ -548,6 +564,16 @@ type PaymentTerm struct {
 	UpdatedAt  time.Time
 }
 
+type Project struct {
+	ID        int64
+	CompanyID int64
+	Code      string
+	Name      string
+	IsActive  bool
+	CreatedBy *int64
+	CreatedAt time.Time
+}
+
 type PurchaseOrder struct {
 	ID            int64
 	CompanyID     int64
@@ -675,32 +701,50 @@ type SalesOrderLine struct {
 	Note      string
 }
 
+type SalesPrice struct {
+	ID         int64
+	CompanyID  int64
+	CustomerID *int64
+	ItemID     int64
+	Currency   string
+	MinQty     decimal.Decimal
+	UnitPrice  decimal.Decimal
+	ValidFrom  *time.Time
+	ValidTo    *time.Time
+	Note       string
+	CreatedBy  *int64
+	CreatedAt  time.Time
+}
+
 type Settlement struct {
-	ID          int64
-	CompanyID   int64
-	Side        string
-	DocNo       string
-	DocDate     time.Time
-	CustomerID  *int64
-	SupplierID  *int64
-	SalesUserID *int64
-	Currency    string
-	Method      string
-	Reference   string
-	Amount      decimal.Decimal
-	Status      string
-	Note        string
-	SubmittedBy *int64
-	SubmittedAt *time.Time
-	ApprovedBy  *int64
-	ApprovedAt  *time.Time
-	PostedBy    *int64
-	PostedAt    *time.Time
-	CreatedBy   *int64
-	UpdatedBy   *int64
-	Version     int32
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            int64
+	CompanyID     int64
+	Side          string
+	DocNo         string
+	DocDate       time.Time
+	CustomerID    *int64
+	SupplierID    *int64
+	SalesUserID   *int64
+	Currency      string
+	Method        string
+	Reference     string
+	Amount        decimal.Decimal
+	Status        string
+	Note          string
+	SubmittedBy   *int64
+	SubmittedAt   *time.Time
+	ApprovedBy    *int64
+	ApprovedAt    *time.Time
+	PostedBy      *int64
+	PostedAt      *time.Time
+	CreatedBy     *int64
+	UpdatedBy     *int64
+	Version       int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	AdvanceAmount decimal.Decimal
+	AdvanceUsed   decimal.Decimal
+	CheckDueDate  *time.Time
 }
 
 type SettlementLine struct {
@@ -901,6 +945,7 @@ type VoucherLine struct {
 	CustomerID   *int64
 	SupplierID   *int64
 	DepartmentID *int64
+	ProjectID    *int64
 }
 
 type Warehouse struct {

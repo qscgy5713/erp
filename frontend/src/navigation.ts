@@ -85,6 +85,7 @@ export const navigation: NavItem[] = [
       { title: '報價 / 訂單', path: '/sales/orders', perm: SALES_ORDER_ANY },
       { title: '出貨 / 退回', path: '/sales/deliveries', perm: DELIVERY_ANY },
       { title: '銷售報表', path: '/sales/reports', perm: DELIVERY_ANY },
+      { title: '售價表', path: '/sales/prices', perm: [...SALES_ORDER_ANY, 'sales.price.write'] },
       {
         title: '未出貨清單',
         path: '/sales/unshipped',
@@ -119,6 +120,7 @@ export const navigation: NavItem[] = [
     children: [
       { title: '應收帳款', path: '/finance/receivables', perm: ['finance.receivable.read'] },
       { title: '收款單', path: '/finance/collections', perm: COLLECTION_ANY },
+      { title: '應收票據', path: '/finance/checks/collection', perm: ['finance.collection.post'] },
       {
         title: '應收對帳單',
         path: '/finance/statement/receivable',
@@ -127,6 +129,7 @@ export const navigation: NavItem[] = [
       { title: '應收帳齡', path: '/finance/aging/receivable', perm: ['finance.receivable.read'] },
       { title: '應付帳款', path: '/finance/payables', perm: ['finance.payable.read'] },
       { title: '付款單', path: '/finance/payments', perm: PAYMENT_ANY },
+      { title: '應付票據', path: '/finance/checks/payment', perm: ['finance.payment.post'] },
       { title: '應付對帳單', path: '/finance/statement/payable', perm: ['finance.payable.read'] },
       { title: '應付帳齡', path: '/finance/aging/payable', perm: ['finance.payable.read'] },
     ],
@@ -141,6 +144,7 @@ export const navigation: NavItem[] = [
       { title: '對帳檢查', path: '/costing/reconcile', perm: ['costing.read', 'costing.close'] },
       { title: '會計期間', path: '/gl/periods', perm: ['gl.period.read', 'gl.period.close'] },
       { title: '會計科目', path: '/gl/accounts', perm: ['gl.account.read', 'gl.account.write'] },
+      { title: '專案', path: '/gl/projects', perm: ['gl.account.read', 'gl.account.write'] },
       { title: '拋轉規則', path: '/gl/mappings', perm: ['gl.account.read', 'gl.account.write'] },
     ],
   },

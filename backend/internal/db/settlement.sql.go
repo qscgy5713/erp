@@ -109,26 +109,30 @@ func (q *Queries) CountSettlements(ctx context.Context, arg CountSettlementsPara
 
 const createSettlement = `-- name: CreateSettlement :one
 INSERT INTO settlements (company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency,
-                         method, reference, amount, note, created_by, updated_by)
+                         method, reference, amount, advance_amount, advance_used, note, check_due_date, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13, $13)
-RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+        $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $16)
+RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, advance_amount, advance_used, check_due_date
 `
 
 type CreateSettlementParams struct {
-	CompanyID   int64
-	Side        string
-	DocNo       string
-	DocDate     time.Time
-	CustomerID  *int64
-	SupplierID  *int64
-	SalesUserID *int64
-	Currency    string
-	Method      string
-	Reference   string
-	Amount      decimal.Decimal
-	Note        string
-	CreatedBy   *int64
+	CompanyID     int64
+	Side          string
+	DocNo         string
+	DocDate       time.Time
+	CustomerID    *int64
+	SupplierID    *int64
+	SalesUserID   *int64
+	Currency      string
+	Method        string
+	Reference     string
+	Amount        decimal.Decimal
+	AdvanceAmount decimal.Decimal
+	AdvanceUsed   decimal.Decimal
+	Note          string
+	CheckDueDate  *time.Time
+	CreatedBy     *int64
 }
 
 func (q *Queries) CreateSettlement(ctx context.Context, arg CreateSettlementParams) (Settlement, error) {
@@ -144,7 +148,10 @@ func (q *Queries) CreateSettlement(ctx context.Context, arg CreateSettlementPara
 		arg.Method,
 		arg.Reference,
 		arg.Amount,
+		arg.AdvanceAmount,
+		arg.AdvanceUsed,
 		arg.Note,
+		arg.CheckDueDate,
 		arg.CreatedBy,
 	)
 	var i Settlement
@@ -174,6 +181,9 @@ func (q *Queries) CreateSettlement(ctx context.Context, arg CreateSettlementPara
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AdvanceAmount,
+		&i.AdvanceUsed,
+		&i.CheckDueDate,
 	)
 	return i, err
 }
@@ -207,7 +217,7 @@ func (q *Queries) DeleteSettlementLinesByReceivable(ctx context.Context, receiva
 }
 
 const getSettlement = `-- name: GetSettlement :one
-SELECT s.id, s.company_id, s.side, s.doc_no, s.doc_date, s.customer_id, s.supplier_id, s.sales_user_id, s.currency, s.method, s.reference, s.amount, s.status, s.note, s.submitted_by, s.submitted_at, s.approved_by, s.approved_at, s.posted_by, s.posted_at, s.created_by, s.updated_by, s.version, s.created_at, s.updated_at, COALESCE(c.code, sp.code) AS partner_code, COALESCE(c.name, sp.name) AS partner_name,
+SELECT s.id, s.company_id, s.side, s.doc_no, s.doc_date, s.customer_id, s.supplier_id, s.sales_user_id, s.currency, s.method, s.reference, s.amount, s.status, s.note, s.submitted_by, s.submitted_at, s.approved_by, s.approved_at, s.posted_by, s.posted_at, s.created_by, s.updated_by, s.version, s.created_at, s.updated_at, s.advance_amount, s.advance_used, s.check_due_date, COALESCE(c.code, sp.code) AS partner_code, COALESCE(c.name, sp.name) AS partner_name,
        su.name AS sales_user_name, su.department_id AS sales_department_id,
        cu.name AS created_by_name, sbu.name AS submitted_by_name, au.name AS approved_by_name,
        pu.name AS posted_by_name
@@ -253,6 +263,9 @@ type GetSettlementRow struct {
 	Version           int32
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	AdvanceAmount     decimal.Decimal
+	AdvanceUsed       decimal.Decimal
+	CheckDueDate      *time.Time
 	PartnerCode       string
 	PartnerName       string
 	SalesUserName     *string
@@ -292,6 +305,9 @@ func (q *Queries) GetSettlement(ctx context.Context, arg GetSettlementParams) (G
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AdvanceAmount,
+		&i.AdvanceUsed,
+		&i.CheckDueDate,
 		&i.PartnerCode,
 		&i.PartnerName,
 		&i.SalesUserName,
@@ -572,7 +588,7 @@ func (q *Queries) LockReceivables(ctx context.Context, arg LockReceivablesParams
 }
 
 const lockSettlement = `-- name: LockSettlement :one
-SELECT id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at FROM settlements WHERE id = $1 AND company_id = $2 FOR UPDATE
+SELECT id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, advance_amount, advance_used, check_due_date FROM settlements WHERE id = $1 AND company_id = $2 FOR UPDATE
 `
 
 type LockSettlementParams struct {
@@ -609,8 +625,46 @@ func (q *Queries) LockSettlement(ctx context.Context, arg LockSettlementParams) 
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AdvanceAmount,
+		&i.AdvanceUsed,
+		&i.CheckDueDate,
 	)
 	return i, err
+}
+
+const lockSupplier = `-- name: LockSupplier :exec
+SELECT 1 FROM suppliers WHERE id = $1 AND company_id = $2 FOR UPDATE
+`
+
+type LockSupplierParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) LockSupplier(ctx context.Context, arg LockSupplierParams) error {
+	_, err := q.db.Exec(ctx, lockSupplier, arg.ID, arg.CompanyID)
+	return err
+}
+
+const partnerAdvanceBalance = `-- name: PartnerAdvanceBalance :one
+SELECT COALESCE(SUM(advance_amount - advance_used), 0)::numeric AS balance
+FROM settlements
+WHERE company_id = $1 AND side = $2 AND status = 'posted'
+  AND COALESCE(customer_id, supplier_id) = $3
+`
+
+type PartnerAdvanceBalanceParams struct {
+	CompanyID int64
+	Side      string
+	PartnerID *int64
+}
+
+// 某客戶(收款)或供應商(付款)已過帳的預收 / 預付餘額 = 已新增 − 已抵用
+func (q *Queries) PartnerAdvanceBalance(ctx context.Context, arg PartnerAdvanceBalanceParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, partnerAdvanceBalance, arg.CompanyID, arg.Side, arg.PartnerID)
+	var balance decimal.Decimal
+	err := row.Scan(&balance)
+	return balance, err
 }
 
 const payableAging = `-- name: PayableAging :many
@@ -1002,7 +1056,7 @@ SET status       = $1,
     version      = version + 1,
     updated_by   = $3::bigint
 WHERE id = $4 AND company_id = $5 AND version = $6
-RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, advance_amount, advance_used, check_due_date
 `
 
 type SetSettlementStatusParams struct {
@@ -1050,6 +1104,9 @@ func (q *Queries) SetSettlementStatus(ctx context.Context, arg SetSettlementStat
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AdvanceAmount,
+		&i.AdvanceUsed,
+		&i.CheckDueDate,
 	)
 	return i, err
 }
@@ -1058,25 +1115,29 @@ const updateSettlementHeader = `-- name: UpdateSettlementHeader :one
 UPDATE settlements
 SET doc_date = $1, customer_id = $2, supplier_id = $3,
     sales_user_id = $4, currency = $5, method = $6, reference = $7,
-    amount = $8, note = $9, version = version + 1, updated_by = $10
-WHERE id = $11 AND company_id = $12 AND version = $13 AND status = 'draft'
-RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at
+    amount = $8, advance_amount = $9, advance_used = $10, note = $11, check_due_date = $12,
+    version = version + 1, updated_by = $13
+WHERE id = $14 AND company_id = $15 AND version = $16 AND status = 'draft'
+RETURNING id, company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency, method, reference, amount, status, note, submitted_by, submitted_at, approved_by, approved_at, posted_by, posted_at, created_by, updated_by, version, created_at, updated_at, advance_amount, advance_used, check_due_date
 `
 
 type UpdateSettlementHeaderParams struct {
-	DocDate     time.Time
-	CustomerID  *int64
-	SupplierID  *int64
-	SalesUserID *int64
-	Currency    string
-	Method      string
-	Reference   string
-	Amount      decimal.Decimal
-	Note        string
-	UpdatedBy   *int64
-	ID          int64
-	CompanyID   int64
-	Version     int32
+	DocDate       time.Time
+	CustomerID    *int64
+	SupplierID    *int64
+	SalesUserID   *int64
+	Currency      string
+	Method        string
+	Reference     string
+	Amount        decimal.Decimal
+	AdvanceAmount decimal.Decimal
+	AdvanceUsed   decimal.Decimal
+	Note          string
+	CheckDueDate  *time.Time
+	UpdatedBy     *int64
+	ID            int64
+	CompanyID     int64
+	Version       int32
 }
 
 func (q *Queries) UpdateSettlementHeader(ctx context.Context, arg UpdateSettlementHeaderParams) (Settlement, error) {
@@ -1089,7 +1150,10 @@ func (q *Queries) UpdateSettlementHeader(ctx context.Context, arg UpdateSettleme
 		arg.Method,
 		arg.Reference,
 		arg.Amount,
+		arg.AdvanceAmount,
+		arg.AdvanceUsed,
 		arg.Note,
+		arg.CheckDueDate,
 		arg.UpdatedBy,
 		arg.ID,
 		arg.CompanyID,
@@ -1122,6 +1186,9 @@ func (q *Queries) UpdateSettlementHeader(ctx context.Context, arg UpdateSettleme
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AdvanceAmount,
+		&i.AdvanceUsed,
+		&i.CheckDueDate,
 	)
 	return i, err
 }

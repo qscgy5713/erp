@@ -40,6 +40,8 @@ type voucherLineDTO struct {
 	SupplierName   *string         `json:"supplier_name"`
 	DepartmentID   *int64          `json:"department_id"`
 	DepartmentName *string         `json:"department_name"`
+	ProjectID      *int64          `json:"project_id"`
+	ProjectName    *string         `json:"project_name"`
 }
 
 type voucherDTO struct {
@@ -82,6 +84,7 @@ func loadVoucher(ctx context.Context, q *db.Queries, companyID, id int64) (vouch
 			Debit: l.Debit, Credit: l.Credit, Description: l.Description, CustomerID: l.CustomerID,
 			CustomerName: l.CustomerName, SupplierID: l.SupplierID, SupplierName: l.SupplierName,
 			DepartmentID: l.DepartmentID, DepartmentName: l.DepartmentName,
+			ProjectID: l.ProjectID, ProjectName: l.ProjectName,
 		}
 	}
 	return voucherDTO{
@@ -180,6 +183,7 @@ type voucherLineInput struct {
 	CustomerID   *int64          `json:"customer_id"`
 	SupplierID   *int64          `json:"supplier_id"`
 	DepartmentID *int64          `json:"department_id"`
+	ProjectID    *int64          `json:"project_id"`
 }
 
 type voucherInput struct {
@@ -240,13 +244,13 @@ func checkVoucher(ctx context.Context, q *db.Queries, companyID int64, in *vouch
 			fields[key] = "金額須為整數元"
 		default:
 			ok, err := q.CustomerSupplierDeptExist(ctx, db.CustomerSupplierDeptExistParams{
-				CompanyID: companyID, CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID,
+				CompanyID: companyID, CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID, ProjectID: l.ProjectID,
 			})
 			if err != nil {
 				return date, total, err
 			}
-			if !ok.CustomerOk || !ok.SupplierOk || !ok.DepartmentOk {
-				fields[key] = "輔助核算的客戶 / 供應商 / 部門不存在"
+			if !ok.CustomerOk || !ok.SupplierOk || !ok.DepartmentOk || !ok.ProjectOk {
+				fields[key] = "輔助核算的客戶 / 供應商 / 部門 / 專案不存在"
 			}
 		}
 		total = total.Add(l.Debit)
@@ -265,6 +269,7 @@ func saveVoucherLines(ctx context.Context, q *db.Queries, id int64, lines []vouc
 		if err := q.AddVoucherLine(ctx, db.AddVoucherLineParams{
 			VoucherID: id, LineNo: int32(i + 1), AccountID: l.AccountID, Debit: l.Debit, Credit: l.Credit,
 			Description: l.Description, CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID,
+			ProjectID: l.ProjectID,
 		}); err != nil {
 			return err
 		}
@@ -498,7 +503,7 @@ func (m *Module) checkPostable(ctx context.Context, q *db.Queries, a *authctx.Ac
 	for _, l := range lines {
 		in.Lines = append(in.Lines, voucherLineInput{
 			AccountID: l.AccountID, Debit: l.Debit, Credit: l.Credit, Description: l.Description,
-			CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID,
+			CustomerID: l.CustomerID, SupplierID: l.SupplierID, DepartmentID: l.DepartmentID, ProjectID: l.ProjectID,
 		})
 		debit, credit = debit.Add(l.Debit), credit.Add(l.Credit)
 	}

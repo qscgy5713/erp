@@ -7,6 +7,7 @@ import {
   glApi,
   sourceLabels,
   type AccountOption,
+  type Project,
   type Voucher,
   type VoucherAttachment,
   type VoucherLine,
@@ -74,6 +75,7 @@ async function removeAttachment(a: VoucherAttachment) {
 const fileSize = (n: number) =>
   n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
 const departments = ref<Department[]>([])
+const projects = ref<Project[]>([])
 
 const today = () => {
   const d = new Date()
@@ -88,6 +90,7 @@ const blank = (): VoucherLine => ({
   customer_id: null,
   supplier_id: null,
   department_id: null,
+  project_id: null,
 })
 
 const form = reactive({
@@ -151,6 +154,7 @@ async function save(): Promise<boolean> {
           customer_id: l.customer_id,
           supplier_id: l.supplier_id,
           department_id: l.department_id,
+          project_id: l.project_id,
         })),
       version: doc.value?.version,
     }
@@ -242,6 +246,7 @@ onMounted(async () => {
   if (editable.value) {
     try {
       departments.value = (await systemApi.departments()).filter((d) => d.is_active)
+      projects.value = (await glApi.projects()).filter((p) => p.is_active)
     } catch (e) {
       handle(e)
     }
@@ -419,6 +424,20 @@ autoClear(form)
               <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id" />
             </el-select>
             <span v-else>{{ row.department_name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="專案" width="150">
+          <template #default="{ row }">
+            <el-select
+              v-if="editable"
+              v-model="row.project_id"
+              clearable
+              placeholder="(無)"
+              size="small"
+            >
+              <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+            </el-select>
+            <span v-else>{{ row.project_name }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="editable" width="60">

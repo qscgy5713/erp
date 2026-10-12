@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 財務報表:損益表(期間)、資產負債表(截止日),可與去年同期比較並匯出 Excel;只計已過帳傳票,金額為本位幣
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { glApi, type DeptPnl, type Statement, type StmtLine } from '@/api/gl'
 import { useApiError } from '@/composables/useApiError'
 
@@ -10,7 +10,7 @@ const today = new Date()
 const pad = (n: number) => String(n).padStart(2, '0')
 const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 
-const tab = ref<'income' | 'balance' | 'cashflow' | 'dept'>('income')
+const tab = ref<'income' | 'balance' | 'cashflow' | 'dept' | 'project'>('income')
 const isRange = () => tab.value !== 'balance'
 const range = ref<[string, string]>([`${today.getFullYear()}-01-01`, iso(today)])
 const asOf = ref(iso(today))
@@ -29,8 +29,11 @@ async function run() {
   const mine = ++seq // 連續查詢時,只接受最後一次的回應
   loading.value = true
   try {
-    if (tab.value === 'dept') {
-      const res = await glApi.departmentPnl(range.value[0], range.value[1])
+    if (tab.value === 'dept' || tab.value === 'project') {
+      const res = await (tab.value === 'dept' ? glApi.departmentPnl : glApi.projectPnl)(
+        range.value[0],
+        range.value[1],
+      )
       if (mine === seq) dept.value = res
       return
     }
@@ -72,6 +75,9 @@ async function exportXlsx() {
   }
 }
 
+const isDim = computed(() => tab.value === 'dept' || tab.value === 'project')
+const dimLabel = computed(() => (tab.value === 'project' ? '專案' : '部門'))
+
 const deptCols = [
   { key: 'revenue', label: '收入' },
   { key: 'cost', label: '成本' },
@@ -104,11 +110,11 @@ onMounted(run)
         placeholder="截止日期"
         style="width: 160px"
       />
-      <el-checkbox v-if="tab !== 'dept'" v-model="compare">{{
+      <el-checkbox v-if="!isDim" v-model="compare">{{
         tab === 'balance' ? '與去年同日比較' : '與去年同期比較'
       }}</el-checkbox>
       <el-button type="primary" @click="run">查詢</el-button>
-      <el-button v-if="tab !== 'dept'" :disabled="!stmt" @click="exportXlsx">匯出 Excel</el-button>
+      <el-button v-if="!isDim" :disabled="!stmt" @click="exportXlsx">匯出 Excel</el-button>
     </div>
 
     <el-tabs v-model="tab" @tab-change="run">
@@ -116,10 +122,11 @@ onMounted(run)
       <el-tab-pane label="資產負債表" name="balance" />
       <el-tab-pane label="現金流量表" name="cashflow" />
       <el-tab-pane label="部門別損益" name="dept" />
+      <el-tab-pane label="專案別損益" name="project" />
     </el-tabs>
 
     <el-alert
-      v-if="tab !== 'dept' && stmt?.note"
+      v-if="!isDim && stmt?.note"
       type="warning"
       :closable="false"
       show-icon
@@ -135,12 +142,14 @@ onMounted(run)
       title="資產負債表不平衡(資產 ≠ 負債 + 權益),請到「會計 → 對帳檢查」確認傳票借貸是否平衡。"
     />
 
-    <div v-if="tab === 'dept'" v-loading="loading" class="dept">
+    <div v-if="isDim" v-loading="loading" class="dept">
       <p class="hint">
-        依傳票明細的輔助核算「部門」分組;沒有填部門的(包含系統自動拋轉的傳票)歸在「未指定部門」。
+        依傳票明細的輔助核算「{{ dimLabel }}」分組;沒有填{{
+          dimLabel
+        }}的(包含系統自動拋轉的傳票)歸在「未指定{{ dimLabel }}」。
       </p>
       <el-table :data="dept ? [...dept.rows, dept.total] : []" border size="small">
-        <el-table-column label="部門" min-width="180">
+        <el-table-column :label="dimLabel" min-width="180">
           <template #default="{ row }">{{ row.code }} {{ row.name }}</template>
         </el-table-column>
         <el-table-column

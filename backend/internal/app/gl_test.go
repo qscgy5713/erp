@@ -747,3 +747,43 @@ func TestVoucherAttachments(t *testing.T) {
 	}](t, c.do(http.MethodGet, base, nil).Data)
 	expect(t, c.do(http.MethodDelete, base+"/"+itoa(list2[0].ID), nil), http.StatusConflict, "GL-052")
 }
+
+// 專案別損益:傳票明細帶專案,報表依專案分組,未填的歸「未指定」(D80)。
+func TestProjectPnl(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	res := c.do(http.MethodPost, "/gl/projects", map[string]any{"code": "p1", "name": "專案一"})
+	expect(t, res, http.StatusCreated, "")
+	pid := decode[struct {
+		ID int64 `json:"id"`
+	}](t, res.Data).ID
+	expect(t, c.do(http.MethodPost, "/gl/projects", map[string]any{"code": "P1", "name": "重複"}), http.StatusConflict, "GL-060")
+
+	cash, sales := e.idByCode("accounts", "1101"), e.idByCode("accounts", "4101")
+	mk := func(project *int64, amt string) {
+		v, r := c.createVoucherAPI(manualVoucher("2026-10-05",
+			map[string]any{"account_id": cash, "debit": amt, "credit": "0"},
+			map[string]any{"account_id": sales, "debit": "0", "credit": amt, "project_id": project}))
+		expect(t, r, http.StatusCreated, "")
+		expect(t, c.actVoucher(&v, "post"), http.StatusOK, "")
+	}
+	mk(&pid, "300")
+	mk(nil, "50")
+	res = c.do(http.MethodGet, "/gl/reports/project-pnl?from=2026-10-01&to=2026-10-31", nil)
+	expect(t, res, http.StatusOK, "")
+	out := decode[struct {
+		Rows []struct {
+			Code    string `json:"code"`
+			Revenue string `json:"revenue"`
+			Profit  string `json:"profit"`
+		} `json:"rows"`
+	}](t, res.Data)
+	if len(out.Rows) != 2 || out.Rows[0].Code != "P1" || out.Rows[0].Profit != "300" || out.Rows[1].Revenue != "50" {
+		t.Fatalf("專案損益 %+v", out.Rows)
+	}
+	bad := int64(99999)
+	expect(t, c.do(http.MethodPost, "/gl/vouchers", manualVoucher("2026-10-06",
+		map[string]any{"account_id": cash, "debit": "10", "credit": "0"},
+		map[string]any{"account_id": sales, "debit": "0", "credit": "10", "project_id": bad})), http.StatusUnprocessableEntity, "SYS-422")
+}

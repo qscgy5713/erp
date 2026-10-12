@@ -56,16 +56,18 @@ SELECT * FROM settlements WHERE id = @id AND company_id = @company_id FOR UPDATE
 
 -- name: CreateSettlement :one
 INSERT INTO settlements (company_id, side, doc_no, doc_date, customer_id, supplier_id, sales_user_id, currency,
-                         method, reference, amount, note, created_by, updated_by)
+                         method, reference, amount, advance_amount, advance_used, note, check_due_date, created_by, updated_by)
 VALUES (@company_id, @side, @doc_no, @doc_date, sqlc.narg(customer_id), sqlc.narg(supplier_id),
-        sqlc.narg(sales_user_id), @currency, @method, @reference, @amount, @note, @created_by, @created_by)
+        sqlc.narg(sales_user_id), @currency, @method, @reference, @amount, @advance_amount, @advance_used, @note,
+        sqlc.narg(check_due_date), @created_by, @created_by)
 RETURNING *;
 
 -- name: UpdateSettlementHeader :one
 UPDATE settlements
 SET doc_date = @doc_date, customer_id = sqlc.narg(customer_id), supplier_id = sqlc.narg(supplier_id),
     sales_user_id = sqlc.narg(sales_user_id), currency = @currency, method = @method, reference = @reference,
-    amount = @amount, note = @note, version = version + 1, updated_by = @updated_by
+    amount = @amount, advance_amount = @advance_amount, advance_used = @advance_used, note = @note, check_due_date = sqlc.narg(check_due_date),
+    version = version + 1, updated_by = @updated_by
 WHERE id = @id AND company_id = @company_id AND version = @version AND status = 'draft'
 RETURNING *;
 
@@ -246,3 +248,13 @@ DELETE FROM settlement_lines WHERE receivable_id = @receivable_id;
 
 -- name: DeleteSettlementLinesByPayable :exec
 DELETE FROM settlement_lines WHERE payable_id = @payable_id;
+
+-- name: PartnerAdvanceBalance :one
+-- 某客戶(收款)或供應商(付款)已過帳的預收 / 預付餘額 = 已新增 − 已抵用
+SELECT COALESCE(SUM(advance_amount - advance_used), 0)::numeric AS balance
+FROM settlements
+WHERE company_id = @company_id AND side = @side AND status = 'posted'
+  AND COALESCE(customer_id, supplier_id) = @partner_id;
+
+-- name: LockSupplier :exec
+SELECT 1 FROM suppliers WHERE id = @id AND company_id = @company_id FOR UPDATE;

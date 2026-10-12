@@ -2,6 +2,7 @@ package sales
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -509,7 +510,18 @@ func (m *Module) orderAction(c *gin.Context) {
 		case docstate.Approve:
 			if cur.DocType == TypeOrder {
 				if err := checkCredit(ctx, q, a.CompanyID, cur); err != nil {
-					return err
+					var ae *apperr.Error
+					reason := strings.TrimSpace(in.CreditOverrideReason)
+					if !errors.As(err, &ae) || ae.Code != "SAL-003" || reason == "" || !a.Can(permission.SalesCreditOverride) {
+						return err
+					}
+					// 主管覆核:放行,但留下原因與稽核紀錄
+					if err := audit.Record(ctx, q, audit.Entry{
+						Action: "credit_override", EntityType: "sales_order", EntityID: &id,
+						Summary: "訂單 " + cur.DocNo + " 超額度覆核核准:" + reason,
+					}); err != nil {
+						return err
+					}
 				}
 			}
 		case docstate.Unapprove, docstate.Void:

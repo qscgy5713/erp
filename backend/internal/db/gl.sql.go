@@ -146,9 +146,9 @@ func (q *Queries) AccountsForPosting(ctx context.Context, arg AccountsForPosting
 }
 
 const addVoucherLine = `-- name: AddVoucherLine :exec
-INSERT INTO voucher_lines (voucher_id, line_no, account_id, debit, credit, description, customer_id, supplier_id, department_id)
+INSERT INTO voucher_lines (voucher_id, line_no, account_id, debit, credit, description, customer_id, supplier_id, department_id, project_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
-        $8, $9)
+        $8, $9, $10)
 `
 
 type AddVoucherLineParams struct {
@@ -161,6 +161,7 @@ type AddVoucherLineParams struct {
 	CustomerID   *int64
 	SupplierID   *int64
 	DepartmentID *int64
+	ProjectID    *int64
 }
 
 func (q *Queries) AddVoucherLine(ctx context.Context, arg AddVoucherLineParams) error {
@@ -174,6 +175,7 @@ func (q *Queries) AddVoucherLine(ctx context.Context, arg AddVoucherLineParams) 
 		arg.CustomerID,
 		arg.SupplierID,
 		arg.DepartmentID,
+		arg.ProjectID,
 	)
 	return err
 }
@@ -455,7 +457,9 @@ SELECT
     COALESCE($3::bigint IS NULL OR EXISTS (
         SELECT 1 FROM suppliers WHERE id = $3::bigint AND company_id = $2::bigint), FALSE)::boolean AS supplier_ok,
     COALESCE($4::bigint IS NULL OR EXISTS (
-        SELECT 1 FROM departments WHERE id = $4::bigint AND company_id = $2::bigint), FALSE)::boolean AS department_ok
+        SELECT 1 FROM departments WHERE id = $4::bigint AND company_id = $2::bigint), FALSE)::boolean AS department_ok,
+    COALESCE($5::bigint IS NULL OR EXISTS (
+        SELECT 1 FROM projects WHERE id = $5::bigint AND company_id = $2::bigint), FALSE)::boolean AS project_ok
 `
 
 type CustomerSupplierDeptExistParams struct {
@@ -463,12 +467,14 @@ type CustomerSupplierDeptExistParams struct {
 	CompanyID    int64
 	SupplierID   *int64
 	DepartmentID *int64
+	ProjectID    *int64
 }
 
 type CustomerSupplierDeptExistRow struct {
 	CustomerOk   bool
 	SupplierOk   bool
 	DepartmentOk bool
+	ProjectOk    bool
 }
 
 func (q *Queries) CustomerSupplierDeptExist(ctx context.Context, arg CustomerSupplierDeptExistParams) (CustomerSupplierDeptExistRow, error) {
@@ -477,9 +483,15 @@ func (q *Queries) CustomerSupplierDeptExist(ctx context.Context, arg CustomerSup
 		arg.CompanyID,
 		arg.SupplierID,
 		arg.DepartmentID,
+		arg.ProjectID,
 	)
 	var i CustomerSupplierDeptExistRow
-	err := row.Scan(&i.CustomerOk, &i.SupplierOk, &i.DepartmentOk)
+	err := row.Scan(
+		&i.CustomerOk,
+		&i.SupplierOk,
+		&i.DepartmentOk,
+		&i.ProjectOk,
+	)
 	return i, err
 }
 
@@ -1026,13 +1038,14 @@ func (q *Queries) ListPeriods(ctx context.Context, companyID int64) ([]ListPerio
 }
 
 const listVoucherLines = `-- name: ListVoucherLines :many
-SELECT l.id, l.voucher_id, l.line_no, l.account_id, l.debit, l.credit, l.description, l.customer_id, l.supplier_id, l.department_id, a.code AS account_code, a.name AS account_name, c.name AS customer_name, s.name AS supplier_name,
-       d.name AS department_name
+SELECT l.id, l.voucher_id, l.line_no, l.account_id, l.debit, l.credit, l.description, l.customer_id, l.supplier_id, l.department_id, l.project_id, a.code AS account_code, a.name AS account_name, c.name AS customer_name, s.name AS supplier_name,
+       d.name AS department_name, pj.name AS project_name
 FROM voucher_lines l
 JOIN accounts a ON a.id = l.account_id
 LEFT JOIN customers c ON c.id = l.customer_id
 LEFT JOIN suppliers s ON s.id = l.supplier_id
 LEFT JOIN departments d ON d.id = l.department_id
+LEFT JOIN projects pj ON pj.id = l.project_id
 WHERE l.voucher_id = $1
 ORDER BY l.line_no
 `
@@ -1048,11 +1061,13 @@ type ListVoucherLinesRow struct {
 	CustomerID     *int64
 	SupplierID     *int64
 	DepartmentID   *int64
+	ProjectID      *int64
 	AccountCode    string
 	AccountName    string
 	CustomerName   *string
 	SupplierName   *string
 	DepartmentName *string
+	ProjectName    *string
 }
 
 func (q *Queries) ListVoucherLines(ctx context.Context, voucherID int64) ([]ListVoucherLinesRow, error) {
@@ -1075,11 +1090,13 @@ func (q *Queries) ListVoucherLines(ctx context.Context, voucherID int64) ([]List
 			&i.CustomerID,
 			&i.SupplierID,
 			&i.DepartmentID,
+			&i.ProjectID,
 			&i.AccountCode,
 			&i.AccountName,
 			&i.CustomerName,
 			&i.SupplierName,
 			&i.DepartmentName,
+			&i.ProjectName,
 		); err != nil {
 			return nil, err
 		}

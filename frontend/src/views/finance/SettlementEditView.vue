@@ -70,8 +70,24 @@ const form = reactive({
   method: 'transfer' as SettleMethod,
   reference: '',
   note: '',
+  advance_amount: '',
+  advance_used: '',
+  check_due_date: null as string | null,
   lines: [] as Row[],
 })
+
+// 預收 / 預付款(僅本位幣):目前可抵用餘額
+const advanceBalance = ref<string | null>(null)
+async function loadAdvanceBalance() {
+  advanceBalance.value = null
+  if (!form.partner_id) return
+  try {
+    advanceBalance.value = (await settlementApi.advanceBalance(side, form.partner_id)).balance
+  } catch {
+    // 僅為提示
+  }
+}
+watch(() => form.partner_id, loadAdvanceBalance)
 
 const decimals = computed(
   () => currencies.value.find((c) => c.code === form.currency)?.decimals ?? 0,
@@ -95,6 +111,9 @@ function applyDoc(d: Settlement) {
     method: d.method,
     reference: d.reference,
     note: d.note,
+    check_due_date: d.check_due_date,
+    advance_amount: Number(d.advance_amount) ? String(Number(d.advance_amount)) : '',
+    advance_used: Number(d.advance_used) ? String(Number(d.advance_used)) : '',
     lines: d.lines.map((l) => ({
       target_id: l.target_id,
       source_type: l.source_type,
@@ -216,6 +235,9 @@ async function save(): Promise<boolean> {
       reference: form.reference,
       note: form.note,
       lines: form.lines.map((l) => ({ target_id: l.target_id, amount: l.amount })),
+      check_due_date: form.method === 'check' ? form.check_due_date : null,
+      advance_amount: form.advance_amount || '0',
+      advance_used: form.advance_used || '0',
       version: doc.value?.version,
     }
     const saved = doc.value
@@ -417,8 +439,43 @@ autoClear(form)
               <el-input v-model="form.reference" maxlength="50" placeholder="匯款帳號末碼 / 票號" />
             </el-form-item>
           </el-col>
+          <el-col v-if="form.method === 'check'" :xs="24" :sm="12" :md="6">
+            <el-form-item label="支票到期日" :error="fieldErrors.check_due_date">
+              <el-date-picker
+                v-model="form.check_due_date"
+                type="date"
+                value-format="YYYY-MM-DD"
+                :disabled="!editable"
+                placeholder="預設單據日期"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
           <el-col v-if="doc?.sales_user_name" :xs="24" :sm="12" :md="6">
             <el-form-item label="負責業務">{{ doc.sales_user_name }}</el-form-item>
+          </el-col>
+        </el-row>
+        <el-row v-if="form.currency === 'TWD'" :gutter="16">
+          <el-col :xs="24" :sm="12" :md="6">
+            <el-form-item
+              :label="isCollection ? '新增預收' : '新增預付'"
+              :error="fieldErrors.advance_amount"
+            >
+              <el-input v-model="form.advance_amount" :disabled="!editable" placeholder="0" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :md="6">
+            <el-form-item
+              :label="isCollection ? '抵用預收' : '抵用預付'"
+              :error="fieldErrors.advance_used"
+            >
+              <el-input v-model="form.advance_used" :disabled="!editable" placeholder="0" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="advanceBalance !== null" :xs="24" :sm="12" :md="8">
+            <el-form-item :label="isCollection ? '預收餘額' : '預付餘額'">
+              {{ fmt(advanceBalance) }}
+            </el-form-item>
           </el-col>
         </el-row>
         <el-form-item label="備註">

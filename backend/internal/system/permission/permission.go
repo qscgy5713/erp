@@ -46,13 +46,15 @@ const (
 	ReceiptApprove       = "purchase.receipt.approve"
 	ReceiptPost          = "purchase.receipt.post" // 過帳、反過帳(異動庫存與應付)
 	// 銷售
-	SalesOrderRead    = "sales.order.read" // 報價單與訂單
-	SalesOrderWrite   = "sales.order.write"
-	SalesOrderApprove = "sales.order.approve"
-	DeliveryRead      = "sales.delivery.read"  // 出貨單、銷貨退回單
-	DeliveryWrite     = "sales.delivery.write" // 含登錄發票號碼
-	DeliveryApprove   = "sales.delivery.approve"
-	DeliveryPost      = "sales.delivery.post"
+	SalesOrderRead      = "sales.order.read" // 報價單與訂單
+	SalesOrderWrite     = "sales.order.write"
+	SalesOrderApprove   = "sales.order.approve"
+	SalesPriceWrite     = "sales.price.write"           // 維護售價表(客戶別價格、數量階梯)(D79)
+	SalesCreditOverride = "sales.order.credit_override" // 訂單超過信用額度時,填寫原因後強行核准(D79)
+	DeliveryRead        = "sales.delivery.read"         // 出貨單、銷貨退回單
+	DeliveryWrite       = "sales.delivery.write"        // 含登錄發票號碼
+	DeliveryApprove     = "sales.delivery.approve"
+	DeliveryPost        = "sales.delivery.post"
 	// 生產
 	BomRead          = "production.bom.read"
 	BomWrite         = "production.bom.write"
@@ -122,7 +124,7 @@ var Groups = []Group{
 		{ReceiptRead, "檢視"}, {ReceiptWrite, "開單/送審"}, {ReceiptApprove, "核准/退回/作廢"}, {ReceiptPost, "過帳/反過帳"},
 	}},
 	{"銷售", "報價單與訂單", []Permission{
-		{SalesOrderRead, "檢視"}, {SalesOrderWrite, "開單/送審"}, {SalesOrderApprove, "核准/退回/作廢/結案"},
+		{SalesOrderRead, "檢視"}, {SalesOrderWrite, "開單/送審"}, {SalesOrderApprove, "核准/退回/作廢/結案"}, {SalesCreditOverride, "超額度覆核"}, {SalesPriceWrite, "維護售價表"},
 	}},
 	{"銷售", "出貨單與銷貨退回單", []Permission{
 		{DeliveryRead, "檢視"}, {DeliveryWrite, "開單/送審/登錄發票"}, {DeliveryApprove, "核准/退回/作廢"}, {DeliveryPost, "過帳/反過帳"},
