@@ -26,7 +26,7 @@
 - [x] 前端:版型、側邊選單、API client、首頁系統狀態
 - [x] 前端:登入、自動刷新 token、選單權限、路由守衛、系統管理頁面
 - [x] 前端:共用單據頁元件(DocStatusTag、ItemPicker、狀態動作按鈕、經手紀錄)— M2 完成
-- [ ] 前端:Element Plus 改為按需載入(目前整包 >500KB)
+- [x] 前端:Element Plus 改為按需載入(unplugin-vue-components,入口 chunk 約 115KB)
 - [x] M0 骨架 code review、補單元與資料庫整合測試、瀏覽器實測
 - [x] M0 系統基礎 code review、整合測試、瀏覽器實測
 - [x] 限流中介層:已登入以使用者、未登入以 IP 計算(可用環境變數調整)

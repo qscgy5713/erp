@@ -15,6 +15,13 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 Element Plus 按需載入
+
+- `vite.config.ts` 加 `unplugin-vue-components`(`ElementPlusResolver`,樣式隨元件載入);`main.ts` 不再 `app.use(ElementPlus)`,語系改由 `App.vue` 的 `el-config-provider` 套用繁中;`ElMessage` / `ElMessageBox` 為程式呼叫,樣式在 `main.ts` 手動引入。
+- `vitest.config.ts` 需把 `element-plus` 設為 inline,否則 Node 會直接載入 css 失敗。
+- web 容器用自己的 node_modules,新增依賴後須 `docker compose build web` 並以 `--renew-anon-volumes` 重建。
+- 驗證:vue-tsc、lint、vitest 46 項通過;瀏覽器看登入、工單列表(繁中分頁)、完工回報對話框樣式正常。
+
 ## 2026-10-12 工單分批完工(D94)
 
 - 設計:`doc/plan.md` D94。已核准工單可多次「完工回報」(`work_order_completions` + `work_order_completion_lines`,單號 WC),回報即過帳;累計達計畫自動結案,也可短交結案;作廢回報沖銷並讓結案工單退回已核准。有回報的工單不能再用一次完工 / 反過帳 / 取消核准 / 作廢(PRD-005)。

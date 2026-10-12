@@ -1,8 +1,8 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import zhTw from 'element-plus/es/locale/lang/zh-tw'
-import 'element-plus/dist/index.css'
+// 以程式呼叫的元件(ElMessage / ElMessageBox)不會被自動引入樣式,這裡補上
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
 
 import App from './App.vue'
 import router from './router'
@@ -18,6 +18,4 @@ installAuthHooks(() => {
   }
 })
 app.use(router)
-app.use(ElementPlus, { locale: zhTw })
-
 app.mount('#app')
