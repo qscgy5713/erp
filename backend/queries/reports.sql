@@ -131,3 +131,12 @@ WHERE r.company_id = @company_id AND r.status = 'posted'
   AND r.doc_date >= @from_date AND r.doc_date <= @to_date
   AND (sqlc.narg(supplier_id)::bigint IS NULL OR r.supplier_id = sqlc.narg(supplier_id))
   AND (sqlc.narg(item_id)::bigint IS NULL OR l.item_id = sqlc.narg(item_id));
+
+-- name: LastPurchasePrices :many
+-- 每個料品在同供應商、同幣別下,最近一張已過帳進貨單(不含退出)的單價與單位
+SELECT DISTINCT ON (l.item_id) l.item_id, l.unit_id, l.unit_price, r.doc_date, r.doc_no
+FROM goods_receipts r
+JOIN goods_receipt_lines l ON l.receipt_id = r.id
+WHERE r.company_id = @company_id AND r.supplier_id = @supplier_id AND r.currency = @currency
+  AND r.status = 'posted' AND r.doc_type = 'receipt' AND l.item_id = ANY(@item_ids::bigint[])
+ORDER BY l.item_id, r.doc_date DESC, r.id DESC;

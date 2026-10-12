@@ -221,6 +221,7 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `/finance/collections`、`/finance/payments`、`POST …/{id}/actions/{…\|post\|unpost}` | 收款單 / 付款單(沖帳) |
 | `GET /finance/statements?side=receivable\|payable&partner_id=&currency=&from=&to=` | 對帳單 |
 | `GET /sales/reports`、`GET /purchase/reports`(`group=customer\|supplier\|item\|detail&from=&to=&format=xlsx`) | 銷售 / 採購報表 |
+| `GET /purchase/last-prices?supplier_id=&currency=&item_ids=` | 最近進價(開單帶入) |
 | `GET /finance/aging?side=receivable\|payable&as_of=` | 帳齡分析 |
 | `/gl/accounts`、`GET /gl/account-options`、`/gl/mappings` | 會計科目、開傳票選科目(只需有會計權限)、拋轉規則 |
 | `/gl/vouchers`、`POST /gl/vouchers/{id}/actions/{post\|void\|reverse}` | 傳票與動作 |

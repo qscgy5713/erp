@@ -79,6 +79,62 @@ func (q *Queries) CountSalesReportDetail(ctx context.Context, arg CountSalesRepo
 	return count, err
 }
 
+const lastPurchasePrices = `-- name: LastPurchasePrices :many
+SELECT DISTINCT ON (l.item_id) l.item_id, l.unit_id, l.unit_price, r.doc_date, r.doc_no
+FROM goods_receipts r
+JOIN goods_receipt_lines l ON l.receipt_id = r.id
+WHERE r.company_id = $1 AND r.supplier_id = $2 AND r.currency = $3
+  AND r.status = 'posted' AND r.doc_type = 'receipt' AND l.item_id = ANY($4::bigint[])
+ORDER BY l.item_id, r.doc_date DESC, r.id DESC
+`
+
+type LastPurchasePricesParams struct {
+	CompanyID  int64
+	SupplierID int64
+	Currency   string
+	ItemIds    []int64
+}
+
+type LastPurchasePricesRow struct {
+	ItemID    int64
+	UnitID    int64
+	UnitPrice decimal.Decimal
+	DocDate   time.Time
+	DocNo     string
+}
+
+// 每個料品在同供應商、同幣別下,最近一張已過帳進貨單(不含退出)的單價與單位
+func (q *Queries) LastPurchasePrices(ctx context.Context, arg LastPurchasePricesParams) ([]LastPurchasePricesRow, error) {
+	rows, err := q.db.Query(ctx, lastPurchasePrices,
+		arg.CompanyID,
+		arg.SupplierID,
+		arg.Currency,
+		arg.ItemIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LastPurchasePricesRow{}
+	for rows.Next() {
+		var i LastPurchasePricesRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.UnitID,
+			&i.UnitPrice,
+			&i.DocDate,
+			&i.DocNo,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const purchaseReportByItem = `-- name: PurchaseReportByItem :many
 SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        COALESCE(SUM(l.base_qty) FILTER (WHERE r.doc_type = 'receipt'), 0)::numeric AS receipt_qty,

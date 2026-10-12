@@ -1,5 +1,10 @@
 # 工作日誌
 
+## 2026-10-12 料品最近進價帶入
+- 後端 `GET /purchase/last-prices?supplier_id=&currency=&item_ids=`(需採購單或進貨單的編輯權限):每個料品取同供應商、同幣別、最近一張**已過帳進貨單**(不含退出與草稿)的單價與單位;`queries/reports.sql` 的 `LastPurchasePrices`、`purchase/lastprice.go`。
+- 前端採購單 / 進貨單選料品時,若單價空白且不是帶入的明細,自動帶入單價與當時的單位並提示來源單號;查詢失敗不影響開單。
+- 測試 `TestLastPurchasePrices`:取最近一張、草稿不算、不同幣別不帶出、缺參數 422、無權限 403。
+
 ## 2026-10-12 單據列印
 - `App.vue` 新增全域列印樣式:列印時隱藏側欄、頂欄、工具列與單據動作鈕(`.el-aside`、`.el-header`、`.page-toolbar`、`.doc-header .actions`、`.no-print`),並解除高度限制讓內容可分頁。
 - 傳票、庫存單據、採購 / 銷售單、收付款單、工單的標題旁新增「列印」按鈕(`window.print()`,可另存 PDF)。未做固定版面的專用列印格式與公司抬頭。

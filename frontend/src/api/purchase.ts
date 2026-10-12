@@ -179,7 +179,19 @@ export interface SupplierOption {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface LastPrice {
+  item_id: number
+  unit_id: number
+  unit_price: Decimal
+  doc_date: string
+  doc_no: string
+}
+
 export const purchaseApi = {
+  lastPrices: (supplierId: number, currency: string, itemIds: number[]) =>
+    http.get<LastPrice[]>(
+      `/purchase/last-prices${qs({ supplier_id: supplierId, currency, item_ids: itemIds.join(',') })}`,
+    ),
   orders: (q: Q) => requestPage<OrderRow>(`/purchase/orders${qs(q)}`),
   order: (id: number) => http.get<PurchaseOrder>(`/purchase/orders/${id}`),
   createOrder: (input: unknown) => http.post<PurchaseOrder>('/purchase/orders', input),

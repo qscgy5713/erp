@@ -14,6 +14,7 @@ import {
   type Warehouse,
 } from '@/api/masterdata'
 import { salesApi, type Availability } from '@/api/sales'
+import { purchaseApi } from '@/api/purchase'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 import { actionLabels, allowedActions, confirmActions } from '@/utils/docstate'
@@ -233,6 +234,26 @@ function onPickItem(row: LineRow, item: ItemOption | null) {
   row.base_unit_name = item.base_unit_name
   row.unitOptions = unitOptionsOf(item)
   row.unit_id = item.base_unit_id
+  fillLastPrice(row)
+}
+
+/** 採購單 / 進貨單:單價空白時帶入同供應商、同幣別的最近進價(連同當時的單位);失敗不影響開單 */
+async function fillLastPrice(row: LineRow) {
+  const purchase =
+    flow.kind === 'purchase-order' || (flow.kind === 'receipt' && docType.value === 'receipt')
+  if (!purchase || !row.item_id || !form.partner_id || row.unit_price !== '' || linked(row)) return
+  if (!auth.can(['purchase.order.write', 'purchase.receipt.write'])) return
+  try {
+    const itemId = row.item_id
+    const found = (await purchaseApi.lastPrices(form.partner_id, form.currency, [itemId]))[0]
+    if (!found || row.item_id !== itemId || row.unit_price !== '') return
+    if (!row.unitOptions.some((u) => u.id === found.unit_id)) return
+    row.unit_id = found.unit_id
+    row.unit_price = String(Number(found.unit_price))
+    ElMessage.info(`已帶入最近進價(${found.doc_date} ${found.doc_no})`)
+  } catch {
+    // 僅為輔助,查不到就維持空白
+  }
 }
 
 function addLine() {

@@ -188,3 +188,40 @@ func TestPurchaseReport(t *testing.T) {
 	e.seedUser("nobody", pw, false, false)
 	expect(t, e.loggedIn("nobody", pw).do(http.MethodGet, "/purchase/reports?group=supplier&"+q, nil), http.StatusForbidden, "SYS-403")
 }
+
+func TestLastPurchasePrices(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	type lp struct {
+		ItemID    int64  `json:"item_id"`
+		UnitID    int64  `json:"unit_id"`
+		UnitPrice string `json:"unit_price"`
+		DocDate   string `json:"doc_date"`
+	}
+	get := func(cl *client, q string) apiResp {
+		return cl.do(http.MethodGet, "/purchase/last-prices?"+q, nil)
+	}
+	base := "supplier_id=" + itoa(p.sup) + "&currency=TWD&item_ids=" + itoa(p.item)
+	if got := decode[[]lp](t, get(c, base).Data); len(got) != 0 {
+		t.Fatalf("尚無進貨應為空: %+v", got)
+	}
+	p.receiveOn("2026-09-05", "5", "1200")
+	p.receiveOn("2026-09-10", "5", "1440")
+	// 草稿不算
+	_, res := c.createPur(receipts, p.header(map[string]any{
+		"doc_date": "2026-09-20", "doc_type": "receipt",
+		"lines": []map[string]any{line(p.item, p.box, "1", "9999", nil)},
+	}))
+	expect(t, res, http.StatusCreated, "")
+	got := decode[[]lp](t, get(c, base).Data)
+	if len(got) != 1 || got[0].UnitID != p.box || got[0].DocDate != "2026-09-10" {
+		t.Fatalf("last price = %+v", got)
+	}
+	decEq(t, "price", got[0].UnitPrice, "1440")
+	if got := decode[[]lp](t, get(c, "supplier_id="+itoa(p.sup)+"&currency=USD&item_ids="+itoa(p.item)).Data); len(got) != 0 {
+		t.Fatalf("不同幣別不應帶出: %+v", got)
+	}
+	expect(t, get(c, "currency=TWD"), http.StatusUnprocessableEntity, "SYS-422")
+	e.seedUser("nobody", pw, false, false)
+	expect(t, get(e.loggedIn("nobody", pw), base), http.StatusForbidden, "SYS-403")
+}

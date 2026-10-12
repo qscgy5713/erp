@@ -35,6 +35,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	// 未交貨清單:採購人員查詢,也供開進貨單時帶入
 	g.GET("/outstanding-lines", auth.Require(permission.PurchaseOrderRead, permission.PurchaseOrderWrite,
 		permission.PurchaseOrderApprove, permission.ReceiptWrite), m.outstandingLines)
+	g.GET("/last-prices", auth.Require(permission.PurchaseOrderWrite, permission.ReceiptWrite), m.lastPrices)
 
 	receiptRead := auth.Require(permission.ReceiptRead, permission.ReceiptWrite, permission.ReceiptApprove, permission.ReceiptPost)
 	g.GET("/receipts", receiptRead, m.listReceipts)
