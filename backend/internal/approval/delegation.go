@@ -82,6 +82,9 @@ func (m *Module) createDelegation(c *gin.Context) {
 	case to.Before(from):
 		response.Error(c, fieldErr("valid_to", "結束日不可早於起始日"))
 		return
+	case to.Before(time.Now().UTC().Truncate(24 * time.Hour)): // 生效判斷用資料庫的 CURRENT_DATE(UTC),這裡口徑一致
+		response.Error(c, fieldErr("valid_to", "結束日不可早於今天,整段已過去的期間不會生效"))
+		return
 	case in.DelegateID == in.DelegatorID:
 		response.Error(c, fieldErr("delegate_id", "代理人不可是本人"))
 		return

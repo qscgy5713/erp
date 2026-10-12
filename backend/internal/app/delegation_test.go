@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
 
+	"erp/internal/db"
 	"erp/internal/system/permission"
 )
 
@@ -56,6 +58,7 @@ func TestApprovalDelegationAndStockDocs(t *testing.T) {
 		{"delegate_id": apprU.ID, "valid_from": day(-1), "valid_to": day(2)},                           // 代理自己
 		{"delegate_id": deputyID, "valid_from": day(2), "valid_to": day(-1)},                           // 迄日早於起日
 		{"delegate_id": deputyID, "valid_from": "x", "valid_to": day(2)},                               // 格式
+		{"delegate_id": deputyID, "valid_from": day(-10), "valid_to": day(-5)},                         // 整段已過去
 		{"delegate_id": 99999, "valid_from": day(-1), "valid_to": day(2)},                              // 不存在
 		{"delegate_id": deputyID, "delegator_id": bossU.ID, "valid_from": day(-1), "valid_to": day(2)}, // 替別人設定需權限
 	} {
@@ -109,10 +112,12 @@ func TestApprovalDelegationAndStockDocs(t *testing.T) {
 	}
 	expect(t, dep.act(&d2, "approve"), http.StatusForbidden, "SYS-403")
 
-	// 已過期的代理無效
-	expect(t, ap.do(http.MethodPost, "/approval/delegations", map[string]any{
-		"delegate_id": deputyID, "valid_from": day(-10), "valid_to": day(-5),
-	}), http.StatusCreated, "")
+	// 已過期的代理無效(API 不允許建立整段過去的期間,直接寫入資料庫模擬期滿)
+	past := time.Now().UTC().AddDate(0, 0, -5)
+	if _, err := e.q.CreateDelegation(context.Background(), db.CreateDelegationParams{CompanyID: apprU.CompanyID, DelegatorID: apprU.ID,
+		DelegateID: deputyID, ValidFrom: past.AddDate(0, 0, -5), ValidTo: past, ActorID: &apprU.ID}); err != nil {
+		t.Fatal(err)
+	}
 	expect(t, dep.act(&d2, "approve"), http.StatusForbidden, "SYS-403")
 }
 
