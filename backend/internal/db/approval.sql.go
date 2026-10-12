@@ -187,7 +187,7 @@ func (q *Queries) CompanyRolesByIDs(ctx context.Context, arg CompanyRolesByIDsPa
 
 const completeDocumentApproval = `-- name: CompleteDocumentApproval :execrows
 UPDATE document_approvals SET approver_id = $1, approved_at = now(), acting_for = $2
-WHERE doc_type = $3 AND doc_id = $4 AND step_no = $5 AND approver_id IS NULL
+WHERE doc_type = $3 AND doc_id = $4 AND step_no = $5 AND slot_no = $6 AND approver_id IS NULL
 `
 
 type CompleteDocumentApprovalParams struct {
@@ -196,6 +196,7 @@ type CompleteDocumentApprovalParams struct {
 	DocType    string
 	DocID      int64
 	StepNo     int32
+	SlotNo     int32
 }
 
 func (q *Queries) CompleteDocumentApproval(ctx context.Context, arg CompleteDocumentApprovalParams) (int64, error) {
@@ -205,6 +206,7 @@ func (q *Queries) CompleteDocumentApproval(ctx context.Context, arg CompleteDocu
 		arg.DocType,
 		arg.DocID,
 		arg.StepNo,
+		arg.SlotNo,
 	)
 	if err != nil {
 		return 0, err
@@ -345,11 +347,11 @@ func (q *Queries) DeleteDocumentApprovals(ctx context.Context, arg DeleteDocumen
 }
 
 const documentApprovalsForDocs = `-- name: DocumentApprovalsForDocs :many
-SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id, d.acting_for
+SELECT d.doc_type, d.doc_id, d.step_no, d.slot_no, d.mode, d.role_id, d.role_name, d.approver_id, d.acting_for
 FROM document_approvals d
 WHERE d.company_id = $1
   AND d.doc_type = ANY($2::text[]) AND d.doc_id = ANY($3::bigint[]) -- 超集合,程式再依 (類型, id) 配對
-ORDER BY d.doc_type, d.doc_id, d.step_no
+ORDER BY d.doc_type, d.doc_id, d.step_no, d.slot_no
 `
 
 type DocumentApprovalsForDocsParams struct {
@@ -362,6 +364,8 @@ type DocumentApprovalsForDocsRow struct {
 	DocType    string
 	DocID      int64
 	StepNo     int32
+	SlotNo     int32
+	Mode       string
 	RoleID     *int64
 	RoleName   string
 	ApproverID *int64
@@ -381,6 +385,8 @@ func (q *Queries) DocumentApprovalsForDocs(ctx context.Context, arg DocumentAppr
 			&i.DocType,
 			&i.DocID,
 			&i.StepNo,
+			&i.SlotNo,
+			&i.Mode,
 			&i.RoleID,
 			&i.RoleName,
 			&i.ApproverID,
@@ -449,23 +455,29 @@ func (q *Queries) GetDelegation(ctx context.Context, arg GetDelegationParams) (A
 }
 
 const insertApprovalRuleStep = `-- name: InsertApprovalRuleStep :exec
-INSERT INTO approval_rule_steps (rule_id, step_no, role_id) VALUES ($1, $2, $3)
+INSERT INTO approval_rule_steps (rule_id, step_no, mode, role_id) VALUES ($1, $2, $3, $4)
 `
 
 type InsertApprovalRuleStepParams struct {
 	RuleID int64
 	StepNo int32
+	Mode   string
 	RoleID int64
 }
 
 func (q *Queries) InsertApprovalRuleStep(ctx context.Context, arg InsertApprovalRuleStepParams) error {
-	_, err := q.db.Exec(ctx, insertApprovalRuleStep, arg.RuleID, arg.StepNo, arg.RoleID)
+	_, err := q.db.Exec(ctx, insertApprovalRuleStep,
+		arg.RuleID,
+		arg.StepNo,
+		arg.Mode,
+		arg.RoleID,
+	)
 	return err
 }
 
 const insertDocumentApproval = `-- name: InsertDocumentApproval :exec
-INSERT INTO document_approvals (company_id, doc_type, doc_id, step_no, role_id, role_name)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO document_approvals (company_id, doc_type, doc_id, step_no, slot_no, mode, role_id, role_name)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertDocumentApprovalParams struct {
@@ -473,6 +485,8 @@ type InsertDocumentApprovalParams struct {
 	DocType   string
 	DocID     int64
 	StepNo    int32
+	SlotNo    int32
+	Mode      string
 	RoleID    *int64
 	RoleName  string
 }
@@ -483,6 +497,8 @@ func (q *Queries) InsertDocumentApproval(ctx context.Context, arg InsertDocument
 		arg.DocType,
 		arg.DocID,
 		arg.StepNo,
+		arg.SlotNo,
+		arg.Mode,
 		arg.RoleID,
 		arg.RoleName,
 	)
@@ -490,15 +506,16 @@ func (q *Queries) InsertDocumentApproval(ctx context.Context, arg InsertDocument
 }
 
 const listApprovalRuleSteps = `-- name: ListApprovalRuleSteps :many
-SELECT s.rule_id, s.step_no, s.role_id, r.name AS role_name
+SELECT s.rule_id, s.step_no, s.mode, s.role_id, r.name AS role_name
 FROM approval_rule_steps s JOIN roles r ON r.id = s.role_id
 JOIN approval_rules ar ON ar.id = s.rule_id
-WHERE ar.company_id = $1 ORDER BY s.rule_id, s.step_no
+WHERE ar.company_id = $1 ORDER BY s.rule_id, s.step_no, s.role_id
 `
 
 type ListApprovalRuleStepsRow struct {
 	RuleID   int64
 	StepNo   int32
+	Mode     string
 	RoleID   int64
 	RoleName string
 }
@@ -515,6 +532,7 @@ func (q *Queries) ListApprovalRuleSteps(ctx context.Context, companyID int64) ([
 		if err := rows.Scan(
 			&i.RuleID,
 			&i.StepNo,
+			&i.Mode,
 			&i.RoleID,
 			&i.RoleName,
 		); err != nil {
@@ -621,11 +639,11 @@ func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams
 }
 
 const listDocumentApprovals = `-- name: ListDocumentApprovals :many
-SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
+SELECT d.step_no, d.slot_no, d.mode, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
        COALESCE(af.name, '')::text AS acting_for_name
 FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id LEFT JOIN users af ON af.id = d.acting_for
 WHERE d.company_id = $1 AND d.doc_type = $2 AND d.doc_id = $3
-ORDER BY d.step_no
+ORDER BY d.step_no, d.slot_no
 `
 
 type ListDocumentApprovalsParams struct {
@@ -636,6 +654,8 @@ type ListDocumentApprovalsParams struct {
 
 type ListDocumentApprovalsRow struct {
 	StepNo        int32
+	SlotNo        int32
+	Mode          string
 	RoleID        *int64
 	RoleName      string
 	ApproverID    *int64
@@ -656,6 +676,8 @@ func (q *Queries) ListDocumentApprovals(ctx context.Context, arg ListDocumentApp
 		var i ListDocumentApprovalsRow
 		if err := rows.Scan(
 			&i.StepNo,
+			&i.SlotNo,
+			&i.Mode,
 			&i.RoleID,
 			&i.RoleName,
 			&i.ApproverID,
@@ -793,6 +815,24 @@ func (q *Queries) PendingApprovalDocs(ctx context.Context, arg PendingApprovalDo
 		return nil, err
 	}
 	return items, nil
+}
+
+const roleActiveHolderCount = `-- name: RoleActiveHolderCount :one
+SELECT count(*) FROM user_roles ur JOIN users u ON u.id = ur.user_id AND u.is_active
+WHERE ur.role_id = $1 AND ur.user_id <> $2
+`
+
+type RoleActiveHolderCountParams struct {
+	RoleID       int64
+	ExceptUserID int64
+}
+
+// 角色目前有幾位啟用中的使用者(排除指定使用者);會簽時用來優先填「別人較難填」的簽核格
+func (q *Queries) RoleActiveHolderCount(ctx context.Context, arg RoleActiveHolderCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, roleActiveHolderCount, arg.RoleID, arg.ExceptUserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const roleCountInApprovalRules = `-- name: RoleCountInApprovalRules :one

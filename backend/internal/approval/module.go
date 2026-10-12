@@ -56,10 +56,16 @@ func (m *Module) docTypes(c *gin.Context) {
 	response.OK(c, out)
 }
 
-type stepDTO struct {
-	Step     int    `json:"step"`
-	RoleID   *int64 `json:"role_id"`
+type stepRoleDTO struct {
+	RoleID   int64  `json:"role_id"`
 	RoleName string `json:"role_name"`
+}
+
+// stepDTO 規則的一個層級(第 2 層起):一或多個角色與簽法(any 或簽 / all 會簽)。
+type stepDTO struct {
+	Step  int           `json:"step"`
+	Mode  string        `json:"mode"`
+	Roles []stepRoleDTO `json:"roles"`
 }
 
 type ruleDTO struct {
@@ -88,8 +94,12 @@ func loadRules(c *gin.Context, q *db.Queries, companyID int64) ([]ruleDTO, error
 		idx[r.ID] = i
 	}
 	for _, s := range steps {
-		role := s.RoleID
-		out[idx[s.RuleID]].Steps = append(out[idx[s.RuleID]].Steps, stepDTO{Step: int(s.StepNo), RoleID: &role, RoleName: s.RoleName})
+		rule := &out[idx[s.RuleID]]
+		if n := len(rule.Steps); n == 0 || rule.Steps[n-1].Step != int(s.StepNo) {
+			rule.Steps = append(rule.Steps, stepDTO{Step: int(s.StepNo), Mode: s.Mode, Roles: []stepRoleDTO{}})
+		}
+		last := &rule.Steps[len(rule.Steps)-1]
+		last.Roles = append(last.Roles, stepRoleDTO{RoleID: s.RoleID, RoleName: s.RoleName})
 	}
 	return out, nil
 }
@@ -103,11 +113,31 @@ func (m *Module) listRules(c *gin.Context) {
 	response.OK(c, rules)
 }
 
+// stepInput 第 2 層起的一個層級:一或多個角色;mode 為 any(或簽,預設)或 all(會簽,至少 2 個角色)。
+type stepInput struct {
+	RoleIDs []int64 `json:"role_ids"`
+	Mode    string  `json:"mode"`
+}
+
 type ruleInput struct {
 	DocType   string          `json:"doc_type" binding:"required"`
 	MinAmount decimal.Decimal `json:"min_amount"`
-	RoleIDs   []int64         `json:"role_ids" binding:"required"`
-	Version   int32           `json:"version"`
+	// Steps 各層設定;未提供時以 RoleIDs 代表「每層一個角色」(舊格式)
+	Steps   []stepInput `json:"steps"`
+	RoleIDs []int64     `json:"role_ids"`
+	Version int32       `json:"version"`
+}
+
+// layers 把輸入正規化為各層設定。
+func (in *ruleInput) layers() []stepInput {
+	if len(in.Steps) > 0 {
+		return in.Steps
+	}
+	out := make([]stepInput, len(in.RoleIDs))
+	for i, id := range in.RoleIDs {
+		out[i] = stepInput{RoleIDs: []int64{id}}
+	}
+	return out
 }
 
 // validate 檢查規則內容;角色須存在、啟用,並具備該單據的核准權限(否則這一層永遠沒有人能核准)。
@@ -120,21 +150,39 @@ func validate(c *gin.Context, q *db.Queries, companyID int64, in *ruleInput) err
 	if in.MinAmount.IsNegative() || in.MinAmount.Exponent() < -2 {
 		return fieldErr("min_amount", "金額須為 0 以上,最多 2 位小數")
 	}
-	if n := len(in.RoleIDs); n < 1 || n > 4 {
+	layers := in.layers()
+	if n := len(layers); n < 1 || n > 4 {
 		return fieldErr("role_ids", "請指定第 2 層起的角色,最多 4 層")
 	}
+	var all []int64
 	seen := map[int64]bool{}
-	for _, id := range in.RoleIDs {
-		if seen[id] {
-			return fieldErr("role_ids", "每一層須由不同的角色負責")
+	for i := range layers {
+		l := &layers[i]
+		if l.Mode == "" {
+			l.Mode = ModeAny
 		}
-		seen[id] = true
+		if l.Mode != ModeAny && l.Mode != ModeAll {
+			return fieldErr("role_ids", "簽法須為或簽或會簽")
+		}
+		if n := len(l.RoleIDs); n < 1 || n > 5 {
+			return fieldErr("role_ids", "每一層須指定 1 到 5 個角色")
+		} else if l.Mode == ModeAll && n < 2 {
+			return fieldErr("role_ids", "會簽至少需要 2 個角色")
+		}
+		for _, id := range l.RoleIDs {
+			if seen[id] {
+				return fieldErr("role_ids", "每個角色只能出現在一個層級")
+			}
+			seen[id] = true
+			all = append(all, id)
+		}
 	}
-	roles, err := q.CompanyRolesByIDs(ctx, db.CompanyRolesByIDsParams{CompanyID: companyID, Ids: in.RoleIDs})
+	in.Steps = layers
+	roles, err := q.CompanyRolesByIDs(ctx, db.CompanyRolesByIDsParams{CompanyID: companyID, Ids: all})
 	if err != nil {
 		return err
 	}
-	if len(roles) != len(in.RoleIDs) {
+	if len(roles) != len(all) {
 		return fieldErr("role_ids", "角色不存在或已停用")
 	}
 	for _, r := range roles {
@@ -149,14 +197,16 @@ func validate(c *gin.Context, q *db.Queries, companyID int64, in *ruleInput) err
 	return nil
 }
 
-func saveSteps(c *gin.Context, q *db.Queries, ruleID int64, roleIDs []int64) error {
+func saveSteps(c *gin.Context, q *db.Queries, ruleID int64, layers []stepInput) error {
 	ctx := c.Request.Context()
 	if err := q.DeleteApprovalRuleSteps(ctx, ruleID); err != nil {
 		return err
 	}
-	for i, id := range roleIDs {
-		if err := q.InsertApprovalRuleStep(ctx, db.InsertApprovalRuleStepParams{RuleID: ruleID, StepNo: int32(i + 2), RoleID: id}); err != nil {
-			return err
+	for i, l := range layers {
+		for _, id := range l.RoleIDs {
+			if err := q.InsertApprovalRuleStep(ctx, db.InsertApprovalRuleStepParams{RuleID: ruleID, StepNo: int32(i + 2), Mode: l.Mode, RoleID: id}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -186,7 +236,7 @@ func (m *Module) createRule(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		if err := saveSteps(c, q, r.ID, in.RoleIDs); err != nil {
+		if err := saveSteps(c, q, r.ID, in.Steps); err != nil {
 			return err
 		}
 		rules, err := loadRules(c, q, a.CompanyID)
@@ -244,7 +294,7 @@ func (m *Module) updateRule(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		if err := saveSteps(c, q, id, in.RoleIDs); err != nil {
+		if err := saveSteps(c, q, id, in.Steps); err != nil {
 			return err
 		}
 		rules, err := loadRules(c, q, a.CompanyID)
@@ -306,6 +356,9 @@ func (m *Module) deleteRule(c *gin.Context) {
 
 type progressStep struct {
 	Step         int        `json:"step"`
+	Slot         int        `json:"slot"`
+	Mode         string     `json:"mode"`   // any 或簽 / all 會簽
+	Waived       bool       `json:"waived"` // 或簽層已由其他格通過,這一格免簽
 	RoleName     string     `json:"role_name"`
 	ApproverName string     `json:"approver_name"`
 	ActingFor    string     `json:"acting_for"` // 代理核准時的委託人姓名
@@ -351,33 +404,41 @@ func (m *Module) progress(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	out := progressDTO{Steps: []progressStep{}}
-	cur := -1
-	for i, r := range rows {
-		out.Steps = append(out.Steps, progressStep{Step: int(r.StepNo), RoleName: r.RoleName, ApproverName: r.ApproverName, ActingFor: r.ActingForName,
-			ApprovedAt: r.ApprovedAt, Done: r.ApproverID != nil})
-		if cur < 0 && r.ApproverID == nil {
-			cur = i
-		}
-	}
-	if len(rows) > 0 {
-		out.Required = len(rows)
-	}
-	if cur >= 0 {
-		out.Current = int(rows[cur].StepNo)
-		can := a.Can(info.Approve)
-		for _, r := range rows[:cur] {
-			if r.ApproverID != nil && (a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor))) {
-				can = false
+	layers := groupLayers(toSlots(rows, func(r db.ListDocumentApprovalsRow) slot {
+		return slot{Step: r.StepNo, No: r.SlotNo, Mode: r.Mode, RoleID: r.RoleID, RoleName: r.RoleName, ApproverID: r.ApproverID, ActingFor: r.ActingFor}
+	}))
+	out := progressDTO{Steps: []progressStep{}, Required: len(layers)}
+	for _, r := range rows {
+		waived := false
+		for _, l := range layers {
+			if l.No == r.StepNo {
+				waived = l.Mode == ModeAny && l.done() && r.ApproverID == nil
 			}
 		}
-		if can && rows[cur].RoleID != nil && !a.IsSuperadmin {
-			who, err := roleHolder(ctx, m.store.Queries, a, *rows[cur].RoleID)
-			if err != nil {
-				response.Error(c, err)
-				return
+		out.Steps = append(out.Steps, progressStep{Step: int(r.StepNo), Slot: int(r.SlotNo), Mode: r.Mode, Waived: waived,
+			RoleName: r.RoleName, ApproverName: r.ApproverName, ActingFor: r.ActingForName, ApprovedAt: r.ApprovedAt, Done: r.ApproverID != nil})
+	}
+	if ci := currentLayer(layers); ci >= 0 {
+		cur := layers[ci]
+		out.Current = int(cur.No)
+		can := a.Can(info.Approve) && !approvedByMe(a, layers)
+		if can {
+			holds := func(roleID int64) (int64, error) { return roleHolder(ctx, m.store.Queries, a, roleID) }
+			can = false
+			for _, s := range cur.Slots {
+				if s.done() {
+					continue
+				}
+				_, ok, err := fillable(a, info.Approve, s, holds)
+				if err != nil {
+					response.Error(c, err)
+					return
+				}
+				if ok {
+					can = true
+					break
+				}
 			}
-			can = who >= 0
 		}
 		out.CanApprove = can
 	}

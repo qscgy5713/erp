@@ -4,10 +4,10 @@
 SELECT * FROM approval_rules WHERE company_id = @company_id ORDER BY doc_type, min_amount;
 
 -- name: ListApprovalRuleSteps :many
-SELECT s.rule_id, s.step_no, s.role_id, r.name AS role_name
+SELECT s.rule_id, s.step_no, s.mode, s.role_id, r.name AS role_name
 FROM approval_rule_steps s JOIN roles r ON r.id = s.role_id
 JOIN approval_rules ar ON ar.id = s.rule_id
-WHERE ar.company_id = @company_id ORDER BY s.rule_id, s.step_no;
+WHERE ar.company_id = @company_id ORDER BY s.rule_id, s.step_no, s.role_id;
 
 -- name: GetApprovalRule :one
 SELECT * FROM approval_rules WHERE id = @id AND company_id = @company_id;
@@ -27,7 +27,7 @@ DELETE FROM approval_rules WHERE id = @id AND company_id = @company_id;
 DELETE FROM approval_rule_steps WHERE rule_id = @rule_id;
 
 -- name: InsertApprovalRuleStep :exec
-INSERT INTO approval_rule_steps (rule_id, step_no, role_id) VALUES (@rule_id, @step_no, @role_id);
+INSERT INTO approval_rule_steps (rule_id, step_no, mode, role_id) VALUES (@rule_id, @step_no, @mode, @role_id);
 
 -- name: MatchApprovalRule :one
 -- 同類型中 min_amount 最大且不超過單據金額的規則
@@ -42,19 +42,19 @@ SELECT count(*) FROM approval_rule_steps WHERE role_id = @role_id;
 SELECT id, name FROM roles WHERE company_id = @company_id AND id = ANY(@ids::bigint[]) AND is_active;
 
 -- name: InsertDocumentApproval :exec
-INSERT INTO document_approvals (company_id, doc_type, doc_id, step_no, role_id, role_name)
-VALUES (@company_id, @doc_type, @doc_id, @step_no, sqlc.narg(role_id), @role_name);
+INSERT INTO document_approvals (company_id, doc_type, doc_id, step_no, slot_no, mode, role_id, role_name)
+VALUES (@company_id, @doc_type, @doc_id, @step_no, @slot_no, @mode, sqlc.narg(role_id), @role_name);
 
 -- name: ListDocumentApprovals :many
-SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
+SELECT d.step_no, d.slot_no, d.mode, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
        COALESCE(af.name, '')::text AS acting_for_name
 FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id LEFT JOIN users af ON af.id = d.acting_for
 WHERE d.company_id = @company_id AND d.doc_type = @doc_type AND d.doc_id = @doc_id
-ORDER BY d.step_no;
+ORDER BY d.step_no, d.slot_no;
 
 -- name: CompleteDocumentApproval :execrows
 UPDATE document_approvals SET approver_id = @approver_id, approved_at = now(), acting_for = sqlc.narg(acting_for)
-WHERE doc_type = @doc_type AND doc_id = @doc_id AND step_no = @step_no AND approver_id IS NULL;
+WHERE doc_type = @doc_type AND doc_id = @doc_id AND step_no = @step_no AND slot_no = @slot_no AND approver_id IS NULL;
 
 -- name: DeleteDocumentApprovals :exec
 DELETE FROM document_approvals WHERE doc_type = @doc_type AND doc_id = @doc_id AND company_id = @company_id;
@@ -136,11 +136,11 @@ ORDER BY submitted_at NULLS LAST, doc_no
 LIMIT 300;
 
 -- name: DocumentApprovalsForDocs :many
-SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id, d.acting_for
+SELECT d.doc_type, d.doc_id, d.step_no, d.slot_no, d.mode, d.role_id, d.role_name, d.approver_id, d.acting_for
 FROM document_approvals d
 WHERE d.company_id = @company_id
   AND d.doc_type = ANY(@types::text[]) AND d.doc_id = ANY(@ids::bigint[]) -- 超集合,程式再依 (類型, id) 配對
-ORDER BY d.doc_type, d.doc_id, d.step_no;
+ORDER BY d.doc_type, d.doc_id, d.step_no, d.slot_no;
 
 -- name: UserRoleIDs :many
 SELECT role_id FROM user_roles WHERE user_id = @user_id;
@@ -189,3 +189,8 @@ DELETE FROM approval_delegations WHERE id = @id AND company_id = @company_id;
 
 -- name: ActiveUserInCompany :one
 SELECT EXISTS (SELECT 1 FROM users WHERE id = @id AND company_id = @company_id AND is_active);
+
+-- name: RoleActiveHolderCount :one
+-- 角色目前有幾位啟用中的使用者(排除指定使用者);會簽時用來優先填「別人較難填」的簽核格
+SELECT count(*) FROM user_roles ur JOIN users u ON u.id = ur.user_id AND u.is_active
+WHERE ur.role_id = @role_id AND ur.user_id <> @except_user_id;

@@ -17,6 +17,8 @@ type apprProgress struct {
 		ApproverName string `json:"approver_name"`
 		ActingFor    string `json:"acting_for"`
 		Done         bool   `json:"done"`
+		Mode         string `json:"mode"`
+		Waived       bool   `json:"waived"`
 	} `json:"steps"`
 }
 
@@ -32,6 +34,7 @@ type inboxRow struct {
 	DocID      int64  `json:"doc_id"`
 	Step       int    `json:"step"`
 	TotalSteps int    `json:"total_steps"`
+	StepRole   string `json:"step_role"`
 }
 
 // inboxHas 回傳該使用者的「待我核准」中是否有指定單據,以及其目前層級。
@@ -229,4 +232,147 @@ func TestMultiLevelApproval(t *testing.T) {
 	expect(t, upd(r2.Version, "10000"), http.StatusConflict, "APR-010")
 	expect(t, upd(r2.Version+5, "60000"), http.StatusConflict, "SYS-409")
 	expect(t, upd(r2.Version, "60000"), http.StatusOK, "")
+}
+
+// 會簽 / 或簽(D95):一層可指定多個角色
+func TestCountersignApproval(t *testing.T) {
+	p := newPurCtx(t)
+	e, root := p.e, p.c
+	perms := []string{permission.PurchaseOrderRead, permission.PurchaseOrderApprove}
+	maker := e.seedRole("maker", "all", permission.PurchaseOrderRead, permission.PurchaseOrderWrite)
+	l1 := e.seedRole("l1", "all", perms...)
+	fin := e.seedRole("fin", "all", perms...)
+	legal := e.seedRole("legal", "all", perms...)
+	ops := e.seedRole("ops", "all", perms...)
+	e.seedUser("maker", pw, false, false, maker.ID)
+	e.seedUser("appr1", pw, false, false, l1.ID)
+	e.seedUser("fin1", pw, false, false, fin.ID)
+	e.seedUser("fin2", pw, false, false, fin.ID)
+	e.seedUser("legal1", pw, false, false, legal.ID)
+	e.seedUser("both", pw, false, false, fin.ID, legal.ID)
+	mk, a1, fin1, fin2, legal1, both := e.loggedIn("maker", pw), e.loggedIn("appr1", pw), e.loggedIn("fin1", pw),
+		e.loggedIn("fin2", pw), e.loggedIn("legal1", pw), e.loggedIn("both", pw)
+
+	rule := func(body map[string]any) apiResp { return root.do(http.MethodPost, "/approval/rules", body) }
+	step := func(mode string, ids ...int64) map[string]any { return map[string]any{"role_ids": ids, "mode": mode} }
+	steps := func(ss ...map[string]any) []map[string]any { return ss }
+	// ---- 規則驗證 ----
+	for _, bad := range [][]map[string]any{
+		steps(step("all", fin.ID)),                                        // 會簽至少 2 個角色
+		steps(step("any", fin.ID, fin.ID)),                                // 同層重複
+		steps(step("any", fin.ID), step("any", fin.ID)),                   // 跨層重複
+		steps(step("both", fin.ID, legal.ID)),                             // 簽法不正確
+		steps(step("any", fin.ID, legal.ID, ops.ID, l1.ID, 99999, 99998)), // 超過 5 個角色
+		steps(step("any")),                                                // 沒有角色
+	} {
+		expect(t, rule(map[string]any{"doc_type": "purchase_order", "min_amount": "10000", "steps": bad}), http.StatusUnprocessableEntity, "SYS-422")
+	}
+	res := rule(map[string]any{"doc_type": "purchase_order", "min_amount": "10000", "steps": steps(step("all", fin.ID, legal.ID))})
+	expect(t, res, http.StatusCreated, "")
+	got := decode[struct {
+		Steps []struct {
+			Mode  string `json:"mode"`
+			Roles []struct {
+				RoleName string `json:"role_name"`
+			} `json:"roles"`
+		} `json:"steps"`
+	}](t, res.Data)
+	if len(got.Steps) != 1 || got.Steps[0].Mode != "all" || len(got.Steps[0].Roles) != 2 {
+		t.Fatalf("規則回傳 = %+v", got)
+	}
+	expect(t, rule(map[string]any{"doc_type": "purchase_order", "min_amount": "50000", "steps": steps(step("any", fin.ID, legal.ID))}), http.StatusCreated, "")
+
+	orders := "/purchase/orders"
+	newPO := func(qty string) purDoc {
+		d, res := mk.createPur(orders, p.header(map[string]any{"lines": []map[string]any{line(p.item, p.box, qty, "1200", nil)}}))
+		expect(t, res, http.StatusCreated, "")
+		expect(t, mk.actPur(orders, &d, "submit"), http.StatusOK, "")
+		return d
+	}
+	act := func(c *client, d *purDoc) apiResp { return c.actPur(orders, d, "approve") }
+
+	// ---- 會簽:財務與法務都要核准 ----
+	d := newPO("10") // 12600:第 1 層 + 會簽(fin, legal)
+	expect(t, act(a1, &d), http.StatusOK, "")
+	if ok, r := fin1.inboxHas("purchase_order", d.ID); !ok || r.Step != 2 || r.TotalSteps != 2 || r.StepRole != "fin、legal(會簽)" {
+		t.Fatalf("fin1 收件匣 = %v %+v", ok, r)
+	}
+	if ok, _ := legal1.inboxHas("purchase_order", d.ID); !ok {
+		t.Fatal("legal1 也應在收件匣")
+	}
+	if ok, _ := a1.inboxHas("purchase_order", d.ID); ok {
+		t.Fatal("a1 已核准過,不應再出現")
+	}
+	expect(t, act(fin1, &d), http.StatusOK, "")
+	if d.Status != "pending" {
+		t.Fatalf("會簽只簽一半,仍應待審,status=%s", d.Status)
+	}
+	pr := mk.progress("purchase_order", d.ID)
+	if pr.Current != 2 || len(pr.Steps) != 3 || !pr.Steps[1].Done || pr.Steps[2].Done || pr.Steps[1].Mode != "all" {
+		t.Fatalf("會簽進度 = %+v", pr)
+	}
+	expect(t, act(fin1, &d), http.StatusForbidden, "APR-002") // 一人一票
+	expect(t, act(fin2, &d), http.StatusForbidden, "APR-001") // 財務格已被 fin1 填走
+	if ok, _ := fin2.inboxHas("purchase_order", d.ID); ok {
+		t.Fatal("財務格已簽,fin2 不應再看到")
+	}
+	if fin2.progress("purchase_order", d.ID).CanApprove {
+		t.Fatal("fin2 不應能核准")
+	}
+	expect(t, act(legal1, &d), http.StatusOK, "")
+	if d.Status != "approved" {
+		t.Fatalf("會簽完成後應核准,status=%s", d.Status)
+	}
+
+	// ---- 或簽:任一角色核准即過,其餘格免簽 ----
+	o := newPO("50") // 63000
+	expect(t, act(a1, &o), http.StatusOK, "")
+	expect(t, act(fin1, &o), http.StatusOK, "")
+	if o.Status != "approved" {
+		t.Fatalf("或簽一人核准即過,status=%s", o.Status)
+	}
+	pr = mk.progress("purchase_order", o.ID)
+	if pr.Current != 0 || pr.Steps[1].Mode != "any" || pr.Steps[1].Waived || !pr.Steps[2].Waived {
+		t.Fatalf("或簽進度 = %+v", pr)
+	}
+
+	// ---- 一人兼具兩個角色:會簽只能簽一格,且優先填別人較難填的格 ----
+	m := newPO("10")
+	expect(t, act(a1, &m), http.StatusOK, "")
+	expect(t, act(both, &m), http.StatusOK, "")
+	expect(t, act(both, &m), http.StatusForbidden, "APR-002")
+	if ok, _ := legal1.inboxHas("purchase_order", m.ID); ok {
+		t.Fatal("both 應填走較難填的法務格,legal1 不應再看到")
+	}
+	if ok, _ := fin1.inboxHas("purchase_order", m.ID); !ok {
+		t.Fatal("財務格仍待簽,fin1 應看到")
+	}
+	expect(t, act(fin2, &m), http.StatusOK, "")
+	if m.Status != "approved" {
+		t.Fatalf("status=%s", m.Status)
+	}
+
+	// ---- 超級管理員:會簽時只能填一格,仍受一人一票 ----
+	s := newPO("10")
+	expect(t, act(a1, &s), http.StatusOK, "")
+	expect(t, act(root, &s), http.StatusOK, "")
+	expect(t, act(root, &s), http.StatusForbidden, "APR-002")
+	if s.Status != "pending" {
+		t.Fatalf("超級管理員只能填一格,status=%s", s.Status)
+	}
+	expect(t, act(fin1, &s), http.StatusOK, "")
+	if s.Status != "approved" && s.Status != "pending" {
+		t.Fatalf("status=%s", s.Status)
+	}
+
+	// ---- 退回後重新送審:流程重建 ----
+	r := newPO("10")
+	expect(t, act(a1, &r), http.StatusOK, "")
+	expect(t, act(fin1, &r), http.StatusOK, "")
+	expect(t, mk.actPur(orders, &r, "reject"), http.StatusForbidden, "SYS-403") // 開單者無核准權限
+	expect(t, a1.actPur(orders, &r, "reject"), http.StatusOK, "")
+	expect(t, mk.actPur(orders, &r, "submit"), http.StatusOK, "")
+	if pr := mk.progress("purchase_order", r.ID); pr.Current != 1 || pr.Steps[1].Done {
+		t.Fatalf("重新送審後流程應重建,got %+v", pr)
+	}
 }

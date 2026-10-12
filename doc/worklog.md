@@ -15,6 +15,14 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 簽核會簽 / 或簽(D95)
+
+- 設計見 `doc/design-countersign.md`(已依確認的三項建議實作)與 `doc/plan.md` D95。
+- migration 000037(含 down,已驗證可逆)、`queries/approval.sql`;`internal/approval` 引擎改為「層 / 格」:`groupLayers`、`currentLayer`、`fillable`、`approvedByMe`;收件匣、進度、通知同步。
+- 前端:規則維護每層可複選角色並切換或簽 / 會簽;進度元件依層分組,會簽顯示 x/y、或簽未簽的格顯示「免簽」。
+- 測試:新增 `TestCountersignApproval`(規則驗證、會簽缺人、一人一票、一人兼兩角色優先填、或簽免簽、超級管理員、退回重送);既有簽核 / 代理 / 收件匣測試不用改即通過(舊 `role_ids` 輸入維持相容)。
+- 瀏覽器:規則對話框可複選角色、選 2 個以上出現或簽 / 會簽切換。
+
 ## 2026-10-12 Element Plus 按需載入
 
 - `vite.config.ts` 加 `unplugin-vue-components`(`ElementPlusResolver`,樣式隨元件載入);`main.ts` 不再 `app.use(ElementPlus)`,語系改由 `App.vue` 的 `el-config-provider` 套用繁中;`ElMessage` / `ElMessageBox` 為程式呼叫,樣式在 `main.ts` 手動引入。

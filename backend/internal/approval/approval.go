@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/shopspring/decimal"
 
@@ -88,6 +89,118 @@ func Intercept(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, doc
 	return false, "", nil
 }
 
+// 簽法:或簽(任一格核准即過)/ 會簽(每一格都要核准)
+const (
+	ModeAny = "any"
+	ModeAll = "all"
+)
+
+// slot 簽核格:一層可有多格(每個角色一格),第 1 層固定一格。
+type slot struct {
+	Step, No   int32
+	Mode       string
+	RoleID     *int64
+	RoleName   string
+	ApproverID *int64
+	ActingFor  *int64
+}
+
+func (s slot) done() bool { return s.ApproverID != nil }
+
+// layer 一個簽核層級。
+type layer struct {
+	No    int32
+	Mode  string
+	Slots []slot
+}
+
+// groupLayers 把依 (step, slot) 排序的簽核格依層級分組。
+func groupLayers(slots []slot) []layer {
+	var out []layer
+	for _, s := range slots {
+		if n := len(out); n == 0 || out[n-1].No != s.Step {
+			out = append(out, layer{No: s.Step, Mode: s.Mode})
+		}
+		out[len(out)-1].Slots = append(out[len(out)-1].Slots, s)
+	}
+	return out
+}
+
+// doneCount 該層已核准的格數。
+func (l layer) doneCount() int {
+	n := 0
+	for _, s := range l.Slots {
+		if s.done() {
+			n++
+		}
+	}
+	return n
+}
+
+// done 或簽:任一格已核准;會簽:全部格都已核准。
+func (l layer) done() bool {
+	if l.Mode == ModeAll {
+		return l.doneCount() == len(l.Slots)
+	}
+	return l.doneCount() > 0
+}
+
+// currentLayer 第一個尚未通過的層級;全部通過回傳 -1。
+func currentLayer(layers []layer) int {
+	for i, l := range layers {
+		if !l.done() {
+			return i
+		}
+	}
+	return -1
+}
+
+// approvedByMe 這張單據是否已有格由我(或我代理的委託人)核准過;一人一票,不論層級與格。
+func approvedByMe(a *authctx.Actor, layers []layer) bool {
+	for _, l := range layers {
+		for _, s := range l.Slots {
+			if s.ApproverID != nil && (a.IsSelfOrDelegator(*s.ApproverID) || (s.ActingFor != nil && a.IsSelfOrDelegator(*s.ActingFor))) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// roleNames 未核准格的角色名稱,以「、」串接。
+func openRoleNames(l layer) string {
+	var names []string
+	for _, s := range l.Slots {
+		if !s.done() {
+			names = append(names, s.RoleName)
+		}
+	}
+	return strings.Join(names, "、")
+}
+
+// fillable 目前使用者能否填這一格,以及代理核准時的委託人(0 = 本人 / 不是代理)。
+// holds 回傳使用者(含代理中的委託人)是否具有某角色:0 本人、>0 委託人 id、<0 沒有。
+func fillable(a *authctx.Actor, approvePerm string, s slot, holds func(roleID int64) (int64, error)) (int64, bool, error) {
+	switch {
+	case s.RoleID == nil && s.Step == 1:
+		return a.DelegatedPerms[approvePerm], true, nil // 第 1 層:具核准權限即可(呼叫端已檢查權限)
+	case s.RoleID == nil:
+		return 0, a.IsSuperadmin, nil // 角色已被刪除:只有超級管理員能核准
+	case a.IsSuperadmin:
+		return 0, true, nil
+	}
+	who, err := holds(*s.RoleID)
+	return max(who, 0), who >= 0, err
+}
+
+func toSlots[T any](rows []T, conv func(T) slot) []slot {
+	out := make([]slot, len(rows))
+	for i, r := range rows {
+		out[i] = conv(r)
+	}
+	return out
+}
+
 func snapshot(ctx authCtx, q *db.Queries, companyID int64, docType string, docID int64, amount decimal.Decimal) error {
 	// 重新送審時重建,避免殘留舊流程
 	if err := q.DeleteDocumentApprovals(ctx, db.DeleteDocumentApprovalsParams{CompanyID: companyID, DocType: docType, DocID: docID}); err != nil {
@@ -105,17 +218,20 @@ func snapshot(ctx authCtx, q *db.Queries, companyID int64, docType string, docID
 		return err
 	}
 	if err := q.InsertDocumentApproval(ctx, db.InsertDocumentApprovalParams{
-		CompanyID: companyID, DocType: docType, DocID: docID, StepNo: 1, RoleName: "核准權限",
+		CompanyID: companyID, DocType: docType, DocID: docID, StepNo: 1, SlotNo: 1, Mode: ModeAny, RoleName: "核准權限",
 	}); err != nil {
 		return err
 	}
+	slotNo := map[int32]int32{}
 	for _, s := range steps {
 		if s.RuleID != ruleID {
 			continue
 		}
+		slotNo[s.StepNo]++
 		role := s.RoleID
 		if err := q.InsertDocumentApproval(ctx, db.InsertDocumentApprovalParams{
-			CompanyID: companyID, DocType: docType, DocID: docID, StepNo: s.StepNo, RoleID: &role, RoleName: s.RoleName,
+			CompanyID: companyID, DocType: docType, DocID: docID, StepNo: s.StepNo, SlotNo: slotNo[s.StepNo], Mode: s.Mode,
+			RoleID: &role, RoleName: s.RoleName,
 		}); err != nil {
 			return err
 		}
@@ -131,56 +247,97 @@ func advance(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, docID
 	if len(rows) == 0 {
 		return false, "", nil // 單層核准
 	}
-	cur := -1
-	for i, r := range rows {
-		if r.ApproverID == nil {
-			cur = i
-			break
-		}
-		if a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor)) {
-			return false, "", errSamePerson
-		}
+	layers := groupLayers(toSlots(rows, func(r db.ListDocumentApprovalsRow) slot {
+		return slot{Step: r.StepNo, No: r.SlotNo, Mode: r.Mode, RoleID: r.RoleID, RoleName: r.RoleName, ApproverID: r.ApproverID, ActingFor: r.ActingFor}
+	}))
+	if approvedByMe(a, layers) {
+		return false, "", errSamePerson
 	}
-	if cur < 0 {
+	ci := currentLayer(layers)
+	if ci < 0 {
 		return false, "", nil // 流程已走完(不應發生),交由呼叫端完成核准
 	}
-	step := rows[cur]
-	actingFor := int64(0) // 代理核准時的委託人
-	if step.RoleID != nil && !a.IsSuperadmin {
-		who, err := roleHolder(ctx, q, a, *step.RoleID)
+	cur := layers[ci]
+	holds := func(roleID int64) (int64, error) { return roleHolder(ctx, q, a, roleID) }
+	type cand struct {
+		s         slot
+		actingFor int64
+		holders   int64
+	}
+	var cands []cand
+	for _, s := range cur.Slots {
+		if s.done() {
+			continue
+		}
+		who, ok, err := fillable(a, docTypes[docType].Approve, s, holds)
 		if err != nil {
 			return false, "", err
 		}
-		if who < 0 {
-			return false, "", errNotThisRole(int(step.StepNo), step.RoleName)
+		if ok {
+			cands = append(cands, cand{s: s, actingFor: who})
 		}
-		actingFor = who
-	} else if step.RoleID == nil && step.StepNo == 1 {
-		actingFor = a.DelegatedPerms[docTypes[docType].Approve]
 	}
-	// 角色已被刪除(role_id 為 NULL 且不是第 1 層):只有超級管理員能核准
-	if step.RoleID == nil && step.StepNo > 1 && !a.IsSuperadmin {
-		return false, "", errNotThisRole(int(step.StepNo), step.RoleName+"(已刪除)")
+	if len(cands) == 0 {
+		return false, "", errNotThisRole(int(cur.No), openRoleNames(cur))
 	}
+	// 會簽時我可能同時符合多格:優先填「其他人較少能填」的格,避免佔掉別人唯一能簽的格
+	if len(cands) > 1 {
+		for i := range cands {
+			if cands[i].s.RoleID != nil {
+				if cands[i].holders, err = q.RoleActiveHolderCount(ctx, db.RoleActiveHolderCountParams{RoleID: *cands[i].s.RoleID, ExceptUserID: a.UserID}); err != nil {
+					return false, "", err
+				}
+			}
+		}
+		slices.SortStableFunc(cands, func(x, y cand) int { return int(x.holders - y.holders) })
+	}
+	pick := cands[0]
 	var af *int64
-	if actingFor > 0 {
-		af = &actingFor
+	if pick.actingFor > 0 {
+		af = &pick.actingFor
 	}
 	if n, err := q.CompleteDocumentApproval(ctx, db.CompleteDocumentApprovalParams{
-		ApproverID: &a.UserID, ActingFor: af, DocType: docType, DocID: docID, StepNo: step.StepNo,
+		ApproverID: &a.UserID, ActingFor: af, DocType: docType, DocID: docID, StepNo: pick.s.Step, SlotNo: pick.s.No,
 	}); err != nil {
 		return false, "", err
 	} else if n != 1 {
 		return false, "", apperr.ErrVersionConflict
 	}
-	if cur == len(rows)-1 {
-		return false, "", nil // 最後一層 → 呼叫端完成核准
+	// 套用這次核准後,這一層是否通過
+	for i := range cur.Slots {
+		if cur.Slots[i].No == pick.s.No {
+			cur.Slots[i].ApproverID = &a.UserID
+		}
 	}
-	next := rows[cur+1]
-	if err := notifyApprovers(ctx, q, a, docType, next.RoleID); err != nil {
+	if !cur.done() {
+		return true, fmt.Sprintf("第 %d 層會簽:已 %d/%d,尚缺 %s", cur.No, cur.doneCount(), len(cur.Slots), openRoleNames(cur)), nil
+	}
+	if ci == len(layers)-1 {
+		return false, "", nil // 最後一層通過 → 呼叫端完成核准
+	}
+	next := layers[ci+1]
+	var roleIDs []int64
+	for _, s := range next.Slots {
+		if s.RoleID != nil {
+			roleIDs = append(roleIDs, *s.RoleID)
+		}
+	}
+	if err := notifyApprovers(ctx, q, a, docType, roleIDs); err != nil {
 		return false, "", err
 	}
-	return true, fmt.Sprintf("第 %d/%d 層核准,等待第 %d 層(%s)", step.StepNo, len(rows), next.StepNo, next.RoleName), nil
+	mode := "或簽"
+	if next.Mode == ModeAll {
+		mode = "會簽"
+	}
+	return true, fmt.Sprintf("第 %d/%d 層核准,等待第 %d 層(%s:%s)", cur.No, len(layers), next.No, mode, strings.Join(slotNames(next), "、")), nil
+}
+
+func slotNames(l layer) []string {
+	names := make([]string, len(l.Slots))
+	for i, s := range l.Slots {
+		names[i] = s.RoleName
+	}
+	return names
 }
 
 // roleHolder 目前使用者能否負責某角色的簽核層:本人具該角色回傳 0;只有代理中的委託人具該角色回傳委託人 id;
@@ -201,22 +358,30 @@ func roleHolder(ctx authCtx, q *db.Queries, a *authctx.Actor, roleID int64) (int
 }
 
 // notifyApprovers 單據送審或進到下一層時,通知「輪到核准」的人(Email,D88)。
-// roleID 為 nil 代表第 1 層(具該單據核准權限的人),否則為該層指定角色的人;都連同有效的代理人。
+// roleIDs 為空代表第 1 層(具該單據核准權限的人),否則為該層所有角色的成員(去重);都連同有效的代理人。
 // 不通知本人;信件不含單據內容,只提示到「待我核准」查看。
-func notifyApprovers(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, roleID *int64) error {
+func notifyApprovers(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, roleIDs []int64) error {
 	if !notify.Enabled() {
 		return nil
 	}
 	var ids []int64
-	var err error
-	if roleID != nil {
-		ids, err = q.ApproverIDsByRole(ctx, db.ApproverIDsByRoleParams{CompanyID: a.CompanyID, RoleID: *roleID})
+	if len(roleIDs) > 0 {
+		for _, rid := range roleIDs {
+			got, err := q.ApproverIDsByRole(ctx, db.ApproverIDsByRoleParams{CompanyID: a.CompanyID, RoleID: rid})
+			if err != nil {
+				return err
+			}
+			ids = append(ids, got...)
+		}
 	} else {
+		var err error
 		ids, err = q.ApproverIDsByPermission(ctx, db.ApproverIDsByPermissionParams{CompanyID: a.CompanyID, Permission: docTypes[docType].Approve})
+		if err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return err
-	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
 	ids = slices.DeleteFunc(ids, func(id int64) bool { return id == a.UserID })
 	label := docTypes[docType].Label
 	return notify.Enqueue(ctx, q, a.CompanyID, ids, "approval_pending",

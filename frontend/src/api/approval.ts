@@ -6,10 +6,13 @@ export interface DocTypeOption {
   label: string
 }
 
+/** 簽法:any 或簽(任一角色核准即過)/ all 會簽(每個角色都要核准) */
+export type ApprovalMode = 'any' | 'all'
+
 export interface RuleStep {
   step: number
-  role_id: number | null
-  role_name: string
+  mode: ApprovalMode
+  roles: { role_id: number; role_name: string }[]
 }
 
 export interface ApprovalRule {
@@ -24,12 +27,17 @@ export interface ApprovalRule {
 export interface ApprovalRuleInput {
   doc_type: string
   min_amount: string
-  role_ids: number[]
+  /** 第 2 層起的各層:一或多個角色與簽法 */
+  steps: { role_ids: number[]; mode: ApprovalMode }[]
   version?: number
 }
 
 export interface ProgressStep {
   step: number
+  slot: number
+  mode: ApprovalMode
+  /** 或簽層已由其他角色通過,這一格免簽 */
+  waived: boolean
   role_name: string
   approver_name: string
   /** 代理核准時的委託人姓名;空字串 = 本人核准 */

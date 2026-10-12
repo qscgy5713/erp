@@ -113,6 +113,7 @@ type ApprovalRuleStep struct {
 	RuleID int64
 	StepNo int32
 	RoleID int64
+	Mode   string
 }
 
 type AuditLog struct {
@@ -356,6 +357,8 @@ type DocumentApproval struct {
 	ApproverID *int64
 	ApprovedAt *time.Time
 	ActingFor  *int64
+	SlotNo     int32
+	Mode       string
 }
 
 type ExchangeRate struct {

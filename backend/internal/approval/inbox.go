@@ -82,28 +82,37 @@ func (m *Module) inbox(c *gin.Context) {
 			Amount: d.Amount, SubmittedAt: d.SubmittedAt, Step: 1, TotalSteps: 1,
 		}
 		if rs := byDoc[d.DocType+"/"+strconv.FormatInt(d.DocID, 10)]; len(rs) > 0 {
-			cur := -1
-			mine := true
-			for i, r := range rs {
-				if r.ApproverID == nil {
-					cur = i
+			layers := groupLayers(toSlots(rs, func(r db.DocumentApprovalsForDocsRow) slot {
+				return slot{Step: r.StepNo, No: r.SlotNo, Mode: r.Mode, RoleID: r.RoleID, RoleName: r.RoleName, ApproverID: r.ApproverID, ActingFor: r.ActingFor}
+			}))
+			ci := currentLayer(layers)
+			if ci < 0 || approvedByMe(a, layers) {
+				continue // 流程已走完,或我已核准過這張單據(一人一票)
+			}
+			cur := layers[ci]
+			holds := func(roleID int64) (int64, error) {
+				if slices.Contains(roles, roleID) {
+					return 0, nil
+				}
+				return -1, nil
+			}
+			mine := false
+			for _, s := range cur.Slots {
+				if s.done() {
+					continue
+				}
+				if _, ok, _ := fillable(a, docTypes[d.DocType].Approve, s, holds); ok {
+					mine = true
 					break
 				}
-				if a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor)) {
-					mine = false // 同一人不可核准多層
-				}
 			}
-			if cur < 0 || !mine {
+			if !mine {
 				continue
 			}
-			s := rs[cur]
-			if s.RoleID != nil && !a.IsSuperadmin && !slices.Contains(roles, *s.RoleID) {
-				continue
+			row.Step, row.TotalSteps, row.StepRole = int(cur.No), len(layers), openRoleNames(cur)
+			if cur.Mode == ModeAll {
+				row.StepRole += "(會簽)"
 			}
-			if s.RoleID == nil && s.StepNo > 1 && !a.IsSuperadmin {
-				continue // 角色已刪除,只有超級管理員能核准
-			}
-			row.Step, row.TotalSteps, row.StepRole = int(s.StepNo), len(rs), s.RoleName
 		}
 		out = append(out, row)
 	}
