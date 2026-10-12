@@ -7,7 +7,7 @@ import { useApiError } from '@/composables/useApiError'
 
 const auth = useAuthStore()
 const router = useRouter()
-const { fieldErrors, handle } = useApiError()
+const { fieldErrors, handle, autoClear } = useApiError()
 
 const formRef = ref<FormInstance>()
 const form = reactive({ old_password: '', new_password: '', confirm: '' })
@@ -45,6 +45,8 @@ async function submit() {
     loading.value = false
   }
 }
+
+autoClear(form)
 </script>
 
 <template>

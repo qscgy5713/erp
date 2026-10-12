@@ -27,7 +27,7 @@ import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const side = route.meta.settle as SettleSide
 const isCollection = side === 'collection'
@@ -321,6 +321,8 @@ onMounted(async () => {
 })
 
 const printPage = () => window.print()
+
+autoClear(form)
 </script>
 
 <template>

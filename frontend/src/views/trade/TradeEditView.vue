@@ -34,7 +34,7 @@ const BASE_CURRENCY = 'TWD'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const flow = flows[route.meta.kind as FlowKind]
 
@@ -775,6 +775,8 @@ onMounted(async () => {
 })
 
 const printPage = () => window.print()
+
+autoClear(form)
 </script>
 
 <template>

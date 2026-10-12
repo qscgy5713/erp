@@ -21,7 +21,7 @@ import { useBinStore } from '@/composables/useBinStore'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const doc = ref<WorkOrder | null>(null)
 const isNew = computed(() => !doc.value)
@@ -308,6 +308,8 @@ onMounted(async () => {
 })
 
 const printPage = () => window.print()
+
+autoClear(form)
 </script>
 
 <template>

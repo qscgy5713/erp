@@ -8,7 +8,7 @@ import { dataScopeLabels, formatDateTime } from '@/utils/format'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('system.role.write'))
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const rows = ref<Role[]>([])
 const groups = ref<PermissionGroup[]>([])
@@ -139,6 +139,8 @@ async function remove(r: Role) {
     handle(e)
   }
 }
+
+autoClear(form)
 </script>
 
 <template>

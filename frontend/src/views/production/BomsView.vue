@@ -10,7 +10,7 @@ import ItemPicker from '@/components/ItemPicker.vue'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('production.bom.write'))
-const { handle, fieldErrors, reset } = useApiError()
+const { handle, fieldErrors, reset, autoClear } = useApiError()
 
 const query = reactive({ keyword: '', page: 1, size: 20 })
 const rows = ref<BomRow[]>([])
@@ -151,6 +151,8 @@ async function remove(row: BomRow) {
 const lineError = (i: number) => fieldErrors.value[`lines.${i}`]
 
 onMounted(load)
+
+autoClear(form)
 </script>
 
 <template>

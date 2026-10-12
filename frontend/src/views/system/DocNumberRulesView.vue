@@ -7,7 +7,7 @@ import { useApiError } from '@/composables/useApiError'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('system.docno.write'))
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const rows = ref<DocNumberRule[]>([])
 const loading = ref(false)
@@ -88,6 +88,8 @@ async function save() {
     saving.value = false
   }
 }
+
+autoClear(form)
 </script>
 
 <template>

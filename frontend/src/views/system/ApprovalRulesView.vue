@@ -9,7 +9,7 @@ import { useApiError } from '@/composables/useApiError'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can(['system.approval.write']))
-const { handle, fieldErrors, reset: clearErrors } = useApiError()
+const { handle, fieldErrors, reset: clearErrors, autoClear } = useApiError()
 
 const rules = ref<ApprovalRule[]>([])
 const docTypes = ref<DocTypeOption[]>([])
@@ -89,6 +89,8 @@ async function remove(rule: ApprovalRule) {
 }
 
 onMounted(load)
+
+autoClear(form)
 </script>
 
 <template>

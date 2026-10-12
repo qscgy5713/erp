@@ -1,5 +1,10 @@
 # 工作日誌
 
+## 2026-10-12 欄位錯誤即時清除、傳票部門欄
+- `useApiError` 新增 `autoClear(form)`:表單欄位值改變後,立刻清掉該欄位(含 `lines.0` 等子欄位)的伺服器錯誤,不必等下次儲存;值沒變則保留。已套用到 13 個編輯頁與 `useFormDialog`(所有主檔對話框)。單元測試 `useApiError.spec.ts`。
+- 傳票明細新增「部門」欄(輔助核算,後端早已支援);`GET /system/departments` 開放給 `gl.voucher.write`,測試 `TestDepartmentsReadableByVoucherWriter`。
+- 評估後暫不做:Element Plus 按需載入(需新增 unplugin 相依並動到建置,本機 node_modules 與 lock 不同步無法驗證建置結果,留待可完整建置時再做)。
+
 ## 2026-10-12 儀表板:本月前 5 大客戶
 - `GET /dashboard` 的 `sales` 新增 `top_customers`(本月淨銷售額 = 出貨 − 退回,未稅本位幣,>0 才列出,最多 5 名),沿用銷售卡片的資料範圍;`DashboardTopCustomers` 查詢。首頁銷售卡片下方顯示排名。
 - 測試:擴充 `dashboard_test.go`(全公司 2 名、業務只看到自己的客戶)。

@@ -8,7 +8,7 @@ import { buildTree, descendantIds } from '@/utils/tree'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('system.department.write'))
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const list = ref<Department[]>([])
 const loading = ref(false)
@@ -95,6 +95,8 @@ async function save() {
     saving.value = false
   }
 }
+
+autoClear(form)
 </script>
 
 <template>

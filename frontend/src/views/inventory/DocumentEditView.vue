@@ -26,7 +26,7 @@ import { useBinStore } from '@/composables/useBinStore'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const typeLabels: Record<StockDocType, string> = {
   adjustment: '庫存調整單',
@@ -307,6 +307,8 @@ onMounted(async () => {
 })
 
 const printPage = () => window.print()
+
+autoClear(form)
 </script>
 
 <template>

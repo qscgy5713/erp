@@ -23,7 +23,8 @@ export function useFormDialog<F extends object, T extends Versioned>(opts: {
   const editing = ref(null) as Ref<T | null>
   const formRef = ref<FormInstance>()
   const form = reactive(opts.defaults()) as F
-  const { fieldErrors, handle, reset } = useApiError()
+  const { fieldErrors, handle, reset, autoClear } = useApiError()
+  autoClear(form)
 
   function openCreate(overrides: Partial<F> = {}) {
     editing.value = null

@@ -10,7 +10,7 @@ import { buildTree } from '@/utils/tree'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can('system.user.write'))
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const query = reactive({
   keyword: '',
@@ -208,6 +208,8 @@ async function unlock(u: User) {
     handle(e)
   }
 }
+
+autoClear(form)
 </script>
 
 <template>

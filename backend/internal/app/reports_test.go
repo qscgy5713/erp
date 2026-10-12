@@ -225,3 +225,14 @@ func TestLastPurchasePrices(t *testing.T) {
 	e.seedUser("nobody", pw, false, false)
 	expect(t, get(e.loggedIn("nobody", pw), base), http.StatusForbidden, "SYS-403")
 }
+
+// 傳票編輯者要能列出部門(輔助核算選單),但沒有任何相關權限的人不行
+func TestDepartmentsReadableByVoucherWriter(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	role := e.seedRole("ACC", "all", "gl.voucher.write")
+	e.seedUser("acc", pw, false, false, role.ID)
+	e.seedUser("nobody", pw, false, false)
+	expect(t, e.loggedIn("acc", pw).do(http.MethodGet, "/system/departments", nil), http.StatusOK, "")
+	expect(t, e.loggedIn("nobody", pw).do(http.MethodGet, "/system/departments", nil), http.StatusForbidden, "SYS-403")
+}

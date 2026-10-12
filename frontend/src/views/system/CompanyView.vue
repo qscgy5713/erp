@@ -8,7 +8,7 @@ import { useApiError } from '@/composables/useApiError'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.can(['system.company.write']))
-const { handle, fieldErrors, reset } = useApiError()
+const { handle, fieldErrors, reset, autoClear } = useApiError()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -39,6 +39,8 @@ async function save() {
 }
 
 onMounted(load)
+
+autoClear(form)
 </script>
 
 <template>

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ApiRequestError } from '@/api/http'
 
@@ -23,5 +23,29 @@ export function useApiError() {
     fieldErrors.value = {}
   }
 
-  return { fieldErrors, handle, reset }
+  /** 表單欄位被修改後,即時清掉該欄位(含 `lines.0` 這類子欄位)的伺服器錯誤,不必等下次儲存 */
+  function autoClear(form: object) {
+    const snap = () =>
+      Object.fromEntries(Object.entries(form).map(([k, v]) => [k, JSON.stringify(v)]))
+    let prev = snap()
+    watch(
+      () => form,
+      () => {
+        const next = snap()
+        const keys = Object.keys(fieldErrors.value)
+        if (keys.length) {
+          const kept: Record<string, string> = {}
+          for (const k of keys) {
+            const top = k.split(/[.[]/)[0]!
+            if (!(top in next) || prev[top] === next[top]) kept[k] = fieldErrors.value[k]!
+          }
+          if (Object.keys(kept).length !== keys.length) fieldErrors.value = kept
+        }
+        prev = next
+      },
+      { deep: true },
+    )
+  }
+
+  return { fieldErrors, handle, reset, autoClear }
 }

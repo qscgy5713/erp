@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { glApi, sourceLabels, type AccountOption, type Voucher, type VoucherLine } from '@/api/gl'
+import { systemApi, type Department } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 import { formatDateTime } from '@/utils/format'
@@ -12,7 +13,7 @@ import PartnerPicker from '@/components/PartnerPicker.vue'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const { fieldErrors, handle, reset } = useApiError()
+const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const doc = ref<Voucher | null>(null)
 const isNew = computed(() => !doc.value)
@@ -26,6 +27,7 @@ const loading = ref(false)
 const saving = ref(false)
 const dirty = ref(false)
 const accounts = ref<AccountOption[]>([])
+const departments = ref<Department[]>([])
 
 const today = () => {
   const d = new Date()
@@ -190,11 +192,20 @@ onMounted(async () => {
     loading.value = false
   }
   await load()
+  if (editable.value) {
+    try {
+      departments.value = (await systemApi.departments()).filter((d) => d.is_active)
+    } catch (e) {
+      handle(e)
+    }
+  }
   if (isNew.value) form.lines = [blank(), blank()]
   setTimeout(() => (dirty.value = false))
 })
 
 const printPage = () => window.print()
+
+autoClear(form)
 </script>
 
 <template>
@@ -347,6 +358,20 @@ const printPage = () => window.print()
               clearable
             />
             <span v-else>{{ row.supplier_name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="部門" width="150">
+          <template #default="{ row }">
+            <el-select
+              v-if="editable"
+              v-model="row.department_id"
+              clearable
+              placeholder="(無)"
+              size="small"
+            >
+              <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id" />
+            </el-select>
+            <span v-else>{{ row.department_name }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="editable" width="60">

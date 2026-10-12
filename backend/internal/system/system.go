@@ -30,7 +30,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 
 	g.GET("/permissions", auth.Require(permission.RoleRead, permission.RoleWrite), m.listPermissions)
 
-	g.GET("/departments", auth.Require(permission.DepartmentRead, permission.UserRead, permission.UserWrite), m.listDepartments)
+	g.GET("/departments", auth.Require(permission.DepartmentRead, permission.UserRead, permission.UserWrite, permission.VoucherWrite), m.listDepartments)
 	g.POST("/departments", auth.Require(permission.DepartmentWrite), m.createDepartment)
 	g.PUT("/departments/:id", auth.Require(permission.DepartmentWrite), m.updateDepartment)
 
