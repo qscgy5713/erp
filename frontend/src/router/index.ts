@@ -22,6 +22,8 @@ declare module 'vue-router' {
     /** 需要任一權限 */
     perm?: string[]
     /** 採購 / 銷售共用編輯頁的流程,見 views/trade/flows.ts */
+    /** 銷售 / 採購報表頁 */
+    side?: 'sales' | 'purchase'
     kind?: 'purchase-order' | 'receipt' | 'sales-order' | 'delivery'
     /** 應收 / 應付帳款、對帳單、帳齡頁 */
     ledger?: 'receivable' | 'payable'
@@ -193,6 +195,11 @@ const router = createRouter({
       meta: { title: '進貨 / 退出單', perm: RECEIPT_ANY, kind: 'receipt' },
     },
     {
+      path: '/purchase/reports',
+      component: () => import('@/views/trade/ReportView.vue'),
+      meta: { title: '採購報表', perm: RECEIPT_ANY, side: 'purchase' },
+    },
+    {
       path: '/purchase/outstanding',
       component: () => import('@/views/purchase/OutstandingView.vue'),
       meta: { title: '未交貨清單', perm: [...ORDER_ANY, 'purchase.receipt.write'] },
@@ -232,6 +239,11 @@ const router = createRouter({
       name: 'sales-delivery',
       component: () => import('@/views/trade/TradeEditView.vue'),
       meta: { title: '出貨 / 退回單', perm: DELIVERY_ANY, kind: 'delivery' },
+    },
+    {
+      path: '/sales/reports',
+      component: () => import('@/views/trade/ReportView.vue'),
+      meta: { title: '銷售報表', perm: DELIVERY_ANY, side: 'sales' },
     },
     {
       path: '/sales/unshipped',

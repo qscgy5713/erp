@@ -43,6 +43,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/receipts/:id", auth.Require(permission.ReceiptWrite), m.updateReceipt)
 	g.POST("/receipts/:id/actions/:action", receiptRead, m.receiptAction)
 	g.GET("/returnable-lines", auth.Require(permission.ReceiptWrite), m.returnableLines)
+	// 採購報表:供應商 / 料品統計與明細,依進貨單的檢視權限
+	g.GET("/reports", receiptRead, m.purchaseReport)
 }
 
 func actor(c *gin.Context) *authctx.Actor { return authctx.ActorFrom(c.Request.Context()) }

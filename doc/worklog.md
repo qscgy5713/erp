@@ -1,5 +1,11 @@
 # 工作日誌
 
+## 2026-10-12 銷售 / 採購報表(D73)
+- 後端:`queries/reports.sql`(sqlc)、`sales/reports.go`、`purchase/reports.go`、共用 `shared/xlsxout`(Excel 輸出)與 `trade.RequiredRange`(期間驗證);路由 `GET /sales/reports`、`GET /purchase/reports`。
+- 銷售毛利只計已月結成本的月份,未月結金額另列;資料範圍同出貨單。
+- 前端:共用 `ReportView.vue`(依客戶 / 供應商、依料品、明細三種檢視,匯出 Excel),選單新增「銷售報表」「採購報表」。
+- 測試:`reports_test.go`(月結前後毛利、明細篩選、期間驗證、xlsx 讀回、資料範圍、無權限 403);既有 `TestEveryRouteEnforcesAuthAndPermission` 涵蓋新路由。
+
 ## 2026-10-12 對帳單匯出 Excel
 - `GET /finance/statements` 加 `format=xlsx`:沿用同一份查詢與權限 / 資料範圍檢查,輸出對象、幣別、期間、期初、明細(日期、類別、單號、增減、餘額)與期末;新增 `internal/finance/report_xlsx.go`。
 - 前端對帳單頁新增「匯出 Excel」按鈕。

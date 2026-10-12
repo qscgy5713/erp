@@ -56,6 +56,7 @@
 - **對帳單**:單一對象單一幣別的期初、明細、期末,可列印
 - **帳齡分析**:本位幣、依到期日分組(未到期、逾期 1–30 / 31–60 / 61–90 / 90 天以上)
 - 收款單、應收、對帳單與帳齡依客戶負責業務套用資料範圍
+- **銷售 / 採購報表**:依客戶(供應商)或料品排行、明細,期間篩選、匯出 Excel;銷售端含毛利(只計已月結成本的月份)
 - 應收 / 應付帳款頁的合計改為「未沖餘額」
 
 ### 已完成(M6 會計總帳)
@@ -219,6 +220,7 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `GET /finance/receivables` | 應收帳款(依資料範圍) |
 | `/finance/collections`、`/finance/payments`、`POST …/{id}/actions/{…\|post\|unpost}` | 收款單 / 付款單(沖帳) |
 | `GET /finance/statements?side=receivable\|payable&partner_id=&currency=&from=&to=` | 對帳單 |
+| `GET /sales/reports`、`GET /purchase/reports`(`group=customer\|supplier\|item\|detail&from=&to=&format=xlsx`) | 銷售 / 採購報表 |
 | `GET /finance/aging?side=receivable\|payable&as_of=` | 帳齡分析 |
 | `/gl/accounts`、`GET /gl/account-options`、`/gl/mappings` | 會計科目、開傳票選科目(只需有會計權限)、拋轉規則 |
 | `/gl/vouchers`、`POST /gl/vouchers/{id}/actions/{post\|void\|reverse}` | 傳票與動作 |

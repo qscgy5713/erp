@@ -49,6 +49,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/deliveries/:id/invoice", auth.Require(permission.DeliveryWrite), m.setInvoice)
 	g.POST("/deliveries/:id/actions/:action", deliveryRead, m.deliveryAction)
 	g.GET("/returnable-lines", auth.Require(permission.DeliveryWrite), m.returnableLines)
+	// 銷售報表:客戶 / 料品排行與明細,依出貨單的檢視權限與資料範圍
+	g.GET("/reports", deliveryRead, m.salesReport)
 }
 
 func actor(c *gin.Context) *authctx.Actor { return authctx.ActorFrom(c.Request.Context()) }

@@ -71,6 +71,7 @@ export const navigation: NavItem[] = [
     children: [
       { title: '採購單', path: '/purchase/orders', perm: ORDER_ANY },
       { title: '進貨 / 退出', path: '/purchase/receipts', perm: RECEIPT_ANY },
+      { title: '採購報表', path: '/purchase/reports', perm: RECEIPT_ANY },
       {
         title: '未交貨清單',
         path: '/purchase/outstanding',
@@ -83,6 +84,7 @@ export const navigation: NavItem[] = [
     children: [
       { title: '報價 / 訂單', path: '/sales/orders', perm: SALES_ORDER_ANY },
       { title: '出貨 / 退回', path: '/sales/deliveries', perm: DELIVERY_ANY },
+      { title: '銷售報表', path: '/sales/reports', perm: DELIVERY_ANY },
       {
         title: '未出貨清單',
         path: '/sales/unshipped',

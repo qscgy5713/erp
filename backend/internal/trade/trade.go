@@ -43,6 +43,26 @@ func OptionalDate(c *gin.Context, name string) (*time.Time, error) {
 	return &t, err
 }
 
+// RequiredRange 解析必填的 from / to 查詢參數(含頭尾);to 不可早於 from,區間最長 5 年。
+func RequiredRange(c *gin.Context) (from, to time.Time, err error) {
+	if c.Query("from") == "" || c.Query("to") == "" {
+		return from, to, FieldErr("from", "請指定開始與結束日期")
+	}
+	if from, err = ParseDate("from", c.Query("from")); err != nil {
+		return from, to, err
+	}
+	if to, err = ParseDate("to", c.Query("to")); err != nil {
+		return from, to, err
+	}
+	if to.Before(from) {
+		return from, to, FieldErr("to", "結束日期不可早於開始日期")
+	}
+	if from.AddDate(5, 0, 0).Before(to) {
+		return from, to, FieldErr("to", "查詢區間最長 5 年")
+	}
+	return from, to, nil
+}
+
 // OptionalInputDate 解析選填的輸入日期(空字串視為未填)。
 func OptionalInputDate(field string, s *string) (*time.Time, error) {
 	if s == nil || *s == "" {
