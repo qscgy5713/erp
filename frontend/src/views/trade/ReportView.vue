@@ -30,14 +30,25 @@ const page = ref(1)
 const size = ref(50)
 const total = ref(0)
 
+// 從排行點進明細時的篩選(客戶 / 供應商或料品)
+const filter = ref<{ key: string; id: number; label: string } | null>(null)
+
 const query = () => ({ from: range.value[0], to: range.value[1] })
+const detailQuery = () => ({
+  ...query(),
+  ...(filter.value ? { [filter.value.key]: filter.value.id } : {}),
+})
 
 async function load() {
   if (!range.value) return
   loading.value = true
   try {
     if (group.value === 'detail') {
-      const r = await reportApi.detail(side, { ...query(), page: page.value, size: size.value })
+      const r = await reportApi.detail(side, {
+        ...detailQuery(),
+        page: page.value,
+        size: size.value,
+      })
       detail.value = r.items
       total.value = r.meta.total
     } else {
@@ -48,6 +59,23 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function drill(row: { id: number; code: string; name: string }) {
+  const key = group.value === 'item' ? 'item_id' : isSales ? 'customer_id' : 'supplier_id'
+  filter.value = { key, id: row.id, label: `${row.code} ${row.name}` }
+  group.value = 'detail'
+  change()
+}
+
+function onGroup() {
+  filter.value = null
+  change()
+}
+
+function clearFilter() {
+  filter.value = null
+  change()
 }
 
 function change() {
@@ -62,7 +90,7 @@ async function exportXlsx() {
     await reportApi.exportXlsx(
       side,
       group.value,
-      query(),
+      group.value === 'detail' ? detailQuery() : query(),
       `${isSales ? '銷售' : '採購'}報表_${range.value[0]}_${range.value[1]}.xlsx`,
     )
   } catch (e) {
@@ -92,7 +120,7 @@ onMounted(load)
         style="width: 260px"
         @change="change"
       />
-      <el-radio-group v-model="group" @change="change">
+      <el-radio-group v-model="group" @change="onGroup">
         <el-radio-button value="party">依{{ partyLabel }}排行</el-radio-button>
         <el-radio-button value="item">依料品排行</el-radio-button>
         <el-radio-button value="detail">明細</el-radio-button>
@@ -112,7 +140,14 @@ onMounted(load)
     />
 
     <template v-if="group !== 'detail'">
-      <el-table v-loading="loading" :data="result?.rows ?? []" border size="small">
+      <el-table
+        v-loading="loading"
+        :data="result?.rows ?? []"
+        border
+        size="small"
+        row-class-name="clickable"
+        @row-click="drill"
+      >
         <el-table-column type="index" label="#" width="50" />
         <el-table-column :label="group === 'party' ? partyLabel : '料品'" min-width="200">
           <template #default="{ row }">{{ row.code }} {{ row.name }}</template>
@@ -174,6 +209,7 @@ onMounted(load)
     </template>
 
     <template v-else>
+      <el-tag v-if="filter" closable class="gap" @close="clearFilter">{{ filter.label }}</el-tag>
       <el-table v-loading="loading" :data="detail" border size="small">
         <el-table-column prop="date" label="日期" width="110" />
         <el-table-column label="單號" width="170">
@@ -218,6 +254,9 @@ onMounted(load)
 </template>
 
 <style scoped>
+:deep(.clickable) {
+  cursor: pointer;
+}
 .hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;

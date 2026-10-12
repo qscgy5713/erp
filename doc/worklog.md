@@ -1,5 +1,8 @@
 # 工作日誌
 
+## 2026-10-12 報表排行列點進明細
+- `ReportView.vue`:點排行列跳到該客戶 / 供應商 / 料品的明細(帶 `customer_id` / `supplier_id` / `item_id`),明細上方顯示可取消的標籤,匯出 Excel 也沿用篩選。純前端調整,後端原本就支援。
+
 ## 2026-10-12 銷售 / 採購報表(D73)
 - 後端:`queries/reports.sql`(sqlc)、`sales/reports.go`、`purchase/reports.go`、共用 `shared/xlsxout`(Excel 輸出)與 `trade.RequiredRange`(期間驗證);路由 `GET /sales/reports`、`GET /purchase/reports`。
 - 銷售毛利只計已月結成本的月份,未月結金額另列;資料範圍同出貨單。
