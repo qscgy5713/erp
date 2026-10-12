@@ -101,8 +101,11 @@ onMounted(load)
       <el-table-column label="成品" min-width="220">
         <template #default="{ row }">{{ row.item_code }} {{ row.item_name }}</template>
       </el-table-column>
-      <el-table-column label="完工數量" width="130" align="right">
-        <template #default="{ row }">{{ row.plan_qty }} {{ row.unit_name }}</template>
+      <el-table-column label="完工 / 計畫" width="150" align="right">
+        <template #default="{ row }"
+          >{{ Number(row.completed_qty) > 0 ? `${row.completed_qty} / ` : '' }}{{ row.plan_qty }}
+          {{ row.unit_name }}</template
+        >
       </el-table-column>
       <el-table-column prop="warehouse_name" label="入庫倉" width="110" />
       <el-table-column label="加工費" width="110" align="right">

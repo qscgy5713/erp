@@ -87,7 +87,9 @@ type woDTO struct {
 	PostedByName        *string         `json:"posted_by_name"`
 	PostedAt            *time.Time      `json:"posted_at"`
 	Lines               []woLineDTO     `json:"lines"`
-	OutputLots          []lotUsedDTO    `json:"output_lots"` // 已完工:成品實際入庫的批號
+	OutputLots          []lotUsedDTO    `json:"output_lots"`   // 已完工:成品實際入庫的批號
+	CompletedQty        decimal.Decimal `json:"completed_qty"` // 分批完工的累計有效完工量(D94)
+	Completions         []completionDTO `json:"completions"`
 	Version             int32           `json:"version"`
 	UpdatedAt           time.Time       `json:"updated_at"`
 }
@@ -120,7 +122,10 @@ func loadOrder(ctx context.Context, q *db.Queries, companyID, id int64) (woDTO, 
 		out.Lines[i] = woLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName,
 			Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode, Note: l.Note, ItemLotControl: l.ItemLotControl, OnHand: l.OnHand, Lots: []lotUsedDTO{}}
 	}
-	if w.Status == "posted" {
+	if out.Completions, out.CompletedQty, err = loadCompletions(ctx, q, id); err != nil {
+		return woDTO{}, err
+	}
+	if w.Status == "posted" && len(out.Completions) == 0 {
 		used, err := q.ListWorkOrderLots(ctx, id)
 		if err != nil {
 			return woDTO{}, err
@@ -153,6 +158,7 @@ type woListDTO struct {
 	ItemName       string          `json:"item_name"`
 	UnitName       string          `json:"unit_name"`
 	PlanQty        decimal.Decimal `json:"plan_qty"`
+	CompletedQty   decimal.Decimal `json:"completed_qty"`
 	DueDate        *string         `json:"due_date"`
 	ProcessingCost decimal.Decimal `json:"processing_cost"`
 	WarehouseName  string          `json:"warehouse_name"`
@@ -200,7 +206,7 @@ func (m *Module) listOrders(c *gin.Context) {
 	out := make([]woListDTO, len(rows))
 	for i, r := range rows {
 		out[i] = woListDTO{ID: r.ID, DocNo: r.DocNo, DocDate: r.DocDate.Format(time.DateOnly), Status: r.Status, ItemCode: r.ItemCode,
-			ItemName: r.ItemName, UnitName: r.UnitName, PlanQty: r.PlanQty, DueDate: dateStr(r.DueDate), ProcessingCost: r.ProcessingCost,
+			ItemName: r.ItemName, UnitName: r.UnitName, PlanQty: r.PlanQty, CompletedQty: r.CompletedQty, DueDate: dateStr(r.DueDate), ProcessingCost: r.ProcessingCost,
 			WarehouseName: r.WarehouseName, CreatedByName: r.CreatedByName, UpdatedAt: r.UpdatedAt}
 	}
 	response.List(c, out, pg.Meta(total))
@@ -652,6 +658,16 @@ func (m *Module) orderAction(c *gin.Context) {
 		next, err := trade.PostingTransition(docstate.Status(cur.Status), action)
 		if err != nil {
 			return err
+		}
+		switch action { // 分批完工的工單(有完工回報,含已作廢)只能用完工回報 / 結案,不能退回頭
+		case docstate.Post, docstate.Unpost, docstate.Unapprove, docstate.Void:
+			n, err := q.CountCompletionsOfOrder(ctx, id)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				return errHasCompletions
+			}
 		}
 		doc, err := loadOrder(ctx, q, a.CompanyID, id)
 		if err != nil {

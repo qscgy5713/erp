@@ -19,6 +19,13 @@ type woDoc struct {
 		ItemID int64  `json:"item_id"`
 		Qty    string `json:"qty"`
 	} `json:"lines"`
+	CompletedQty string `json:"completed_qty"`
+	Completions  []struct {
+		ID     int64  `json:"id"`
+		DocNo  string `json:"doc_no"`
+		Qty    string `json:"qty"`
+		Status string `json:"status"`
+	} `json:"completions"`
 }
 
 const prodWO = "/production/work-orders"
@@ -362,6 +369,41 @@ func TestWorkOrderPermissionsAndLots(t *testing.T) {
 	}
 	assertReconcileLotsOK(t, c)
 
+	// 分批完工(D94):權限(只有過帳權限能回報 / 作廢 / 結案)、批號管理的成品每批須批號與效期、材料先到期先出
+	cb := func(extra map[string]any) map[string]any { return compBody("2026-09-12", "2", extra) }
+	expect(t, mk.woComplete(&wo, cb(map[string]any{"output_lot_no": "F2", "output_expiry_date": "2027-06-01"})), http.StatusForbidden, "SYS-403")
+	expect(t, ap.woComplete(&wo, cb(nil)), http.StatusForbidden, "SYS-403")
+	expect(t, po.woComplete(&wo, cb(nil)), http.StatusUnprocessableEntity, "SYS-422") // 缺成品批號
+	expect(t, po.woComplete(&wo, cb(map[string]any{"output_lot_no": "F2", "output_expiry_date": "2027-06-01"})), http.StatusCreated, "")
+	// 5 個的工單領 40 個牛奶 → 2 個領 16 個:M-OLD 先出
+	if c.lotQty(milk, p.wh, "M-OLD") != "14" || c.lotQty(fg, p.wh, "F2") != "2" {
+		t.Fatalf("分批完工後 OLD=%s F2=%s", c.lotQty(milk, p.wh, "M-OLD"), c.lotQty(fg, p.wh, "F2"))
+	}
+	done := decode[struct {
+		Completions []struct {
+			OutputLots []struct {
+				LotNo string `json:"lot_no"`
+			} `json:"output_lots"`
+			Lines []struct {
+				Lots []struct {
+					LotNo string `json:"lot_no"`
+					Qty   string `json:"qty"`
+				} `json:"lots"`
+			} `json:"lines"`
+		} `json:"completions"`
+	}](t, c.do(http.MethodGet, prodWO+"/"+itoa(wo.ID), nil).Data)
+	if len(done.Completions) != 1 || len(done.Completions[0].OutputLots) != 1 || done.Completions[0].OutputLots[0].LotNo != "F2" ||
+		len(done.Completions[0].Lines[0].Lots) != 1 || done.Completions[0].Lines[0].Lots[0].LotNo != "M-OLD" || done.Completions[0].Lines[0].Lots[0].Qty != "16" {
+		t.Fatalf("回報的批號 = %+v", done)
+	}
+	assertReconcileLotsOK(t, c)
+	expect(t, ap.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/completions/"+itoa(wo.Completions[0].ID)+"/void", nil), http.StatusForbidden, "SYS-403")
+	expect(t, po.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/completions/"+itoa(wo.Completions[0].ID)+"/void", nil), http.StatusOK, "")
+	if c.lotQty(milk, p.wh, "M-OLD") != "30" || c.lotQty(fg, p.wh, "F2") != "0" {
+		t.Fatalf("作廢回報後 OLD=%s F2=%s", c.lotQty(milk, p.wh, "M-OLD"), c.lotQty(fg, p.wh, "F2"))
+	}
+	assertReconcileLotsOK(t, c)
+
 	// 列表與篩選
 	list := decode[[]struct {
 		DocNo  string `json:"doc_no"`
@@ -620,4 +662,198 @@ func TestBomSubstitutes(t *testing.T) {
 	}
 	// 循環:raw3 的 BOM 用到成品,而成品的 BOM 以 raw3 為替代料
 	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(raw3, "1", bl(fg, "1"))), http.StatusUnprocessableEntity, "PRD-002")
+}
+
+// compBody 完工回報的請求本文。
+func compBody(date, qty string, extra map[string]any) map[string]any {
+	b := map[string]any{"doc_date": date, "qty": qty}
+	for k, v := range extra {
+		b[k] = v
+	}
+	return b
+}
+
+func (c *client) woComplete(d *woDoc, body map[string]any) apiResp {
+	c.e.t.Helper()
+	res := c.do(http.MethodPost, prodWO+"/"+itoa(d.ID)+"/completions", body)
+	if res.status == http.StatusCreated {
+		*d = decode[woDoc](c.e.t, res.Data)
+	}
+	return res
+}
+
+// TestWorkOrderPartialCompletion 分批完工(D94):預設領料依比例、累計達計畫自動結案、作廢回報退回已核准、
+// 短交結案、有回報後不能用一次完工、MRP 只算尚未完工的部分、權限。
+func TestWorkOrderPartialCompletion(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, raw2, fg := p.item, e.seedItem("RAW2", "goods"), e.seedItem("FG1", "goods")
+	p2 := *p
+	p2.item = raw2
+	p.receiveOn("2026-08-10", "5", "1200")  // RAW1 60 個
+	p2.receiveOn("2026-08-10", "2", "2400") // RAW2 24 個
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(raw1, "2"), bl(raw2, "1"))), http.StatusCreated, "")
+	wo := decode[woDoc](t, c.do(http.MethodPost, prodWO, woBody(fg, "10", p.wh, "500", nil)).Data)
+
+	// 草稿 / 待審不能回報
+	expect(t, c.woComplete(&wo, compBody("2026-09-12", "4", nil)), http.StatusConflict, "PRD-006")
+	for _, a := range []string{"submit", "approve"} {
+		expect(t, c.woAct(&wo, a), http.StatusOK, "")
+	}
+
+	// 預覽:4 個 → RAW1 8、RAW2 4、加工費 200
+	prev := decode[struct {
+		Qty            string `json:"qty"`
+		Remaining      string `json:"remaining"`
+		ProcessingCost string `json:"processing_cost"`
+		Lines          []struct {
+			ItemID int64  `json:"item_id"`
+			Qty    string `json:"qty"`
+		} `json:"lines"`
+	}](t, c.do(http.MethodGet, prodWO+"/"+itoa(wo.ID)+"/completion-preview?qty=4", nil).Data)
+	if prev.Qty != "4" || prev.Remaining != "10" || prev.ProcessingCost != "200" || len(prev.Lines) != 2 || prev.Lines[0].Qty != "8" || prev.Lines[1].Qty != "4" {
+		t.Fatalf("預覽 = %+v", prev)
+	}
+
+	// 驗證:數量 0 / 超過剩餘 / 日期早於工單 / 加工費為負
+	for name, body := range map[string]map[string]any{
+		"數量為零":  compBody("2026-09-12", "0", nil),
+		"超過剩餘":  compBody("2026-09-12", "11", nil),
+		"早於工單":  compBody("2026-09-09", "4", nil),
+		"加工費為負": compBody("2026-09-12", "4", map[string]any{"processing_cost": "-1"}),
+	} {
+		if res := c.woComplete(&wo, body); res.status != http.StatusUnprocessableEntity || res.code() != "SYS-422" {
+			t.Errorf("%s → %d %s", name, res.status, res.code())
+		}
+	}
+
+	// 第 1 批:4 個,領料依比例
+	expect(t, c.woComplete(&wo, compBody("2026-09-12", "4", nil)), http.StatusCreated, "")
+	if wo.Status != "approved" || wo.CompletedQty != "4" || len(wo.Completions) != 1 || wo.Completions[0].Status != "posted" {
+		t.Fatalf("第 1 批後 = %+v", wo)
+	}
+	if e.balance(raw1, p.wh) != "52" || e.balance(raw2, p.wh) != "20" || e.balance(fg, p.wh) != "4" {
+		t.Fatalf("第 1 批後庫存 raw1=%s raw2=%s fg=%s", e.balance(raw1, p.wh), e.balance(raw2, p.wh), e.balance(fg, p.wh))
+	}
+	// 有回報後:一次完工 / 反過帳 / 取消核准 / 作廢 都不行
+	for _, a := range []string{"post", "unapprove", "void"} {
+		expect(t, c.woAct(&wo, a), http.StatusConflict, "PRD-005")
+	}
+	// MRP:工單在途只剩 6、領料需求只剩 60%(RAW1 12、RAW2 6)
+	mrp := decode[[]struct {
+		ItemID     int64  `json:"item_id"`
+		WoDemand   string `json:"wo_demand"`
+		IncomingWO string `json:"incoming_wo"`
+	}](t, c.do(http.MethodGet, "/production/mrp?shortage_only=false", nil).Data)
+	for _, r := range mrp {
+		switch r.ItemID {
+		case fg:
+			if r.IncomingWO != "6" {
+				t.Errorf("成品工單在途 = %s,want 6", r.IncomingWO)
+			}
+		case raw1:
+			if r.WoDemand != "12" {
+				t.Errorf("RAW1 工單領料 = %s,want 12", r.WoDemand)
+			}
+		}
+	}
+
+	// 第 2 批:想做 6 個但自訂領料(RAW1 13、RAW2 6)與加工費 320;累計達 10 → 工單自動結案(已過帳)
+	expect(t, c.woComplete(&wo, compBody("2026-09-15", "6", map[string]any{"processing_cost": "320",
+		"lines": []map[string]any{{"item_id": raw1, "qty": "13"}, {"item_id": raw2, "qty": "6"}}})), http.StatusCreated, "")
+	if wo.Status != "posted" || wo.CompletedQty != "10" || len(wo.Completions) != 2 {
+		t.Fatalf("第 2 批後 = %+v", wo)
+	}
+	if e.balance(raw1, p.wh) != "39" || e.balance(raw2, p.wh) != "14" || e.balance(fg, p.wh) != "10" {
+		t.Fatalf("第 2 批後庫存 raw1=%s raw2=%s fg=%s", e.balance(raw1, p.wh), e.balance(raw2, p.wh), e.balance(fg, p.wh))
+	}
+	expect(t, c.woComplete(&wo, compBody("2026-09-16", "1", nil)), http.StatusConflict, "PRD-006") // 已結案不能再回報
+
+	// 作廢第 2 批 → 庫存退回、工單回到已核准、可重新回報
+	second := wo.Completions[1].ID
+	void := func(id int64) apiResp {
+		res := c.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/completions/"+itoa(id)+"/void", nil)
+		if res.status == http.StatusOK {
+			wo = decode[woDoc](t, res.Data)
+		}
+		return res
+	}
+	expect(t, void(second), http.StatusOK, "")
+	if wo.Status != "approved" || wo.CompletedQty != "4" || e.balance(raw1, p.wh) != "52" || e.balance(fg, p.wh) != "4" {
+		t.Fatalf("作廢第 2 批後 = %+v raw1=%s fg=%s", wo, e.balance(raw1, p.wh), e.balance(fg, p.wh))
+	}
+	expect(t, void(second), http.StatusConflict, "PRD-007") // 重複作廢
+
+	// 短交結案:只做了 4 個就結案;結案後不能再回報;作廢第 1 批會退回已核准
+	expect(t, c.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/close", map[string]any{"version": wo.Version + 99}), http.StatusConflict, "SYS-409")
+	res := c.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/close", map[string]any{"version": wo.Version})
+	expect(t, res, http.StatusOK, "")
+	wo = decode[woDoc](t, res.Data)
+	if wo.Status != "posted" || wo.CompletedQty != "4" {
+		t.Fatalf("短交結案 = %+v", wo)
+	}
+	expect(t, void(wo.Completions[0].ID), http.StatusOK, "")
+	if wo.Status != "approved" || e.balance(fg, p.wh) != "0" || e.balance(raw1, p.wh) != "60" {
+		t.Fatalf("全部作廢後 = %+v fg=%s raw1=%s", wo, e.balance(fg, p.wh), e.balance(raw1, p.wh))
+	}
+	// 沒有有效完工回報就不能結案
+	expect(t, c.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/close", map[string]any{"version": wo.Version}), http.StatusConflict, "PRD-008")
+}
+
+// TestWorkOrderPartialCompletionCosting 分批完工的月結:完工量、領料量取自庫存流水帳,加工費取各回報的本次加工費。
+func TestWorkOrderPartialCompletionCosting(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, raw2, fg := p.item, e.seedItem("RAW2", "goods"), e.seedItem("FG1", "goods")
+	pcs := e.unitID("PCS")
+	p2 := *p
+	p2.item = raw2
+	cust := e.seedCustomer("C1", "0", nil)
+	p.receiveOn("2026-08-10", "5", "1200")
+	p2.receiveOn("2026-08-10", "2", "2400")
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(raw1, "2"), bl(raw2, "1"))), http.StatusCreated, "")
+	wo := decode[woDoc](t, c.do(http.MethodPost, prodWO, woBody(fg, "10", p.wh, "500", nil)).Data)
+	for _, a := range []string{"submit", "approve"} {
+		expect(t, c.woAct(&wo, a), http.StatusOK, "")
+	}
+	expect(t, c.woComplete(&wo, compBody("2026-09-12", "4", nil)), http.StatusCreated, "")
+	expect(t, c.woComplete(&wo, compBody("2026-09-15", "6", map[string]any{"processing_cost": "320",
+		"lines": []map[string]any{{"item_id": raw1, "qty": "13"}, {"item_id": raw2, "qty": "6"}}})), http.StatusCreated, "")
+	dn, res := c.createPur(deliveries, map[string]any{
+		"doc_date": "2026-09-20", "doc_type": "delivery", "customer_id": cust, "warehouse_id": p.wh, "currency": "TWD",
+		"tax_type_id": p.tax, "lines": []map[string]any{line(fg, pcs, "4", "800", nil)},
+	})
+	expect(t, res, http.StatusCreated, "")
+	c.approvePur(deliveries, &dn)
+	expect(t, c.actPur(deliveries, &dn, "post"), http.StatusOK, "")
+
+	expect(t, c.do(http.MethodPost, "/costing/closings/2026-08/run", nil), http.StatusOK, "")
+	res = c.do(http.MethodPost, "/costing/closings/2026-09/run", nil)
+	expect(t, res, http.StatusOK, "")
+	// 材料 RAW1 21×100 + RAW2 10×200 = 4100,加工費 200 + 320 = 520 → 4620 ÷ 10 = 462;出貨 4 個 COGS 1848
+	// 存貨 = RAW1 39×100 + RAW2 14×200 + FG 6×462 = 3900 + 2800 + 2772 = 9472
+	if got := decode[costingDTO](t, res.Data); got.CogsAmount != "1848" || got.InventoryValue != "9472" {
+		t.Fatalf("9 月月結 = %+v", got)
+	}
+	m := c.trialRange("2026-09-01", "2026-09-30")
+	wantTrial(t, m, "5103", "0", "520")
+	var recv decimal.Decimal
+	if err := e.pool.QueryRow(context.Background(), "SELECT unit_cost FROM inventory_transactions WHERE source_type = 'wo_completion_receipt' AND qty > 0 ORDER BY id LIMIT 1").Scan(&recv); err != nil || !recv.Equal(decimal.NewFromInt(462)) {
+		t.Fatalf("完工入庫單位成本 = %s err=%v", recv, err)
+	}
+	// 月結後該月鎖定:不能作廢回報
+	if res := c.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/completions/"+itoa(wo.Completions[0].ID)+"/void", nil); res.status != http.StatusConflict || res.code() != "INV-008" {
+		t.Fatalf("月結後作廢 = %d %s", res.status, res.code())
+	}
+	rec := decode[struct {
+		Checks []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}](t, c.do(http.MethodGet, "/costing/reconcile", nil).Data)
+	for _, ch := range rec.Checks {
+		if ch.Status != "ok" {
+			t.Fatalf("對帳檢查 %s = %s", ch.Key, ch.Status)
+		}
+	}
 }

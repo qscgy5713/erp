@@ -15,6 +15,15 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 工單分批完工(D94)
+
+- 設計:`doc/plan.md` D94。已核准工單可多次「完工回報」(`work_order_completions` + `work_order_completion_lines`,單號 WC),回報即過帳;累計達計畫自動結案,也可短交結案;作廢回報沖銷並讓結案工單退回已核准。有回報的工單不能再用一次完工 / 反過帳 / 取消核准 / 作廢(PRD-005)。
+- 庫存來源用新類型 `wo_completion_issue/receipt`(來源 id = 回報 id,與舊工單的 id 空間分開);月結的完工量、領料量、加工費、完工單位成本回寫、對帳、標準成本差異查詢都一起納入;MRP 工單在途與領料需求只算尚未完工的比例。
+- API:`GET /production/work-orders/:id/completion-preview`、`POST .../completions`、`POST .../completions/:cid/void`、`POST .../close`(後三者需工單過帳權限)。
+- 前端:工單頁新增「分批完工」區塊(回報列表、完工回報視窗、作廢、短交結案),列表顯示「完工 / 計畫」;庫存異動來源補上工單領料 / 完工入庫的中文標籤。
+- 測試:`TestWorkOrderPartialCompletion`、`TestWorkOrderPartialCompletionCosting`,並擴充 `TestWorkOrderPermissionsAndLots`(批號、儲位驗證路徑、權限);瀏覽器實測回報 / 預設值重算 / 作廢。
+- 已知取捨:領料預設比例分攤(捨入與替代料實際用量由人調整);結案後剩餘計畫的加工費不入帳;未做在製品科目與委外加工。
+
 ## 2026-10-12 通知訂閱開關與週報事件(D93)
 
 - migration 000035 `notification_prefs`;排信查詢排除已關閉者;`GET/PUT /notifications/prefs`;前端「通知設定」頁(帳號選單)。

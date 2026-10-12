@@ -112,7 +112,59 @@ export interface WorkOrder {
   posted_at: string | null
   lines: WorkOrderLine[]
   output_lots: LotUsed[]
+  /** 分批完工的累計有效完工量與各次完工回報(D94) */
+  completed_qty: Decimal
+  completions: Completion[]
   version: number
+}
+
+export interface CompletionLine {
+  line_no: number
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  qty: Decimal
+  lot_no: string
+  bin_code: string
+  lots: LotUsed[]
+}
+
+export interface Completion {
+  id: number
+  doc_no: string
+  doc_date: string
+  qty: Decimal
+  processing_cost: Decimal
+  output_lot_no: string
+  output_expiry_date: string | null
+  output_bin_code: string
+  note: string
+  status: 'posted' | 'voided'
+  created_by_name: string | null
+  created_at: string
+  voided_by_name: string | null
+  voided_at: string | null
+  lines: CompletionLine[]
+  output_lots: LotUsed[]
+}
+
+export interface CompletionPreview {
+  qty: Decimal
+  remaining: Decimal
+  processing_cost: Decimal
+  lines: WorkOrderLine[]
+}
+
+export interface CompletionInput {
+  doc_date: string
+  qty: Decimal
+  processing_cost: Decimal
+  output_lot_no: string
+  output_bin_code: string
+  output_expiry_date: string | null
+  note: string
+  lines: { item_id: number; qty: Decimal; lot_no: string; bin_code: string }[]
 }
 
 export interface WorkOrderRow {
@@ -124,6 +176,7 @@ export interface WorkOrderRow {
   item_name: string
   unit_name: string
   plan_qty: Decimal
+  completed_qty: Decimal
   due_date: string | null
   processing_cost: Decimal
   warehouse_name: string
@@ -200,6 +253,14 @@ export const productionApi = {
     http.put<WorkOrder>(`/production/work-orders/${id}`, input),
   action: (id: number, action: DocAction, version: number) =>
     http.post<WorkOrder>(`/production/work-orders/${id}/actions/${action}`, { version }),
+  completionPreview: (id: number, qty?: string) =>
+    http.get<CompletionPreview>(`/production/work-orders/${id}/completion-preview${qs({ qty })}`),
+  complete: (id: number, input: CompletionInput) =>
+    http.post<WorkOrder>(`/production/work-orders/${id}/completions`, input),
+  voidCompletion: (id: number, completionId: number) =>
+    http.post<WorkOrder>(`/production/work-orders/${id}/completions/${completionId}/void`),
+  closeOrder: (id: number, version: number) =>
+    http.post<WorkOrder>(`/production/work-orders/${id}/close`, { version }),
   explode: (item_id: number, qty: string, date?: string) =>
     http.get<ExplodeLine[]>(`/production/work-orders/explode${qs({ item_id, qty, date })}`),
 }

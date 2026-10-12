@@ -58,6 +58,32 @@ func (q *Queries) AddBomSubstitute(ctx context.Context, arg AddBomSubstitutePara
 	return err
 }
 
+const addCompletionLine = `-- name: AddCompletionLine :exec
+INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type AddCompletionLineParams struct {
+	CompletionID int64
+	LineNo       int32
+	ItemID       int64
+	Qty          decimal.Decimal
+	LotNo        string
+	BinCode      string
+}
+
+func (q *Queries) AddCompletionLine(ctx context.Context, arg AddCompletionLineParams) error {
+	_, err := q.db.Exec(ctx, addCompletionLine,
+		arg.CompletionID,
+		arg.LineNo,
+		arg.ItemID,
+		arg.Qty,
+		arg.LotNo,
+		arg.BinCode,
+	)
+	return err
+}
+
 const addWorkOrderLine = `-- name: AddWorkOrderLine :exec
 INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, bin_code, note)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -157,6 +183,18 @@ func (q *Queries) BomUsedBy(ctx context.Context, arg BomUsedByParams) ([]BomUsed
 	return items, nil
 }
 
+const completedQty = `-- name: CompletedQty :one
+SELECT COALESCE(SUM(qty), 0)::numeric FROM work_order_completions WHERE work_order_id = $1 AND status = 'posted'
+`
+
+// 工單目前有效的累計完工量
+func (q *Queries) CompletedQty(ctx context.Context, workOrderID int64) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, completedQty, workOrderID)
+	var column_1 decimal.Decimal
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countBoms = `-- name: CountBoms :one
 SELECT count(*) FROM boms b JOIN items i ON i.id = b.item_id
 WHERE b.company_id = $1
@@ -186,6 +224,18 @@ type CountBomsOfItemParams struct {
 
 func (q *Queries) CountBomsOfItem(ctx context.Context, arg CountBomsOfItemParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countBomsOfItem, arg.CompanyID, arg.ItemID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countCompletionsOfOrder = `-- name: CountCompletionsOfOrder :one
+SELECT count(*) FROM work_order_completions WHERE work_order_id = $1
+`
+
+// 工單所有完工回報筆數(含已作廢):有任何紀錄就不能再用一次完工 / 反過帳
+func (q *Queries) CountCompletionsOfOrder(ctx context.Context, workOrderID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countCompletionsOfOrder, workOrderID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -264,6 +314,66 @@ func (q *Queries) CreateBom(ctx context.Context, arg CreateBomParams) (Bom, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.EffectiveFrom,
+	)
+	return i, err
+}
+
+const createCompletion = `-- name: CreateCompletion :one
+
+INSERT INTO work_order_completions (company_id, work_order_id, doc_no, doc_date, qty, processing_cost, output_lot_no, output_expiry,
+                                    output_bin_code, note, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11)
+RETURNING id, company_id, work_order_id, doc_no, doc_date, qty, processing_cost, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at
+`
+
+type CreateCompletionParams struct {
+	CompanyID      int64
+	WorkOrderID    int64
+	DocNo          string
+	DocDate        time.Time
+	Qty            decimal.Decimal
+	ProcessingCost decimal.Decimal
+	OutputLotNo    string
+	OutputExpiry   *time.Time
+	OutputBinCode  string
+	Note           string
+	ActorID        *int64
+}
+
+// ======== 工單分批完工(D94) ========
+func (q *Queries) CreateCompletion(ctx context.Context, arg CreateCompletionParams) (WorkOrderCompletion, error) {
+	row := q.db.QueryRow(ctx, createCompletion,
+		arg.CompanyID,
+		arg.WorkOrderID,
+		arg.DocNo,
+		arg.DocDate,
+		arg.Qty,
+		arg.ProcessingCost,
+		arg.OutputLotNo,
+		arg.OutputExpiry,
+		arg.OutputBinCode,
+		arg.Note,
+		arg.ActorID,
+	)
+	var i WorkOrderCompletion
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.WorkOrderID,
+		&i.DocNo,
+		&i.DocDate,
+		&i.Qty,
+		&i.ProcessingCost,
+		&i.OutputLotNo,
+		&i.OutputExpiry,
+		&i.OutputBinCode,
+		&i.Note,
+		&i.Status,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.VoidedBy,
+		&i.VoidedAt,
 	)
 	return i, err
 }
@@ -752,6 +862,164 @@ func (q *Queries) ListBoms(ctx context.Context, arg ListBomsParams) ([]ListBomsR
 	return items, nil
 }
 
+const listCompletionLines = `-- name: ListCompletionLines :many
+SELECT l.completion_id, l.line_no, l.item_id, l.qty, l.lot_no, l.bin_code, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+FROM work_order_completion_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_unit_id
+WHERE l.completion_id = $1 ORDER BY l.line_no
+`
+
+type ListCompletionLinesRow struct {
+	CompletionID int64
+	LineNo       int32
+	ItemID       int64
+	Qty          decimal.Decimal
+	LotNo        string
+	BinCode      string
+	ItemCode     string
+	ItemName     string
+	UnitName     string
+}
+
+func (q *Queries) ListCompletionLines(ctx context.Context, completionID int64) ([]ListCompletionLinesRow, error) {
+	rows, err := q.db.Query(ctx, listCompletionLines, completionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompletionLinesRow{}
+	for rows.Next() {
+		var i ListCompletionLinesRow
+		if err := rows.Scan(
+			&i.CompletionID,
+			&i.LineNo,
+			&i.ItemID,
+			&i.Qty,
+			&i.LotNo,
+			&i.BinCode,
+			&i.ItemCode,
+			&i.ItemName,
+			&i.UnitName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompletionLots = `-- name: ListCompletionLots :many
+SELECT t.source_type, t.item_id, l.lot_no, l.expiry_date, t.qty
+FROM inventory_transactions t JOIN item_lots l ON l.id = t.lot_id
+WHERE t.source_type IN ('wo_completion_issue', 'wo_completion_receipt') AND t.source_id = $1
+  AND t.reversal_of IS NULL AND NOT EXISTS (SELECT 1 FROM inventory_transactions r WHERE r.reversal_of = t.id)
+ORDER BY t.id
+`
+
+type ListCompletionLotsRow struct {
+	SourceType string
+	ItemID     int64
+	LotNo      string
+	ExpiryDate *time.Time
+	Qty        decimal.Decimal
+}
+
+// 某次完工回報實際入庫與領用的批號
+func (q *Queries) ListCompletionLots(ctx context.Context, completionID int64) ([]ListCompletionLotsRow, error) {
+	rows, err := q.db.Query(ctx, listCompletionLots, completionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompletionLotsRow{}
+	for rows.Next() {
+		var i ListCompletionLotsRow
+		if err := rows.Scan(
+			&i.SourceType,
+			&i.ItemID,
+			&i.LotNo,
+			&i.ExpiryDate,
+			&i.Qty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompletions = `-- name: ListCompletions :many
+SELECT c.id, c.company_id, c.work_order_id, c.doc_no, c.doc_date, c.qty, c.processing_cost, c.output_lot_no, c.output_expiry, c.output_bin_code, c.note, c.status, c.created_by, c.created_at, c.voided_by, c.voided_at, cu.name AS created_by_name, vu.name AS voided_by_name
+FROM work_order_completions c
+LEFT JOIN users cu ON cu.id = c.created_by LEFT JOIN users vu ON vu.id = c.voided_by
+WHERE c.work_order_id = $1 ORDER BY c.id
+`
+
+type ListCompletionsRow struct {
+	ID             int64
+	CompanyID      int64
+	WorkOrderID    int64
+	DocNo          string
+	DocDate        time.Time
+	Qty            decimal.Decimal
+	ProcessingCost decimal.Decimal
+	OutputLotNo    string
+	OutputExpiry   *time.Time
+	OutputBinCode  string
+	Note           string
+	Status         string
+	CreatedBy      *int64
+	CreatedAt      time.Time
+	VoidedBy       *int64
+	VoidedAt       *time.Time
+	CreatedByName  *string
+	VoidedByName   *string
+}
+
+func (q *Queries) ListCompletions(ctx context.Context, workOrderID int64) ([]ListCompletionsRow, error) {
+	rows, err := q.db.Query(ctx, listCompletions, workOrderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompletionsRow{}
+	for rows.Next() {
+		var i ListCompletionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.WorkOrderID,
+			&i.DocNo,
+			&i.DocDate,
+			&i.Qty,
+			&i.ProcessingCost,
+			&i.OutputLotNo,
+			&i.OutputExpiry,
+			&i.OutputBinCode,
+			&i.Note,
+			&i.Status,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.VoidedBy,
+			&i.VoidedAt,
+			&i.CreatedByName,
+			&i.VoidedByName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProductionItems = `-- name: ListProductionItems :many
 SELECT id, code, name, item_type, is_active, lot_control FROM items
 WHERE company_id = $1 AND id = ANY($2::bigint[])
@@ -905,6 +1173,7 @@ func (q *Queries) ListWorkOrderLots(ctx context.Context, workOrderID int64) ([]L
 const listWorkOrders = `-- name: ListWorkOrders :many
 
 SELECT w.id, w.doc_no, w.doc_date, w.status, w.plan_qty, w.due_date, w.processing_cost, w.note, w.updated_at,
+       COALESCE((SELECT SUM(c.qty) FROM work_order_completions c WHERE c.work_order_id = w.id AND c.status = 'posted'), 0)::numeric AS completed_qty,
        i.code AS item_code, i.name AS item_name, u.name AS unit_name, wh.name AS warehouse_name,
        cu.name AS created_by_name
 FROM work_orders w
@@ -943,6 +1212,7 @@ type ListWorkOrdersRow struct {
 	ProcessingCost decimal.Decimal
 	Note           string
 	UpdatedAt      time.Time
+	CompletedQty   decimal.Decimal
 	ItemCode       string
 	ItemName       string
 	UnitName       string
@@ -979,6 +1249,7 @@ func (q *Queries) ListWorkOrders(ctx context.Context, arg ListWorkOrdersParams) 
 			&i.ProcessingCost,
 			&i.Note,
 			&i.UpdatedAt,
+			&i.CompletedQty,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,
@@ -993,6 +1264,40 @@ func (q *Queries) ListWorkOrders(ctx context.Context, arg ListWorkOrdersParams) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockCompletion = `-- name: LockCompletion :one
+SELECT id, company_id, work_order_id, doc_no, doc_date, qty, processing_cost, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at FROM work_order_completions WHERE id = $1 AND work_order_id = $2 AND company_id = $3 FOR UPDATE
+`
+
+type LockCompletionParams struct {
+	ID          int64
+	WorkOrderID int64
+	CompanyID   int64
+}
+
+func (q *Queries) LockCompletion(ctx context.Context, arg LockCompletionParams) (WorkOrderCompletion, error) {
+	row := q.db.QueryRow(ctx, lockCompletion, arg.ID, arg.WorkOrderID, arg.CompanyID)
+	var i WorkOrderCompletion
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.WorkOrderID,
+		&i.DocNo,
+		&i.DocDate,
+		&i.Qty,
+		&i.ProcessingCost,
+		&i.OutputLotNo,
+		&i.OutputExpiry,
+		&i.OutputBinCode,
+		&i.Note,
+		&i.Status,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.VoidedBy,
+		&i.VoidedAt,
+	)
+	return i, err
 }
 
 const lockWorkOrder = `-- name: LockWorkOrder :one
@@ -1261,8 +1566,9 @@ func (q *Queries) MrpSubstituteEdges(ctx context.Context, bomIds []int64) ([]Mrp
 }
 
 const mrpWorkOrderDemand = `-- name: MrpWorkOrderDemand :many
-SELECT l.item_id, SUM(l.qty)::numeric AS qty
+SELECT l.item_id, SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
 FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
+LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
 WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY l.item_id
 `
 
@@ -1271,7 +1577,7 @@ type MrpWorkOrderDemandRow struct {
 	Qty    decimal.Decimal
 }
 
-// 尚未完工(待審 / 已核准)的工單領料量
+// 尚未完工(待審 / 已核准)的工單領料量(依剩餘未完工比例;分批完工的工單只算還沒做的部分)
 func (q *Queries) MrpWorkOrderDemand(ctx context.Context, companyID int64) ([]MrpWorkOrderDemandRow, error) {
 	rows, err := q.db.Query(ctx, mrpWorkOrderDemand, companyID)
 	if err != nil {
@@ -1293,8 +1599,9 @@ func (q *Queries) MrpWorkOrderDemand(ctx context.Context, companyID int64) ([]Mr
 }
 
 const mrpWorkOrderSupply = `-- name: MrpWorkOrderSupply :many
-SELECT item_id, SUM(plan_qty)::numeric AS qty FROM work_orders
-WHERE company_id = $1 AND status IN ('pending', 'approved') GROUP BY item_id
+SELECT w.item_id, SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
+LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
+WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY w.item_id
 `
 
 type MrpWorkOrderSupplyRow struct {
@@ -1302,7 +1609,7 @@ type MrpWorkOrderSupplyRow struct {
 	Qty    decimal.Decimal
 }
 
-// 尚未完工(待審 / 已核准)的工單預計入庫量
+// 尚未完工(待審 / 已核准)的工單預計入庫量(扣掉已分批完工的部分)
 func (q *Queries) MrpWorkOrderSupply(ctx context.Context, companyID int64) ([]MrpWorkOrderSupplyRow, error) {
 	rows, err := q.db.Query(ctx, mrpWorkOrderSupply, companyID)
 	if err != nil {
@@ -1325,12 +1632,20 @@ func (q *Queries) MrpWorkOrderSupply(ctx context.Context, companyID int64) ([]Mr
 
 const productionConsumption = `-- name: ProductionConsumption :many
 
-SELECT w.item_id AS output_item_id, t.item_id AS material_id, SUM(t.qty)::numeric AS qty
-FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
-WHERE t.company_id = $1 AND t.source_type = 'work_order_issue'
-  AND t.doc_date BETWEEN $2::date AND $3::date
-GROUP BY w.item_id, t.item_id
-HAVING SUM(t.qty) <> 0
+SELECT x.output_item_id, x.material_id, SUM(x.qty)::numeric AS qty FROM (
+    SELECT w.item_id AS output_item_id, t.item_id AS material_id, t.qty
+    FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
+    WHERE t.company_id = $1 AND t.source_type = 'work_order_issue'
+      AND t.doc_date BETWEEN $2::date AND $3::date
+    UNION ALL
+    SELECT w.item_id, t.item_id, t.qty
+    FROM inventory_transactions t
+    JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
+    WHERE t.company_id = $1 AND t.source_type = 'wo_completion_issue'
+      AND t.doc_date BETWEEN $2::date AND $3::date
+) x
+GROUP BY x.output_item_id, x.material_id
+HAVING SUM(x.qty) <> 0
 `
 
 type ProductionConsumptionParams struct {
@@ -1368,11 +1683,19 @@ func (q *Queries) ProductionConsumption(ctx context.Context, arg ProductionConsu
 }
 
 const productionProcessing = `-- name: ProductionProcessing :many
-SELECT w.item_id, SUM(w.processing_cost)::numeric AS processing
-FROM work_orders w
-WHERE w.company_id = $1 AND w.status = 'posted'
-  AND w.doc_date BETWEEN $2::date AND $3::date
-GROUP BY w.item_id
+SELECT x.item_id, SUM(x.processing)::numeric AS processing FROM (
+    SELECT w.item_id, w.processing_cost AS processing
+    FROM work_orders w
+    WHERE w.company_id = $1 AND w.status = 'posted'
+      AND NOT EXISTS (SELECT 1 FROM work_order_completions c WHERE c.work_order_id = w.id)
+      AND w.doc_date BETWEEN $2::date AND $3::date
+    UNION ALL
+    SELECT w.item_id, c.processing_cost
+    FROM work_order_completions c JOIN work_orders w ON w.id = c.work_order_id
+    WHERE c.company_id = $1 AND c.status = 'posted'
+      AND c.doc_date BETWEEN $2::date AND $3::date
+) x
+GROUP BY x.item_id
 `
 
 type ProductionProcessingParams struct {
@@ -1386,7 +1709,8 @@ type ProductionProcessingRow struct {
 	Processing decimal.Decimal
 }
 
-// 期間內已完工(過帳中)的工單加工費,依成品彙總
+// 期間內的加工費,依成品彙總:舊式一次完工的工單(已過帳、沒有完工回報)用工單加工費與工單日期,
+// 分批完工的用各完工回報(未作廢)的本次加工費與回報日期
 func (q *Queries) ProductionProcessing(ctx context.Context, arg ProductionProcessingParams) ([]ProductionProcessingRow, error) {
 	rows, err := q.db.Query(ctx, productionProcessing, arg.CompanyID, arg.StartDate, arg.EndDate)
 	if err != nil {
@@ -1596,9 +1920,23 @@ func (q *Queries) UpdateWorkOrderHeader(ctx context.Context, arg UpdateWorkOrder
 	return i, err
 }
 
+const voidCompletion = `-- name: VoidCompletion :exec
+UPDATE work_order_completions SET status = 'voided', voided_by = $1, voided_at = now() WHERE id = $2
+`
+
+type VoidCompletionParams struct {
+	ActorID *int64
+	ID      int64
+}
+
+func (q *Queries) VoidCompletion(ctx context.Context, arg VoidCompletionParams) error {
+	_, err := q.db.Exec(ctx, voidCompletion, arg.ActorID, arg.ID)
+	return err
+}
+
 const writebackProduceCost = `-- name: WritebackProduceCost :exec
 UPDATE inventory_transactions SET unit_cost = $1
-WHERE company_id = $2 AND item_id = $3 AND source_type = 'work_order_receipt'
+WHERE company_id = $2 AND item_id = $3 AND source_type IN ('work_order_receipt', 'wo_completion_receipt')
   AND doc_date BETWEEN $4::date AND $5::date
 `
 

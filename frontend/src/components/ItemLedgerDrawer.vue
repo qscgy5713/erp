@@ -28,6 +28,10 @@ const sourceLabels: Record<string, string> = {
   delivery: '出貨',
   sales_return: '銷貨退回',
   opening_stock: '期初庫存',
+  work_order_issue: '工單領料',
+  work_order_receipt: '完工入庫',
+  wo_completion_issue: '完工領料',
+  wo_completion_receipt: '完工入庫',
 }
 
 watch(

@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   productionApi,
   type ExplodeLine,
+  type Completion,
   type WorkOrder,
   type WorkOrderLine,
 } from '@/api/production'
@@ -21,6 +22,7 @@ import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
 import BinCell from '@/components/BinCell.vue'
+import WorkOrderCompletionDialog from '@/components/WorkOrderCompletionDialog.vue'
 import { useBinStore } from '@/composables/useBinStore'
 
 const route = useRoute()
@@ -271,7 +273,79 @@ function canDo(action: DocAction): boolean {
   }
 }
 
-const actions = computed(() => (doc.value ? allowedActions(doc.value.status).filter(canDo) : []))
+// 分批完工的工單(有完工回報)只能用完工回報 / 結案,不顯示一次完工、反完工、取消核准、作廢
+const hasCompletions = computed(() => (doc.value?.completions.length ?? 0) > 0)
+const actions = computed(() =>
+  doc.value
+    ? allowedActions(doc.value.status)
+        .filter(canDo)
+        .filter(
+          (a) => !hasCompletions.value || !['post', 'unpost', 'unapprove', 'void'].includes(a),
+        )
+    : [],
+)
+
+// ---- 分批完工(D94) ----
+const canComplete = computed(
+  () => doc.value?.status === 'approved' && auth.can('production.order.post'),
+)
+const canClose = computed(
+  () =>
+    canComplete.value &&
+    Number(doc.value?.completed_qty ?? 0) > 0 &&
+    Number(doc.value?.completed_qty) < Number(doc.value?.plan_qty),
+)
+const showCompletions = computed(() => canComplete.value || hasCompletions.value)
+const completeDialog = ref(false)
+const completing = ref(false)
+
+function onCompleted(next: WorkOrder) {
+  applyDoc(next)
+}
+
+async function closeShort() {
+  if (!doc.value) return
+  try {
+    await ElMessageBox.confirm(
+      `目前只完工 ${doc.value.completed_qty} / ${doc.value.plan_qty},結案後剩餘的計畫量不會再生產,確定短交結案?`,
+      '短交結案',
+      { type: 'warning', confirmButtonText: '結案', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  completing.value = true
+  try {
+    applyDoc(await productionApi.closeOrder(doc.value.id, doc.value.version))
+    ElMessage.success('已結案')
+  } catch (e) {
+    handle(e)
+  } finally {
+    completing.value = false
+  }
+}
+
+async function voidCompletion(c: Completion) {
+  if (!doc.value) return
+  try {
+    await ElMessageBox.confirm(
+      `作廢完工回報 ${c.doc_no} 會沖銷這批的成品入庫與材料領用(成品若已被使用或出貨,庫存不足時會失敗),確定?`,
+      '作廢完工回報',
+      { type: 'warning', confirmButtonText: '作廢', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  completing.value = true
+  try {
+    applyDoc(await productionApi.voidCompletion(doc.value.id, c.id))
+    ElMessage.success('已作廢完工回報')
+  } catch (e) {
+    handle(e)
+  } finally {
+    completing.value = false
+  }
+}
 const acting = ref<DocAction | null>(null)
 
 const labels: Partial<Record<DocAction, string>> = { post: '完工', unpost: '反完工' }
@@ -575,6 +649,66 @@ autoClear(form)
       </el-table>
       <el-button v-if="editable" class="addline" @click="addLine">新增材料</el-button>
     </el-card>
+
+    <el-card v-if="doc && showCompletions" shadow="never" class="mb">
+      <template #header>
+        <div class="card-head">
+          分批完工:已完工 {{ doc.completed_qty }} / {{ doc.plan_qty }} {{ doc.unit_name }}
+          <el-button v-if="canComplete" size="small" type="primary" @click="completeDialog = true"
+            >完工回報</el-button
+          >
+          <el-button v-if="canClose" size="small" :loading="completing" @click="closeShort"
+            >短交結案</el-button
+          >
+        </div>
+      </template>
+      <el-table :data="doc.completions" border size="small" empty-text="還沒有完工回報">
+        <el-table-column prop="doc_no" label="回報單號" width="150" />
+        <el-table-column prop="doc_date" label="完工日" width="110" />
+        <el-table-column label="完工量" width="110" align="right">
+          <template #default="{ row }">{{ row.qty }} {{ doc.unit_name }}</template>
+        </el-table-column>
+        <el-table-column prop="processing_cost" label="加工費" width="110" align="right" />
+        <el-table-column label="成品批號" min-width="140">
+          <template #default="{ row }">
+            <span v-for="u in row.output_lots" :key="u.lot_no"
+              >{{ u.lot_no }}(效期 {{ u.expiry_date ?? '—' }})</span
+            >
+            <span v-if="!row.output_lots.length">{{ row.output_lot_no }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="領料" min-width="200">
+          <template #default="{ row }">
+            <div v-for="l in row.lines" :key="l.line_no">
+              {{ l.item_code }} × {{ l.qty }}
+              <span v-for="u in l.lots" :key="u.lot_no" class="muted"
+                >〔{{ u.lot_no }} × {{ u.qty }}〕</span
+              >
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="狀態" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'posted' ? 'success' : 'info'">{{
+              row.status === 'posted' ? '已過帳' : '已作廢'
+            }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.can('production.order.post')" label="操作" width="90">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.status === 'posted'"
+              link
+              type="danger"
+              :loading="completing"
+              @click="voidCompletion(row)"
+              >作廢</el-button
+            >
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+    <WorkOrderCompletionDialog v-if="doc" v-model="completeDialog" :doc="doc" @done="onCompleted" />
 
     <el-descriptions v-if="doc" :column="3" size="small" border>
       <el-descriptions-item label="建立">{{ doc.created_by_name }}</el-descriptions-item>

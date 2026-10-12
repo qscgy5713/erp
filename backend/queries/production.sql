@@ -80,6 +80,7 @@ WHERE b.company_id = @company_id AND l.item_id = @item_id ORDER BY i.code LIMIT 
 
 -- name: ListWorkOrders :many
 SELECT w.id, w.doc_no, w.doc_date, w.status, w.plan_qty, w.due_date, w.processing_cost, w.note, w.updated_at,
+       COALESCE((SELECT SUM(c.qty) FROM work_order_completions c WHERE c.work_order_id = w.id AND c.status = 'posted'), 0)::numeric AS completed_qty,
        i.code AS item_code, i.name AS item_name, u.name AS unit_name, wh.name AS warehouse_name,
        cu.name AS created_by_name
 FROM work_orders w
@@ -176,25 +177,42 @@ ORDER BY t.id;
 
 -- name: ProductionConsumption :many
 -- 期間內已過帳工單領用的材料:(成品, 材料) 的領用數量(負),含沖銷分錄所以反過帳的工單會互抵為 0
-SELECT w.item_id AS output_item_id, t.item_id AS material_id, SUM(t.qty)::numeric AS qty
-FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
-WHERE t.company_id = @company_id AND t.source_type = 'work_order_issue'
-  AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-GROUP BY w.item_id, t.item_id
-HAVING SUM(t.qty) <> 0;
+SELECT x.output_item_id, x.material_id, SUM(x.qty)::numeric AS qty FROM (
+    SELECT w.item_id AS output_item_id, t.item_id AS material_id, t.qty
+    FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
+    WHERE t.company_id = @company_id AND t.source_type = 'work_order_issue'
+      AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+    UNION ALL
+    SELECT w.item_id, t.item_id, t.qty
+    FROM inventory_transactions t
+    JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
+    WHERE t.company_id = @company_id AND t.source_type = 'wo_completion_issue'
+      AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+) x
+GROUP BY x.output_item_id, x.material_id
+HAVING SUM(x.qty) <> 0;
 
 -- name: ProductionProcessing :many
--- 期間內已完工(過帳中)的工單加工費,依成品彙總
-SELECT w.item_id, SUM(w.processing_cost)::numeric AS processing
-FROM work_orders w
-WHERE w.company_id = @company_id AND w.status = 'posted'
-  AND w.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-GROUP BY w.item_id;
+-- 期間內的加工費,依成品彙總:舊式一次完工的工單(已過帳、沒有完工回報)用工單加工費與工單日期,
+-- 分批完工的用各完工回報(未作廢)的本次加工費與回報日期
+SELECT x.item_id, SUM(x.processing)::numeric AS processing FROM (
+    SELECT w.item_id, w.processing_cost AS processing
+    FROM work_orders w
+    WHERE w.company_id = @company_id AND w.status = 'posted'
+      AND NOT EXISTS (SELECT 1 FROM work_order_completions c WHERE c.work_order_id = w.id)
+      AND w.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+    UNION ALL
+    SELECT w.item_id, c.processing_cost
+    FROM work_order_completions c JOIN work_orders w ON w.id = c.work_order_id
+    WHERE c.company_id = @company_id AND c.status = 'posted'
+      AND c.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+) x
+GROUP BY x.item_id;
 
 -- name: WritebackProduceCost :exec
 -- 完工入庫的單位成本 = 該成品當月的完工成本 ÷ 完工數量
 UPDATE inventory_transactions SET unit_cost = @unit_cost
-WHERE company_id = @company_id AND item_id = @item_id AND source_type = 'work_order_receipt'
+WHERE company_id = @company_id AND item_id = @item_id AND source_type IN ('work_order_receipt', 'wo_completion_receipt')
   AND doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date;
 
 -- name: ItemHasWorkOrders :one
@@ -235,14 +253,16 @@ WHERE o.company_id = @company_id AND o.status = 'approved' AND l.qty > rec.recei
 GROUP BY l.item_id;
 
 -- name: MrpWorkOrderSupply :many
--- 尚未完工(待審 / 已核准)的工單預計入庫量
-SELECT item_id, SUM(plan_qty)::numeric AS qty FROM work_orders
-WHERE company_id = @company_id AND status IN ('pending', 'approved') GROUP BY item_id;
+-- 尚未完工(待審 / 已核准)的工單預計入庫量(扣掉已分批完工的部分)
+SELECT w.item_id, SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
+LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
+WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY w.item_id;
 
 -- name: MrpWorkOrderDemand :many
--- 尚未完工(待審 / 已核准)的工單領料量
-SELECT l.item_id, SUM(l.qty)::numeric AS qty
+-- 尚未完工(待審 / 已核准)的工單領料量(依剩餘未完工比例;分批完工的工單只算還沒做的部分)
+SELECT l.item_id, SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
 FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
+LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
 WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY l.item_id;
 
 -- name: MrpOnHand :many
@@ -260,3 +280,49 @@ SELECT l.item_id AS main_id, s.item_id AS sub_id, s.ratio
 FROM bom_line_substitutes s
 JOIN bom_lines l ON l.bom_id = s.bom_id AND l.line_no = s.line_no
 WHERE s.bom_id = ANY(@bom_ids::bigint[]);
+
+-- ======== 工單分批完工(D94) ========
+
+-- name: CreateCompletion :one
+INSERT INTO work_order_completions (company_id, work_order_id, doc_no, doc_date, qty, processing_cost, output_lot_no, output_expiry,
+                                    output_bin_code, note, created_by)
+VALUES (@company_id, @work_order_id, @doc_no, @doc_date, @qty, @processing_cost, @output_lot_no, sqlc.narg(output_expiry),
+        @output_bin_code, @note, @actor_id)
+RETURNING *;
+
+-- name: AddCompletionLine :exec
+INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code)
+VALUES (@completion_id, @line_no, @item_id, @qty, @lot_no, @bin_code);
+
+-- name: LockCompletion :one
+SELECT * FROM work_order_completions WHERE id = @id AND work_order_id = @work_order_id AND company_id = @company_id FOR UPDATE;
+
+-- name: VoidCompletion :exec
+UPDATE work_order_completions SET status = 'voided', voided_by = @actor_id, voided_at = now() WHERE id = @id;
+
+-- name: ListCompletions :many
+SELECT c.*, cu.name AS created_by_name, vu.name AS voided_by_name
+FROM work_order_completions c
+LEFT JOIN users cu ON cu.id = c.created_by LEFT JOIN users vu ON vu.id = c.voided_by
+WHERE c.work_order_id = @work_order_id ORDER BY c.id;
+
+-- name: ListCompletionLines :many
+SELECT l.*, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+FROM work_order_completion_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_unit_id
+WHERE l.completion_id = @completion_id ORDER BY l.line_no;
+
+-- name: CompletedQty :one
+-- 工單目前有效的累計完工量
+SELECT COALESCE(SUM(qty), 0)::numeric FROM work_order_completions WHERE work_order_id = @work_order_id AND status = 'posted';
+
+-- name: CountCompletionsOfOrder :one
+-- 工單所有完工回報筆數(含已作廢):有任何紀錄就不能再用一次完工 / 反過帳
+SELECT count(*) FROM work_order_completions WHERE work_order_id = @work_order_id;
+
+-- name: ListCompletionLots :many
+-- 某次完工回報實際入庫與領用的批號
+SELECT t.source_type, t.item_id, l.lot_no, l.expiry_date, t.qty
+FROM inventory_transactions t JOIN item_lots l ON l.id = t.lot_id
+WHERE t.source_type IN ('wo_completion_issue', 'wo_completion_receipt') AND t.source_id = @completion_id
+  AND t.reversal_of IS NULL AND NOT EXISTS (SELECT 1 FROM inventory_transactions r WHERE r.reversal_of = t.id)
+ORDER BY t.id;

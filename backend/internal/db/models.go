@@ -1057,6 +1057,34 @@ type WorkOrder struct {
 	OutputBinCode       string
 }
 
+type WorkOrderCompletion struct {
+	ID             int64
+	CompanyID      int64
+	WorkOrderID    int64
+	DocNo          string
+	DocDate        time.Time
+	Qty            decimal.Decimal
+	ProcessingCost decimal.Decimal
+	OutputLotNo    string
+	OutputExpiry   *time.Time
+	OutputBinCode  string
+	Note           string
+	Status         string
+	CreatedBy      *int64
+	CreatedAt      time.Time
+	VoidedBy       *int64
+	VoidedAt       *time.Time
+}
+
+type WorkOrderCompletionLine struct {
+	CompletionID int64
+	LineNo       int32
+	ItemID       int64
+	Qty          decimal.Decimal
+	LotNo        string
+	BinCode      string
+}
+
 type WorkOrderLine struct {
 	WorkOrderID int64
 	LineNo      int32

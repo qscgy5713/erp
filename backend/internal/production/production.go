@@ -41,4 +41,9 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.PUT("/work-orders/:id", auth.Require(permission.WorkOrderWrite), m.updateOrder)
 	// 各動作的權限在 handler 內依動作判斷
 	g.POST("/work-orders/:id/actions/:action", orderRead, m.orderAction)
+	// 分批完工(D94):回報 / 作廢 / 結案都需要工單過帳權限
+	g.GET("/work-orders/:id/completion-preview", orderRead, m.completionPreview)
+	g.POST("/work-orders/:id/completions", auth.Require(permission.WorkOrderPost), m.createCompletion)
+	g.POST("/work-orders/:id/completions/:cid/void", auth.Require(permission.WorkOrderPost), m.voidCompletion)
+	g.POST("/work-orders/:id/close", auth.Require(permission.WorkOrderPost), m.closeOrder)
 }
