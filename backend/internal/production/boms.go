@@ -1,6 +1,7 @@
 package production
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,15 +56,32 @@ func WouldCycle(edges map[int64][]int64, parent int64, children []int64) bool {
 	return false
 }
 
-type bomLineDTO struct {
-	LineNo   int32           `json:"line_no"`
+// 替代料:1 單位主料可由 Ratio 單位替代料取代
+type substituteDTO struct {
 	ItemID   int64           `json:"item_id"`
 	ItemCode string          `json:"item_code"`
 	ItemName string          `json:"item_name"`
 	UnitName string          `json:"unit_name"`
-	Qty      decimal.Decimal `json:"qty"`
-	ScrapPct decimal.Decimal `json:"scrap_pct"` // 損耗率(%)
-	Note     string          `json:"note"`
+	Ratio    decimal.Decimal `json:"ratio"`
+}
+
+type substituteInput struct {
+	ItemID int64           `json:"item_id" binding:"required"`
+	Ratio  decimal.Decimal `json:"ratio"`
+}
+
+const maxSubstitutes = 5
+
+type bomLineDTO struct {
+	Substitutes []substituteDTO `json:"substitutes"`
+	LineNo      int32           `json:"line_no"`
+	ItemID      int64           `json:"item_id"`
+	ItemCode    string          `json:"item_code"`
+	ItemName    string          `json:"item_name"`
+	UnitName    string          `json:"unit_name"`
+	Qty         decimal.Decimal `json:"qty"`
+	ScrapPct    decimal.Decimal `json:"scrap_pct"` // 損耗率(%)
+	Note        string          `json:"note"`
 }
 
 type bomDTO struct {
@@ -94,10 +112,29 @@ func loadBom(c *gin.Context, q *db.Queries, companyID, id int64) (bomDTO, error)
 	if err != nil {
 		return bomDTO{}, err
 	}
+	subs, err := substitutesByLine(ctx, q, id)
+	if err != nil {
+		return bomDTO{}, err
+	}
 	out := bomDTO{ID: b.ID, ItemID: b.ItemID, ItemCode: b.ItemCode, ItemName: b.ItemName, UnitName: b.UnitName,
 		YieldQty: b.YieldQty, EffectiveFrom: b.EffectiveFrom.Format(time.DateOnly), IsActive: b.IsActive, Note: b.Note, Lines: make([]bomLineDTO, len(rows)), Version: b.Version}
 	for i, l := range rows {
-		out.Lines[i] = bomLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note}
+		out.Lines[i] = bomLineDTO{LineNo: l.LineNo, ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note, Substitutes: subs[l.LineNo]}
+		if out.Lines[i].Substitutes == nil {
+			out.Lines[i].Substitutes = []substituteDTO{}
+		}
+	}
+	return out, nil
+}
+
+func substitutesByLine(ctx context.Context, q *db.Queries, bomID int64) (map[int32][]substituteDTO, error) {
+	rows, err := q.ListBomSubstitutes(ctx, bomID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int32][]substituteDTO{}
+	for _, r := range rows {
+		out[r.LineNo] = append(out[r.LineNo], substituteDTO{ItemID: r.ItemID, ItemCode: r.ItemCode, ItemName: r.ItemName, UnitName: r.UnitName, Ratio: r.Ratio})
 	}
 	return out, nil
 }
@@ -157,6 +194,8 @@ type bomLineInput struct {
 	// 損耗率(%),0 ≤ x < 100,最多 2 位小數;空值視為 0
 	ScrapPct decimal.Decimal `json:"scrap_pct"`
 	Note     string          `json:"note" binding:"max=255"`
+	// 替代料(最多 5 個)
+	Substitutes []substituteInput `json:"substitutes" binding:"dive"`
 }
 
 type bomInput struct {
@@ -189,6 +228,9 @@ func validateBom(c *gin.Context, q *db.Queries, companyID, selfID int64, in *bom
 	ids := []int64{in.ItemID}
 	for _, l := range in.Lines {
 		ids = append(ids, l.ItemID)
+		for _, sb := range l.Substitutes {
+			ids = append(ids, sb.ItemID)
+		}
 	}
 	items, err := q.ListProductionItems(ctx, db.ListProductionItemsParams{CompanyID: companyID, Ids: ids})
 	if err != nil {
@@ -222,6 +264,34 @@ func validateBom(c *gin.Context, q *db.Queries, companyID, selfID int64, in *bom
 		seen[l.ItemID] = true
 		children = append(children, l.ItemID)
 	}
+	for i, l := range in.Lines {
+		key := "lines." + itoa(i)
+		if _, bad := fields[key]; bad {
+			continue
+		}
+		if len(l.Substitutes) > maxSubstitutes {
+			fields[key] = "每個材料最多 5 個替代料"
+			continue
+		}
+		subSeen := map[int64]bool{}
+		for _, sb := range l.Substitutes {
+			it, ok := byID[sb.ItemID]
+			switch {
+			case !ok || it.ItemType != "goods" || !it.IsActive:
+				fields[key] = "替代料須為啟用的商品類料品"
+			case sb.ItemID == in.ItemID:
+				fields[key] = "替代料不可是成品自己"
+			case seen[sb.ItemID]:
+				fields[key] = it.Code + " 已是這份 BOM 的材料,不可再當替代料"
+			case subSeen[sb.ItemID]:
+				fields[key] = it.Code + " 重複"
+			case !qtyOK(sb.Ratio):
+				fields[key] = "替代比例須大於 0,最多 4 位小數"
+			}
+			subSeen[sb.ItemID] = true
+			children = append(children, sb.ItemID)
+		}
+	}
 	if len(fields) > 0 {
 		return apperr.Validation(fields)
 	}
@@ -249,6 +319,11 @@ func saveBomLines(c *gin.Context, q *db.Queries, bomID int64, lines []bomLineInp
 	for i, l := range lines {
 		if err := q.AddBomLine(ctx, db.AddBomLineParams{BomID: bomID, LineNo: int32(i + 1), ItemID: l.ItemID, Qty: l.Qty, ScrapPct: l.ScrapPct, Note: l.Note}); err != nil {
 			return err
+		}
+		for _, sb := range l.Substitutes {
+			if err := q.AddBomSubstitute(ctx, db.AddBomSubstituteParams{BomID: bomID, LineNo: int32(i + 1), ItemID: sb.ItemID, Ratio: sb.Ratio}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

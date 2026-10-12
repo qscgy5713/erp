@@ -3,7 +3,12 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { productionApi, type WorkOrder, type WorkOrderLine } from '@/api/production'
+import {
+  productionApi,
+  type ExplodeLine,
+  type WorkOrder,
+  type WorkOrderLine,
+} from '@/api/production'
 import type { DocAction, ItemOption } from '@/api/inventory'
 import { masterdataApi, type LotControl, type Warehouse } from '@/api/masterdata'
 import { useAuthStore } from '@/stores/auth'
@@ -41,6 +46,8 @@ const today = () => {
 
 interface LineRow extends Omit<WorkOrderLine, 'item_id'> {
   item_id: number | null
+  /** 依 BOM 展開時帶入:主料與替代料的選項(qty 已換算),可一鍵改用 */
+  alternatives?: ExplodeLine[]
 }
 
 const form = reactive({
@@ -124,6 +131,9 @@ async function explode(force = false) {
       qty: l.qty,
       lot_no: '',
       note: '',
+      alternatives: l.substitutes?.length
+        ? [{ ...l, substitutes: undefined }, ...l.substitutes]
+        : undefined,
     }))
     manualLines.value = false
   } catch (e) {
@@ -151,6 +161,18 @@ function onPickMaterial(row: LineRow, item: ItemOption | null) {
   row.unit_name = item.base_unit_name
   row.item_lot_control = item.lot_control
   row.lot_no = ''
+}
+
+/** 改用替代料(或換回主料):換成該選項的料品與換算後的用量,批號與現有量重新來過 */
+function useAlternative(row: LineRow, alt: ExplodeLine) {
+  manualLines.value = true
+  row.item_id = alt.item_id
+  row.item_code = alt.item_code
+  row.item_name = alt.item_name
+  row.unit_name = alt.unit_name
+  row.qty = alt.qty
+  row.lot_no = ''
+  row.on_hand = undefined
 }
 
 function addLine() {
@@ -480,6 +502,26 @@ autoClear(form)
               @select="(it: ItemOption | null) => onPickMaterial(row, it)"
             />
             <span v-else>{{ row.item_code }} {{ row.item_name }}</span>
+            <el-dropdown
+              v-if="editable && row.alternatives"
+              trigger="click"
+              @command="(a: ExplodeLine) => useAlternative(row, a)"
+            >
+              <el-button link type="primary" size="small">替代料</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="a in row.alternatives.filter(
+                      (x: ExplodeLine) => x.item_id !== row.item_id,
+                    )"
+                    :key="a.item_id"
+                    :command="a"
+                  >
+                    {{ a.item_code }} {{ a.item_name }} × {{ a.qty }} {{ a.unit_name }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <div v-if="lineError($index)" class="err">{{ lineError($index) }}</div>
           </template>
         </el-table-column>

@@ -51,9 +51,20 @@ DELETE FROM bom_lines WHERE bom_id = @bom_id;
 INSERT INTO bom_lines (bom_id, line_no, item_id, qty, scrap_pct, note) VALUES (@bom_id, @line_no, @item_id, @qty, @scrap_pct, @note);
 
 -- name: AllBomEdges :many
--- 全公司所有 BOM 的 (成品 → 材料) 關係,檢查循環用
+-- 全公司所有 BOM 的 (成品 → 材料) 關係(含替代料),檢查循環用
 SELECT b.id AS bom_id, b.item_id AS parent_id, l.item_id AS child_id
-FROM boms b JOIN bom_lines l ON l.bom_id = b.id WHERE b.company_id = @company_id;
+FROM boms b JOIN bom_lines l ON l.bom_id = b.id WHERE b.company_id = @company_id
+UNION ALL
+SELECT b.id, b.item_id, s.item_id
+FROM boms b JOIN bom_line_substitutes s ON s.bom_id = b.id WHERE b.company_id = @company_id;
+
+-- name: ListBomSubstitutes :many
+SELECT s.line_no, s.item_id, s.ratio, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+FROM bom_line_substitutes s JOIN items i ON i.id = s.item_id JOIN units u ON u.id = i.base_unit_id
+WHERE s.bom_id = @bom_id ORDER BY s.line_no, i.code;
+
+-- name: AddBomSubstitute :exec
+INSERT INTO bom_line_substitutes (bom_id, line_no, item_id, ratio) VALUES (@bom_id, @line_no, @item_id, @ratio);
 
 -- name: ListProductionItems :many
 -- 檢查 BOM 與工單用:料品須為同公司、商品類、啟用

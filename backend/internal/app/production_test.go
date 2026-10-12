@@ -516,3 +516,73 @@ func TestMrp(t *testing.T) {
 		t.Fatalf("成品在途 = %+v", r)
 	}
 }
+
+// TestBomSubstitutes 替代料:驗證、展開時依比例換算、修改時整批取代、納入循環檢查。
+func TestBomSubstitutes(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, raw2, raw3, fg := p.item, e.seedItem("RAW2", "goods"), e.seedItem("RAW3", "goods"), e.seedItem("FG1", "goods")
+	sub := func(item int64, ratio string) map[string]any { return map[string]any{"item_id": item, "ratio": ratio} }
+	line := func(item int64, qty string, subs ...map[string]any) map[string]any {
+		return map[string]any{"item_id": item, "qty": qty, "substitutes": subs}
+	}
+	for name, subs := range map[string][]map[string]any{
+		"替代料是成品自己":   {sub(fg, "1")},
+		"替代料是別的材料":   {sub(raw3, "1")},
+		"替代料是自己這個材料": {sub(raw1, "1")},
+		"替代料重複":      {sub(raw2, "1"), sub(raw2, "2")},
+		"比例為零":       {sub(raw2, "0")},
+		"超過五個":       {sub(raw2, "1"), sub(e.seedItem("S2", "goods"), "1"), sub(e.seedItem("S3", "goods"), "1"), sub(e.seedItem("S4", "goods"), "1"), sub(e.seedItem("S5", "goods"), "1"), sub(e.seedItem("S6", "goods"), "1")},
+	} {
+		body := bomBody(fg, "1", line(raw1, "2", subs...), bl(raw3, "1"))
+		if res := c.do(http.MethodPost, "/production/boms", body); res.status != http.StatusUnprocessableEntity {
+			t.Errorf("%s → %d %s", name, res.status, res.code())
+		}
+	}
+	res := c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", line(raw1, "2", sub(raw2, "1.5")), bl(raw3, "1")))
+	expect(t, res, http.StatusCreated, "")
+	bom := decode[struct {
+		ID      int64 `json:"id"`
+		Version int32 `json:"version"`
+		Lines   []struct {
+			Substitutes []struct {
+				ItemID int64  `json:"item_id"`
+				Ratio  string `json:"ratio"`
+			} `json:"substitutes"`
+		} `json:"lines"`
+	}](t, res.Data)
+	if len(bom.Lines[0].Substitutes) != 1 || bom.Lines[0].Substitutes[0].ItemID != raw2 || bom.Lines[0].Substitutes[0].Ratio != "1.5" || len(bom.Lines[1].Substitutes) != 0 {
+		t.Fatalf("替代料 = %+v", bom.Lines)
+	}
+	// 展開:主料 10 個成品 × 2 = 20,替代料 20 × 1.5 = 30
+	res = c.do(http.MethodGet, "/production/work-orders/explode?item_id="+itoa(fg)+"&qty=10", nil)
+	expect(t, res, http.StatusOK, "")
+	ex := decode[[]struct {
+		ItemID      int64  `json:"item_id"`
+		Qty         string `json:"qty"`
+		Substitutes []struct {
+			ItemID int64  `json:"item_id"`
+			Qty    string `json:"qty"`
+		} `json:"substitutes"`
+	}](t, res.Data)
+	if ex[0].Qty != "20" || len(ex[0].Substitutes) != 1 || ex[0].Substitutes[0].ItemID != raw2 || ex[0].Substitutes[0].Qty != "30" || len(ex[1].Substitutes) != 0 {
+		t.Fatalf("展開 = %+v", ex)
+	}
+	// 修改:整批取代(raw3 改當替代料、raw2 改當主料)
+	body := bomBody(fg, "1", line(raw1, "2", sub(raw3, "1")), bl(raw2, "1"))
+	body["version"] = bom.Version
+	res = c.do(http.MethodPut, "/production/boms/"+itoa(bom.ID), body)
+	expect(t, res, http.StatusOK, "")
+	upd := decode[struct {
+		Lines []struct {
+			Substitutes []struct {
+				ItemID int64 `json:"item_id"`
+			} `json:"substitutes"`
+		} `json:"lines"`
+	}](t, res.Data)
+	if len(upd.Lines[0].Substitutes) != 1 || upd.Lines[0].Substitutes[0].ItemID != raw3 {
+		t.Fatalf("修改後替代料 = %+v", upd.Lines)
+	}
+	// 循環:raw3 的 BOM 用到成品,而成品的 BOM 以 raw3 為替代料
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(raw3, "1", bl(fg, "1"))), http.StatusUnprocessableEntity, "PRD-002")
+}

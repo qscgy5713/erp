@@ -169,6 +169,13 @@ type BomLine struct {
 	ScrapPct decimal.Decimal
 }
 
+type BomLineSubstitute struct {
+	BomID  int64
+	LineNo int32
+	ItemID int64
+	Ratio  decimal.Decimal
+}
+
 type Check struct {
 	ID           int64
 	CompanyID    int64

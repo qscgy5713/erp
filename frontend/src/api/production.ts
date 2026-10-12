@@ -2,7 +2,17 @@ import { http, qs, requestPage } from './http'
 import type { DocAction, DocStatus, LotUsed } from './inventory'
 import type { Decimal, LotControl } from './masterdata'
 
+/** 替代料:1 單位主料可由 ratio 單位替代料取代 */
+export interface BomSubstitute {
+  item_id: number
+  item_code?: string
+  item_name?: string
+  unit_name?: string
+  ratio: Decimal
+}
+
 export interface BomLine {
+  substitutes?: BomSubstitute[]
   line_no?: number
   item_id: number
   item_code?: string
@@ -47,7 +57,13 @@ export interface BomInput {
   effective_from: string
   is_active: boolean
   note: string
-  lines: { item_id: number; qty: Decimal; scrap_pct: Decimal; note: string }[]
+  lines: {
+    item_id: number
+    qty: Decimal
+    scrap_pct: Decimal
+    note: string
+    substitutes: { item_id: number; ratio: Decimal }[]
+  }[]
   version?: number
 }
 
@@ -136,6 +152,8 @@ export interface ExplodeLine {
   item_name: string
   unit_name: string
   qty: Decimal
+  /** 可改用的替代料,qty 已依替代比例換算 */
+  substitutes?: ExplodeLine[]
 }
 
 type Q = Record<string, string | number | boolean | null | undefined>

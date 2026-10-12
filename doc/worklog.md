@@ -1,5 +1,11 @@
 # 工作日誌
 
+## 2026-10-12 BOM 替代料(D90)
+- migration 33:`bom_line_substitutes`(隨 `bom_lines` 連動刪除,所以 BOM 儲存時「先刪明細再重建」會一併重建替代料)。
+- 後端:BOM 讀寫與驗證(上限 5 個、不可是成品 / 其他主料 / 重複、比例 > 0)、循環檢查含替代料、工單展開 API 回傳 `substitutes`(用量 = 主料用量 × 比例)。
+- 前端:BOM 編輯在每個材料下加替代料列;工單領料明細展開後出現「替代料」下拉,一鍵改用或換回。
+- 測試 `TestBomSubstitutes`:各種驗證、展開換算、整批取代、循環。
+
 ## 2026-10-12 MRP 需求計算(D89)
 - 使用者把「生產進階」的範圍交給我決定:先做風險最低、價值最高的 MRP(唯讀,不碰成本與庫存分錄),分批完工 / WIP / 委外 / 標準成本 / 替代料留待後續各自一輪。
 - 後端:`queries/production.sql` 新增五個彙整查詢(訂單未出、採購在途、工單在途與領料、現有庫存)與 `MrpActiveBoms`;`production/mrp.go` 的 `mrpCompute` 純函式依低階碼逐階計算;`GET /production/mrp?shortage_only=false`。

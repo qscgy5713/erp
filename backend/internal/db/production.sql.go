@@ -37,6 +37,27 @@ func (q *Queries) AddBomLine(ctx context.Context, arg AddBomLineParams) error {
 	return err
 }
 
+const addBomSubstitute = `-- name: AddBomSubstitute :exec
+INSERT INTO bom_line_substitutes (bom_id, line_no, item_id, ratio) VALUES ($1, $2, $3, $4)
+`
+
+type AddBomSubstituteParams struct {
+	BomID  int64
+	LineNo int32
+	ItemID int64
+	Ratio  decimal.Decimal
+}
+
+func (q *Queries) AddBomSubstitute(ctx context.Context, arg AddBomSubstituteParams) error {
+	_, err := q.db.Exec(ctx, addBomSubstitute,
+		arg.BomID,
+		arg.LineNo,
+		arg.ItemID,
+		arg.Ratio,
+	)
+	return err
+}
+
 const addWorkOrderLine = `-- name: AddWorkOrderLine :exec
 INSERT INTO work_order_lines (work_order_id, line_no, item_id, qty, lot_no, bin_code, note)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -68,6 +89,9 @@ func (q *Queries) AddWorkOrderLine(ctx context.Context, arg AddWorkOrderLinePara
 const allBomEdges = `-- name: AllBomEdges :many
 SELECT b.id AS bom_id, b.item_id AS parent_id, l.item_id AS child_id
 FROM boms b JOIN bom_lines l ON l.bom_id = b.id WHERE b.company_id = $1
+UNION ALL
+SELECT b.id, b.item_id, s.item_id
+FROM boms b JOIN bom_line_substitutes s ON s.bom_id = b.id WHERE b.company_id = $1
 `
 
 type AllBomEdgesRow struct {
@@ -76,7 +100,7 @@ type AllBomEdgesRow struct {
 	ChildID  int64
 }
 
-// 全公司所有 BOM 的 (成品 → 材料) 關係,檢查循環用
+// 全公司所有 BOM 的 (成品 → 材料) 關係(含替代料),檢查循環用
 func (q *Queries) AllBomEdges(ctx context.Context, companyID int64) ([]AllBomEdgesRow, error) {
 	rows, err := q.db.Query(ctx, allBomEdges, companyID)
 	if err != nil {
@@ -595,6 +619,48 @@ func (q *Queries) ListBomLines(ctx context.Context, bomID int64) ([]ListBomLines
 			&i.UnitName,
 			&i.ItemType,
 			&i.ItemActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBomSubstitutes = `-- name: ListBomSubstitutes :many
+SELECT s.line_no, s.item_id, s.ratio, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+FROM bom_line_substitutes s JOIN items i ON i.id = s.item_id JOIN units u ON u.id = i.base_unit_id
+WHERE s.bom_id = $1 ORDER BY s.line_no, i.code
+`
+
+type ListBomSubstitutesRow struct {
+	LineNo   int32
+	ItemID   int64
+	Ratio    decimal.Decimal
+	ItemCode string
+	ItemName string
+	UnitName string
+}
+
+func (q *Queries) ListBomSubstitutes(ctx context.Context, bomID int64) ([]ListBomSubstitutesRow, error) {
+	rows, err := q.db.Query(ctx, listBomSubstitutes, bomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBomSubstitutesRow{}
+	for rows.Next() {
+		var i ListBomSubstitutesRow
+		if err := rows.Scan(
+			&i.LineNo,
+			&i.ItemID,
+			&i.Ratio,
+			&i.ItemCode,
+			&i.ItemName,
+			&i.UnitName,
 		); err != nil {
 			return nil, err
 		}

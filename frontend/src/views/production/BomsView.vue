@@ -41,6 +41,7 @@ interface FormLine {
   qty: string
   scrap_pct: string
   note: string
+  substitutes: { item_id: number | null; label?: string; ratio: string }[]
 }
 
 const dialog = ref(false)
@@ -66,7 +67,7 @@ function openNew() {
     effective_from: '',
     is_active: true,
     note: '',
-    lines: [{ item_id: null, qty: '', scrap_pct: '0', note: '' }],
+    lines: [{ item_id: null, qty: '', scrap_pct: '0', note: '', substitutes: [] }],
   })
   dialog.value = true
 }
@@ -89,6 +90,11 @@ async function openEdit(row: BomRow) {
         qty: l.qty,
         scrap_pct: l.scrap_pct,
         note: l.note,
+        substitutes: (l.substitutes ?? []).map((s) => ({
+          item_id: s.item_id,
+          label: `${s.item_code} ${s.item_name}`,
+          ratio: s.ratio,
+        })),
       })),
     })
     dialog.value = true
@@ -113,6 +119,9 @@ async function save() {
         qty: l.qty === '' ? '0' : l.qty,
         scrap_pct: l.scrap_pct === '' ? '0' : l.scrap_pct,
         note: l.note,
+        substitutes: l.substitutes
+          .filter((s) => s.item_id !== null)
+          .map((s) => ({ item_id: s.item_id as number, ratio: s.ratio === '' ? '0' : s.ratio })),
       })),
     version: editing.value?.version,
   }
@@ -264,6 +273,29 @@ autoClear(form)
                 item-type="goods"
                 :disabled="!canWrite"
               />
+              <div v-for="(s, si) in row.substitutes" :key="si" class="sub">
+                <span class="muted">替代料</span>
+                <ItemPicker
+                  v-model="s.item_id"
+                  :label="s.label"
+                  item-type="goods"
+                  :disabled="!canWrite"
+                />
+                <el-input v-model="s.ratio" size="small" class="ratio" :disabled="!canWrite">
+                  <template #prefix>×</template>
+                </el-input>
+                <el-button v-if="canWrite" link type="danger" @click="row.substitutes.splice(si, 1)"
+                  >移除</el-button
+                >
+              </div>
+              <el-button
+                v-if="canWrite && row.substitutes.length < 5"
+                link
+                type="primary"
+                size="small"
+                @click="row.substitutes.push({ item_id: null, ratio: '1' })"
+                >+ 替代料</el-button
+              >
               <div v-if="lineError($index)" class="err">{{ lineError($index) }}</div>
             </template>
           </el-table-column>
@@ -289,7 +321,9 @@ autoClear(form)
         <el-button
           v-if="canWrite"
           class="addline"
-          @click="form.lines.push({ item_id: null, qty: '', scrap_pct: '0', note: '' })"
+          @click="
+            form.lines.push({ item_id: null, qty: '', scrap_pct: '0', note: '', substitutes: [] })
+          "
           >新增材料</el-button
         >
       </el-form>
@@ -302,6 +336,15 @@ autoClear(form)
 </template>
 
 <style scoped>
+.sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ratio {
+  width: 90px;
+}
 .hint {
   color: var(--el-text-color-secondary);
   font-size: 12px;

@@ -238,6 +238,8 @@ type explodeLineDTO struct {
 	ItemName string          `json:"item_name"`
 	UnitName string          `json:"unit_name"`
 	Qty      decimal.Decimal `json:"qty"`
+	// 可改用的替代料,qty 已依替代比例換算
+	Substitutes []explodeLineDTO `json:"substitutes,omitempty"`
 }
 
 // explodeLines 依「工單日期適用的 BOM」(已生效且啟用中、生效日最晚的一份)展開。
@@ -260,10 +262,21 @@ func explodeLines(ctx context.Context, q *db.Queries, companyID, itemID int64, p
 	if err != nil {
 		return nil, err
 	}
+	subs, err := substitutesByLine(ctx, q, bom.ID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]explodeLineDTO, len(rows))
 	for i, l := range rows {
-		out[i] = explodeLineDTO{ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName,
-			Qty: ExplodeQty(l.Qty, bom.YieldQty, planQty, l.ScrapPct)}
+		qty := ExplodeQty(l.Qty, bom.YieldQty, planQty, l.ScrapPct)
+		out[i] = explodeLineDTO{ItemID: l.ItemID, ItemCode: l.ItemCode, ItemName: l.ItemName, UnitName: l.UnitName, Qty: qty}
+		for _, sb := range subs[l.LineNo] {
+			sq := qty.Mul(sb.Ratio).Round(money.QuantityPlaces)
+			if !sq.IsPositive() {
+				sq = decimal.New(1, -money.QuantityPlaces)
+			}
+			out[i].Substitutes = append(out[i].Substitutes, explodeLineDTO{ItemID: sb.ItemID, ItemCode: sb.ItemCode, ItemName: sb.ItemName, UnitName: sb.UnitName, Qty: sq})
+		}
 	}
 	return out, nil
 }
