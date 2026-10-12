@@ -9,6 +9,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/shopspring/decimal"
+
+	"erp/internal/db"
 )
 
 type trialRow struct {
@@ -790,4 +795,78 @@ func TestProjectPnl(t *testing.T) {
 	expect(t, c.do(http.MethodPost, "/gl/vouchers", manualVoucher("2026-10-06",
 		map[string]any{"account_id": cash, "debit": "10", "credit": "0"},
 		map[string]any{"account_id": sales, "debit": "0", "credit": "10", "project_id": bad})), http.StatusUnprocessableEntity, "SYS-422")
+}
+
+// 外幣期末重估:月底匯率重估外幣應付,下一期沖回上期後重新估算;只能依序、可撤銷最近一次(D86)。
+func TestFxRevaluation(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	usd := e.seedSupplier("S2", "USD")
+	for date, rate := range map[string]string{"2026-08-01": "30", "2026-08-31": "31", "2026-09-30": "32"} {
+		d, _ := time.Parse(time.DateOnly, date)
+		if _, err := e.q.CreateExchangeRate(context.Background(), db.CreateExchangeRateParams{
+			CompanyID: 1, Currency: "USD", RateDate: d, Rate: decimal.RequireFromString(rate),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gr, res := c.createPur(receipts, p.header(map[string]any{
+		"doc_type": "receipt", "supplier_id": usd, "currency": "USD", "doc_date": "2026-08-15",
+		"lines": []map[string]any{line(p.item, e.unitID("PCS"), "10", "10", nil)}, // 100 USD + 稅 5 = 105 USD
+	}))
+	expect(t, res, http.StatusCreated, "")
+	c.approvePur(receipts, &gr)
+	expect(t, c.actPur(receipts, &gr, "post"), http.StatusOK, "")
+
+	bal := func(code string) string {
+		var v string
+		if err := e.pool.QueryRow(context.Background(),
+			`SELECT COALESCE(SUM(l.debit - l.credit), 0)::numeric(18,0)::text FROM voucher_lines l JOIN accounts a ON a.id = l.account_id WHERE a.code = $1`, code).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	type preview struct {
+		ApDiff  string `json:"ap_diff"`
+		NetGain string `json:"net_gain"`
+		Rows    []struct {
+			Currency   string `json:"currency"`
+			ApCarrying string `json:"ap_carrying"`
+		} `json:"rows"`
+	}
+	res = c.do(http.MethodGet, "/gl/revaluation?period=2026-08", nil)
+	expect(t, res, http.StatusOK, "")
+	pv := decode[preview](t, res.Data)
+	if len(pv.Rows) != 1 || pv.Rows[0].Currency != "USD" || pv.Rows[0].ApCarrying != "3150" || pv.ApDiff != "105" || pv.NetGain != "-105" {
+		t.Fatalf("8 月試算 %+v", pv)
+	}
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-13", nil), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2099-01", nil), http.StatusConflict, "GL-071")
+
+	// 8 月重估:借 未實現兌換損失 105、貸 應付 105
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-08", nil), http.StatusCreated, "")
+	if bal("7103") != "105" || bal("2101") != "-3255" {
+		t.Fatalf("8 月重估後 損失 %s 應付 %s", bal("7103"), bal("2101"))
+	}
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-08", nil), http.StatusConflict, "GL-070")
+
+	// 9 月重估:沖回 8 月的 105,再依 32 重估(差額 210)→ 損失淨 210、應付 3360 = 105 × 32
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-09", nil), http.StatusCreated, "")
+	if bal("7103") != "210" || bal("2101") != "-3360" {
+		t.Fatalf("9 月重估後 損失 %s 應付 %s", bal("7103"), bal("2101"))
+	}
+	// 只能撤銷最近一次
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-08/undo", nil), http.StatusConflict, "GL-072")
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-09/undo", nil), http.StatusNoContent, "")
+	if bal("7103") != "105" || bal("2101") != "-3255" {
+		t.Fatalf("撤銷 9 月後 損失 %s 應付 %s", bal("7103"), bal("2101"))
+	}
+	// 撤銷後可重做 9 月
+	expect(t, c.do(http.MethodPost, "/gl/revaluation/2026-09", nil), http.StatusCreated, "")
+	if bal("7103") != "210" {
+		t.Fatalf("重做後 損失 %s", bal("7103"))
+	}
+	// 權限
+	e.seedUser("nobody", pw, false, false)
+	expect(t, e.loggedIn("nobody", pw).do(http.MethodPost, "/gl/revaluation/2026-09", nil), http.StatusForbidden, "SYS-403")
 }

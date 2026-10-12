@@ -35,6 +35,8 @@ var MappingKeys = []struct{ Key, Label string }{
 	{"settle.advance_paid", "付款:預付款項"},
 	{"settle.notes_receivable", "收款:應收票據(支票)"},
 	{"settle.notes_payable", "付款:應付票據(支票)"},
+	{"fx.unrealized_gain", "外幣期末重估:未實現兌換利益"},
+	{"fx.unrealized_loss", "外幣期末重估:未實現兌換損失"},
 	{"fx.gain", "外幣收付款:兌換利益"},
 	{"fx.loss", "外幣收付款:兌換損失"},
 }

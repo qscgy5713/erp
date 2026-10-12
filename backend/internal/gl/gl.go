@@ -65,6 +65,10 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/projects", auth.Require(permission.AccountWrite), m.createProject)
 	g.PUT("/projects/:id", auth.Require(permission.AccountWrite), m.updateProject)
 
+	g.GET("/revaluation", auth.Require(permission.PeriodRead, permission.PeriodClose), m.revaluationPreview)
+	g.POST("/revaluation/:period", auth.Require(permission.PeriodClose), m.runRevaluation)
+	g.POST("/revaluation/:period/undo", auth.Require(permission.PeriodClose), m.undoRevaluation)
+
 	g.GET("/periods", auth.Require(permission.PeriodRead, permission.PeriodClose), m.listPeriods)
 	g.POST("/periods/:period/:action", auth.Require(permission.PeriodClose), m.changePeriod)
 

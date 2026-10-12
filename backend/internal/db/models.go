@@ -351,6 +351,19 @@ type ExchangeRate struct {
 	UpdatedAt time.Time
 }
 
+type FxRevaluation struct {
+	ID                int64
+	CompanyID         int64
+	Period            string
+	Status            string
+	ArDiff            decimal.Decimal
+	ApDiff            decimal.Decimal
+	VoucherID         *int64
+	PrevRevaluationID *int64
+	CreatedBy         *int64
+	CreatedAt         time.Time
+}
+
 type GoodsReceipt struct {
 	ID            int64
 	CompanyID     int64

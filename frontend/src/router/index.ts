@@ -396,6 +396,11 @@ const router = createRouter({
       meta: { title: '會計期間', perm: ['gl.period.read', 'gl.period.close'] },
     },
     {
+      path: '/gl/revaluation',
+      component: () => import('@/views/gl/RevaluationView.vue'),
+      meta: { title: '外幣期末重估', perm: ['gl.period.read', 'gl.period.close'] },
+    },
+    {
       path: '/gl/projects',
       component: () => import('@/views/gl/ProjectsView.vue'),
       meta: { title: '專案', perm: ['gl.account.read', 'gl.account.write'] },

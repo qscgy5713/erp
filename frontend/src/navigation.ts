@@ -156,6 +156,7 @@ export const navigation: NavItem[] = [
       { title: '營業稅申報', path: '/gl/vat', perm: ['gl.report.read'] },
       { title: '對帳檢查', path: '/costing/reconcile', perm: ['costing.read', 'costing.close'] },
       { title: '會計期間', path: '/gl/periods', perm: ['gl.period.read', 'gl.period.close'] },
+      { title: '外幣重估', path: '/gl/revaluation', perm: ['gl.period.read', 'gl.period.close'] },
       { title: '會計科目', path: '/gl/accounts', perm: ['gl.account.read', 'gl.account.write'] },
       { title: '專案', path: '/gl/projects', perm: ['gl.account.read', 'gl.account.write'] },
       { title: '拋轉規則', path: '/gl/mappings', perm: ['gl.account.read', 'gl.account.write'] },

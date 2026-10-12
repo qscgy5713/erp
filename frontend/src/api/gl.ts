@@ -211,6 +211,8 @@ export const sourceLabels: Record<string, string> = {
   cost_closing: '月結成本',
   year_end: '年度結帳',
   opening_balance: '期初科目餘額',
+  fx_reval: '外幣重估',
+  fx_reval_rev: '外幣重估沖回',
 }
 
 export interface VoucherLine {
@@ -348,7 +350,40 @@ export interface JournalRow {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface RevalRow {
+  currency: string
+  rate: Decimal
+  ar_foreign: Decimal
+  ar_carrying: Decimal
+  ar_revalued: Decimal
+  ap_foreign: Decimal
+  ap_carrying: Decimal
+  ap_revalued: Decimal
+}
+
+export interface RevalHistory {
+  id: number
+  period: string
+  status: 'active' | 'undone'
+  ar_diff: Decimal
+  ap_diff: Decimal
+  voucher_id: number | null
+}
+
+export interface RevalPreview {
+  period?: string
+  as_of?: string
+  rows?: RevalRow[]
+  ar_diff?: Decimal
+  ap_diff?: Decimal
+  net_gain?: Decimal
+  history: RevalHistory[]
+}
+
 export const glApi = {
+  revaluation: (period?: string) => http.get<RevalPreview>(`/gl/revaluation${qs({ period })}`),
+  runRevaluation: (period: string) => http.post<RevalHistory>(`/gl/revaluation/${period}`, {}),
+  undoRevaluation: (period: string) => http.post<void>(`/gl/revaluation/${period}/undo`, {}),
   accounts: (q: Q = {}) => http.get<Account[]>(`/gl/accounts${qs(q)}`),
   accountOptions: (keyword = '') =>
     http.get<AccountOption[]>(`/gl/account-options${qs({ keyword })}`),
