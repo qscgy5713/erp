@@ -253,3 +253,10 @@ SELECT item_id, SUM(qty)::numeric AS qty FROM inventory_balances WHERE company_i
 SELECT DISTINCT ON (item_id) id, item_id, yield_qty FROM boms
 WHERE company_id = @company_id AND is_active AND effective_from <= @on_date
 ORDER BY item_id, effective_from DESC;
+
+-- name: MrpSubstituteEdges :many
+-- 指定 BOM 的替代料關係:主料 → 替代料(ratio = 1 單位主料需幾單位替代料),MRP 缺料時提示用
+SELECT l.item_id AS main_id, s.item_id AS sub_id, s.ratio
+FROM bom_line_substitutes s
+JOIN bom_lines l ON l.bom_id = s.bom_id AND l.line_no = s.line_no
+WHERE s.bom_id = ANY(@bom_ids::bigint[]);

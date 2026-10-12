@@ -64,7 +64,7 @@ onMounted(load)
       <el-table-column label="淨需求" width="100" align="right">
         <template #default="{ row }">{{ num(row.net) }}</template>
       </el-table-column>
-      <el-table-column label="建議" width="130" fixed="right">
+      <el-table-column label="建議" width="190" fixed="right">
         <template #default="{ row }">
           <el-tag v-if="row.action === 'make'" type="warning"
             >生產 {{ num(row.suggested_qty) }}</el-tag
@@ -73,8 +73,27 @@ onMounted(load)
             >採購 {{ num(row.suggested_qty) }}</el-tag
           >
           <span v-else class="muted">夠用</span>
+          <el-popover v-if="row.substitutes.length" placement="left" :width="300" trigger="hover">
+            <template #reference>
+              <el-tag type="success" effect="plain" class="sub-tag">可替代</el-tag>
+            </template>
+            <div v-for="s in row.substitutes" :key="s.item_id" class="sub-line">
+              {{ s.item_code }} {{ s.item_name }}:剩餘 {{ num(s.free_qty) }},可頂替
+              {{ num(s.covers) }} {{ row.unit_name }}(1:{{ num(s.ratio) }})
+            </div>
+            <div class="muted">僅供參考,不影響上方建議量</div>
+          </el-popover>
         </template>
       </el-table-column>
     </el-table>
   </div>
 </template>
+
+<style scoped>
+.sub-tag {
+  margin-left: 6px;
+}
+.sub-line {
+  margin-bottom: 4px;
+}
+</style>

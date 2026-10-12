@@ -38,6 +38,45 @@ type mrpRow struct {
 	Net          decimal.Decimal `json:"net"`           // 淨需求(≤ 0 代表夠用)
 	Action       string          `json:"action"`        // make 生產 / buy 採購 / none 夠用
 	SuggestedQty decimal.Decimal `json:"suggested_qty"` // 建議數量(= max(淨需求, 0))
+	// 缺料時的替代料提示(只供參考,不影響淨需求與建議量)
+	Substitutes []mrpSubstitute `json:"substitutes"`
+}
+
+// mrpSubstitute 主料的替代料:FreeQty 為替代料自己的需求都扣掉後的剩餘供給,Covers 為它能頂替多少主料。
+type mrpSubstitute struct {
+	ItemID   int64           `json:"item_id"`
+	ItemCode string          `json:"item_code"`
+	ItemName string          `json:"item_name"`
+	Ratio    decimal.Decimal `json:"ratio"`
+	FreeQty  decimal.Decimal `json:"free_qty"`
+	Covers   decimal.Decimal `json:"covers"`
+}
+
+type subEdge struct {
+	mainID, subID int64
+	ratio         decimal.Decimal
+}
+
+// attachSubstitutes 對「淨需求 > 0」的料品附上替代料提示。替代料可用量 = 現有 + 採購在途 + 工單在途
+// − 它自己的毛需求(須在 mrpCompute 之後才是定案值);同一替代料被多個主料共用時各自顯示,不互相扣。
+func attachSubstitutes(rows []mrpRow, edges []subEdge) {
+	byID := map[int64]*mrpRow{}
+	for i := range rows {
+		byID[rows[i].ItemID] = &rows[i]
+	}
+	for _, e := range edges {
+		main, sub := byID[e.mainID], byID[e.subID]
+		if main == nil || sub == nil || !main.Net.IsPositive() {
+			continue
+		}
+		free := sub.OnHand.Add(sub.IncomingPO).Add(sub.IncomingWO).
+			Sub(sub.SalesDemand).Sub(sub.WoDemand).Sub(sub.PlanDemand).Sub(sub.SafetyStock)
+		if !free.IsPositive() {
+			continue
+		}
+		main.Substitutes = append(main.Substitutes, mrpSubstitute{ItemID: sub.ItemID, ItemCode: sub.ItemCode, ItemName: sub.ItemName,
+			Ratio: e.ratio, FreeQty: free, Covers: free.Div(e.ratio).Round(money.QuantityPlaces)})
+	}
 }
 
 type bomChild struct {
@@ -171,7 +210,7 @@ func (m *Module) mrp(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	bom, err := loadBomGraph(ctx, q, companyID, time.Now().In(time.FixedZone("TST", 8*3600)))
+	bom, bomIDs, err := loadBomGraph(ctx, q, companyID, time.Now().In(time.FixedZone("TST", 8*3600)))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -183,10 +222,23 @@ func (m *Module) mrp(c *gin.Context) {
 		qtyMap(woS, func(r db.MrpWorkOrderSupplyRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
 		qtyMap(onHand, func(r db.MrpOnHandRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
 		bom)
+	subRows, err := q.MrpSubstituteEdges(ctx, bomIDs)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	edges := make([]subEdge, len(subRows))
+	for i, r := range subRows {
+		edges[i] = subEdge{r.MainID, r.SubID, r.Ratio}
+	}
+	attachSubstitutes(rows, edges)
 	out := []mrpRow{}
 	for _, r := range rows {
 		busy := r.SalesDemand.IsPositive() || r.WoDemand.IsPositive() || r.PlanDemand.IsPositive() ||
 			r.SafetyStock.IsPositive() || r.OnHand.IsPositive() || r.IncomingPO.IsPositive() || r.IncomingWO.IsPositive()
+		if r.Substitutes == nil {
+			r.Substitutes = []mrpSubstitute{}
+		}
 		if r.Action != "none" || (c.Query("shortage_only") == "false" && busy) {
 			out = append(out, r)
 		}
@@ -194,20 +246,23 @@ func (m *Module) mrp(c *gin.Context) {
 	response.OK(c, out)
 }
 
-// loadBomGraph 今天適用的各成品 BOM(已生效、啟用中、生效日最晚的一份)展開成「成品 → 材料」。
-func loadBomGraph(ctx context.Context, q *db.Queries, companyID int64, on time.Time) (map[int64][]bomChild, error) {
+// loadBomGraph 今天適用的各成品 BOM(已生效、啟用中、生效日最晚的一份)展開成「成品 → 材料」,
+// 並回傳這些 BOM 的 id(查替代料用)。
+func loadBomGraph(ctx context.Context, q *db.Queries, companyID int64, on time.Time) (map[int64][]bomChild, []int64, error) {
 	boms, err := q.MrpActiveBoms(ctx, db.MrpActiveBomsParams{CompanyID: companyID, OnDate: on})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := map[int64][]bomChild{}
+	ids := make([]int64, 0, len(boms))
 	for _, b := range boms {
+		ids = append(ids, b.ID)
 		lines, err := q.ListBomLines(ctx, b.ID)
 		if err != nil {
 			if database.IsNoRows(err) {
 				continue
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		for _, l := range lines {
 			yield, bomQty, scrap := b.YieldQty, l.Qty, l.ScrapPct
@@ -216,5 +271,5 @@ func loadBomGraph(ctx context.Context, q *db.Queries, companyID int64, on time.T
 			}})
 		}
 	}
-	return out, nil
+	return out, ids, nil
 }

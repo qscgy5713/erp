@@ -1226,6 +1226,40 @@ func (q *Queries) MrpSalesDemand(ctx context.Context, companyID int64) ([]MrpSal
 	return items, nil
 }
 
+const mrpSubstituteEdges = `-- name: MrpSubstituteEdges :many
+SELECT l.item_id AS main_id, s.item_id AS sub_id, s.ratio
+FROM bom_line_substitutes s
+JOIN bom_lines l ON l.bom_id = s.bom_id AND l.line_no = s.line_no
+WHERE s.bom_id = ANY($1::bigint[])
+`
+
+type MrpSubstituteEdgesRow struct {
+	MainID int64
+	SubID  int64
+	Ratio  decimal.Decimal
+}
+
+// 指定 BOM 的替代料關係:主料 → 替代料(ratio = 1 單位主料需幾單位替代料),MRP 缺料時提示用
+func (q *Queries) MrpSubstituteEdges(ctx context.Context, bomIds []int64) ([]MrpSubstituteEdgesRow, error) {
+	rows, err := q.db.Query(ctx, mrpSubstituteEdges, bomIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpSubstituteEdgesRow{}
+	for rows.Next() {
+		var i MrpSubstituteEdgesRow
+		if err := rows.Scan(&i.MainID, &i.SubID, &i.Ratio); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const mrpWorkOrderDemand = `-- name: MrpWorkOrderDemand :many
 SELECT l.item_id, SUM(l.qty)::numeric AS qty
 FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id

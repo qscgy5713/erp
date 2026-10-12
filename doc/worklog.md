@@ -13,7 +13,12 @@
 - 多租戶真實後端(另起獨立 API 於 18081 + 控制庫 `erp_control` + 租戶 alpha/beta,測完已移除容器與資料庫):`create-tenant`/`list-tenants` 正常;登入必填租戶,租戶不存在/非法代碼/無租戶一律回「帳號或密碼錯誤」,代碼大小寫不拘;兩租戶可有同代號客戶,資料實際落在各自資料庫互不可見;`X-Tenant` 標頭無法覆寫、竄改 token 內租戶 → 401;refresh cookie 前綴帶租戶;`disable-tenant` 後既有 token 與登入皆 401(其他租戶不受影響),`enable-tenant` 後恢復;2FA 挑戰綁租戶(跨租戶 401),TOTP 同碼不可重放。
 - MRP:`shortage_only=false` 由 3 筆增為 4 筆,開關有效。
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
-- 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。目前定位為桌面版 ERP,**未改**,列為待決定。
+- 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
+
+## 2026-10-12 窄螢幕版面與 MRP 替代料提示
+
+- 窄螢幕:`AppLayout.vue` 在 <768px 改抽屜選單(☰),換頁自動收起;主內容全寬、對話框不超出螢幕。以 390px iframe 驗證。
+- MRP 替代料提示:`GET /production/mrp` 每列新增 `substitutes`(缺料主料才有;含替代料剩餘 `free_qty`、可頂替 `covers`、`ratio`),前端在建議欄顯示「可替代」並以 popover 列出。僅提示,不改淨需求與建議量。新增 sqlc 查詢 `MrpSubstituteEdges`、純函式 `attachSubstitutes` 與單元測試;用真實資料驗證(D-ITEM 缺 20,替代料 MILK-01 剩餘 24、ratio 2 → 可頂替 12)。
 
 ## 2026-10-12 瀏覽器實測(多角色權限)
 - 建立測試角色 T_VIEWER / T_MAKER / T_APPROVER / T_POSTER / T_COSTSTD / T_COSTRO / T_APRADMIN 與帳號 t_*(開發庫,密碼只在暫存檔),用 Chrome 實測。

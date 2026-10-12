@@ -174,6 +174,14 @@ export interface MrpRow {
   net: Decimal
   action: 'make' | 'buy' | 'none'
   suggested_qty: Decimal
+  substitutes: {
+    item_id: number
+    item_code: string
+    item_name: string
+    ratio: Decimal
+    free_qty: Decimal
+    covers: Decimal
+  }[]
 }
 
 export const productionApi = {

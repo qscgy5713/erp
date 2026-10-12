@@ -48,3 +48,27 @@ func TestMrpCompute(t *testing.T) {
 		t.Fatalf("M = %+v", m)
 	}
 }
+
+func TestAttachSubstitutes(t *testing.T) {
+	// 主料 M(1) 缺 10;替代料 A(2) 庫存 30、自己有 5 的銷售需求,ratio 2(1 個 M 要 2 個 A);
+	// B(3) 沒有剩餘;C(4) 是夠用主料的替代料(不附提示)
+	rows := []mrpRow{
+		{ItemID: 1, ItemCode: "M", Net: d("10")},
+		{ItemID: 2, ItemCode: "A", OnHand: d("30"), SalesDemand: d("5")},
+		{ItemID: 3, ItemCode: "B", OnHand: d("4"), SafetyStock: d("4")},
+		{ItemID: 4, ItemCode: "C", OnHand: d("9")},
+		{ItemID: 5, ItemCode: "N", Net: d("-3")},
+	}
+	attachSubstitutes(rows, []subEdge{
+		{1, 2, d("2")}, {1, 3, d("1")}, {5, 4, d("1")}, {1, 99, d("1")},
+	})
+	if len(rows[0].Substitutes) != 1 {
+		t.Fatalf("M 替代料 = %+v", rows[0].Substitutes)
+	}
+	if s := rows[0].Substitutes[0]; s.ItemCode != "A" || !s.FreeQty.Equal(d("25")) || !s.Covers.Equal(d("12.5")) {
+		t.Fatalf("A = %+v", s)
+	}
+	if len(rows[4].Substitutes) != 0 {
+		t.Fatalf("夠用的主料不該有提示: %+v", rows[4].Substitutes)
+	}
+}
