@@ -1,4 +1,4 @@
-import { http, qs, requestPage, type PageMeta } from './http'
+import { download, http, qs, requestPage, type PageMeta } from './http'
 import type { DocAction, DocStatus } from './inventory'
 import type { Decimal } from './masterdata'
 
@@ -158,6 +158,8 @@ export const settlementApi = {
   action: (side: SettleSide, id: number, action: DocAction, version: number) =>
     http.post<Settlement>(`/finance/${side}s/${id}/actions/${action}`, { version }),
   statement: (q: Q) => http.get<Statement>(`/finance/statements${qs(q)}`),
+  exportStatement: (q: Q, name: string) =>
+    download(`/finance/statements${qs({ ...q, format: 'xlsx' })}`, name),
   aging: (side: LedgerKind, asOf?: string) =>
     http.get<{ as_of: string; rows: AgingRow[] }>(`/finance/aging${qs({ side, as_of: asOf })}`),
 }

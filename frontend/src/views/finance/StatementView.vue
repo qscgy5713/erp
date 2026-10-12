@@ -72,6 +72,27 @@ const money = (v: string) =>
 const increase = (r: StatementRow) => (Number(r.delta) > 0 ? money(r.delta) : '')
 const decrease = (r: StatementRow) => (Number(r.delta) < 0 ? money(String(-Number(r.delta))) : '')
 const print = () => window.print()
+const exporting = ref(false)
+async function exportExcel() {
+  if (!result.value) return
+  exporting.value = true
+  try {
+    await settlementApi.exportStatement(
+      {
+        side: kind,
+        partner_id: result.value.partner_id,
+        currency: result.value.currency,
+        from: result.value.from,
+        to: result.value.to,
+      },
+      `對帳單_${result.value.partner_code}_${result.value.from}_${result.value.to}.xlsx`,
+    )
+  } catch (e) {
+    handle(e)
+  } finally {
+    exporting.value = false
+  }
+}
 const title = computed(() => (isAR ? '應收對帳單' : '應付對帳單'))
 </script>
 
@@ -98,6 +119,7 @@ const title = computed(() => (isAR ? '應收對帳單' : '應付對帳單'))
       <el-button type="primary" :loading="loading" @click="run">查詢</el-button>
       <span v-if="hint" class="err">{{ hint }}</span>
       <span class="spacer" />
+      <el-button v-if="result" :loading="exporting" @click="exportExcel">匯出 Excel</el-button>
       <el-button v-if="result" @click="print">列印</el-button>
     </div>
 

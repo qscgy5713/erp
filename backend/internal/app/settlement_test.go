@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type settleDoc struct {
@@ -253,6 +256,28 @@ func TestStatementAndAging(t *testing.T) {
 	}](t, stmt.Data)
 	if st.Opening != "0" || st.Closing != "3200" || len(st.Rows) != 3 || st.Rows[2].Kind != "receipt" || st.Rows[2].Delta != "-1000" {
 		t.Fatalf("statement = %+v", st)
+	}
+	// 匯出 Excel:內容與畫面上的對帳單一致(期初、明細、期末)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/finance/statements?side=receivable&partner_id="+itoa(s.cust)+"&currency=TWD&from=2026-10-01&to=2026-10-31&format=xlsx", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	w := httptest.NewRecorder()
+	e.r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Header().Get("Content-Disposition"), "xlsx") {
+		t.Fatalf("匯出失敗 %d %s", w.Code, w.Body.String())
+	}
+	xf, err := excelize.OpenReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = xf.Close() }()
+	cell := func(ref string) string {
+		v, _ := xf.GetCellValue("對帳單", ref, excelize.Options{RawCellValue: true})
+		return v
+	}
+	// 第 6 列期初、第 7–9 列三筆明細、第 10 列期末
+	if cell("A1") != "客戶對帳單" || cell("A6") != "期初餘額" || cell("E6") != "0" ||
+		cell("B9") != "收款" || cell("D9") != "-1000" || cell("A10") != "期末餘額" || cell("E10") != "3200" {
+		t.Fatalf("Excel 內容: A1=%q E6=%q B9=%q D9=%q A10=%q E10=%q", cell("A1"), cell("E6"), cell("B9"), cell("D9"), cell("A10"), cell("E10"))
 	}
 	// 期初:查詢區間在單據日期之後 → 期初 3200、無明細
 	late := c.do(http.MethodGet, "/finance/statements?side=receivable&partner_id="+itoa(s.cust)+"&currency=TWD&from=2026-11-01&to=2026-11-30", nil)

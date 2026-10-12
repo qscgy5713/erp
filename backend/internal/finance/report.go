@@ -63,7 +63,7 @@ type statementDTO struct {
 	Rows        []statementRowDTO `json:"rows"`
 }
 
-// statement GET /finance/statements?side=&partner_id=&currency=&from=&to=
+// statement GET /finance/statements?side=&partner_id=&currency=&from=&to=[&format=xlsx]
 // 單一對象、單一幣別的對帳單:期初 + 各筆帳款與已過帳收付款 = 期末。
 func (m *Module) statement(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -167,6 +167,12 @@ func (m *Module) statement(c *gin.Context) {
 		})
 	}
 	out.Closing = bal
+	if c.Query("format") == "xlsx" {
+		if err := writeStatementXLSX(c, out, recv); err != nil {
+			response.Error(c, err)
+		}
+		return
+	}
 	response.OK(c, out)
 }
 
