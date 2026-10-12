@@ -752,6 +752,8 @@ onMounted(async () => {
   }
   setTimeout(() => (dirty.value = false))
 })
+
+const printPage = () => window.print()
 </script>
 
 <template>
@@ -762,6 +764,7 @@ onMounted(async () => {
         <h2>{{ title }} {{ doc?.doc_no ?? '(新單據)' }}</h2>
         <DocStatusTag v-if="doc" :status="doc.status" />
         <el-tag v-if="dirty && editable && doc" type="warning" effect="plain">未儲存</el-tag>
+        <el-button class="no-print" link type="primary" @click="printPage">列印</el-button>
       </div>
       <div class="actions">
         <el-button v-if="editable" type="primary" :loading="saving" @click="save">儲存</el-button>

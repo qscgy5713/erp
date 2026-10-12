@@ -305,6 +305,8 @@ onMounted(async () => {
   if (isNew.value && docType.value !== 'count') addLine()
   setTimeout(() => (dirty.value = false))
 })
+
+const printPage = () => window.print()
 </script>
 
 <template>
@@ -315,6 +317,7 @@ onMounted(async () => {
         <h2>{{ typeLabels[docType] }} {{ doc?.doc_no ?? '(新單據)' }}</h2>
         <DocStatusTag v-if="doc" :status="doc.status" />
         <el-tag v-if="dirty && editable && doc" type="warning" effect="plain">未儲存</el-tag>
+        <el-button class="no-print" link type="primary" @click="printPage">列印</el-button>
       </div>
       <div class="actions">
         <el-button
