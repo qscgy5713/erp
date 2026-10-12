@@ -475,3 +475,44 @@ func TestBomVersions(t *testing.T) {
 		t.Fatalf("工單領料 = %+v", wo.Lines)
 	}
 }
+
+// TestMrp 待審工單的領料算進需求、成品算進在途,材料不夠時建議採購。
+func TestMrp(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	fg := e.seedItem("FG1", "goods")
+	p.receiveOn("2026-08-10", "1", "1200") // RAW1 入庫 1 箱 = 12 個
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(p.item, "2"))), http.StatusCreated, "")
+	wo := decode[woDoc](t, c.do(http.MethodPost, prodWO, woBody(fg, "10", p.wh, "0", nil)).Data) // 領 20 個
+	type row struct {
+		ItemID       int64  `json:"item_id"`
+		Action       string `json:"action"`
+		SuggestedQty string `json:"suggested_qty"`
+		WoDemand     string `json:"wo_demand"`
+		IncomingWO   string `json:"incoming_wo"`
+		OnHand       string `json:"on_hand"`
+	}
+	list := func(q string) map[int64]row {
+		res := c.do(http.MethodGet, "/production/mrp"+q, nil)
+		expect(t, res, http.StatusOK, "")
+		m := map[int64]row{}
+		for _, r := range decode[[]row](t, res.Data) {
+			m[r.ItemID] = r
+		}
+		return m
+	}
+	if len(list("")) != 0 {
+		t.Fatal("草稿工單不算需求")
+	}
+	expect(t, c.woAct(&wo, "submit"), http.StatusOK, "")
+	got := list("")
+	if r, ok := got[p.item]; !ok || r.Action != "buy" || r.SuggestedQty != "8" || r.WoDemand != "20" || r.OnHand != "12" {
+		t.Fatalf("材料應建議採購 8,got %+v", got[p.item])
+	}
+	if _, ok := got[fg]; ok {
+		t.Fatal("成品已有在途工單,不應再建議")
+	}
+	if r := list("?shortage_only=false")[fg]; r.IncomingWO != "10" {
+		t.Fatalf("成品在途 = %+v", r)
+	}
+}

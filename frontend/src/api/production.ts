@@ -140,7 +140,27 @@ export interface ExplodeLine {
 
 type Q = Record<string, string | number | boolean | null | undefined>
 
+export interface MrpRow {
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  level: number
+  sales_demand: Decimal
+  wo_demand: Decimal
+  plan_demand: Decimal
+  safety_stock: Decimal
+  on_hand: Decimal
+  incoming_po: Decimal
+  incoming_wo: Decimal
+  net: Decimal
+  action: 'make' | 'buy' | 'none'
+  suggested_qty: Decimal
+}
+
 export const productionApi = {
+  mrp: (shortageOnly = true) =>
+    http.get<MrpRow[]>(`/production/mrp${shortageOnly ? '' : '?shortage_only=false'}`),
   boms: (q: Q) => requestPage<BomRow>(`/production/boms${qs(q)}`),
   bom: (id: number) => http.get<Bom>(`/production/boms/${id}`),
   createBom: (input: BomInput) => http.post<Bom>('/production/boms', input),

@@ -140,6 +140,11 @@ const router = createRouter({
       meta: { title: 'BOM', perm: ['production.bom.read', 'production.bom.write'] },
     },
     {
+      path: '/production/mrp',
+      component: () => import('@/views/production/MrpView.vue'),
+      meta: { title: '需求計算(MRP)', perm: WORK_ORDER_ANY },
+    },
+    {
       path: '/production/work-orders',
       name: 'work-orders',
       component: () => import('@/views/production/WorkOrdersView.vue'),

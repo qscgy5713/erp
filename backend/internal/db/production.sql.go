@@ -972,6 +972,257 @@ func (q *Queries) LockWorkOrder(ctx context.Context, arg LockWorkOrderParams) (W
 	return i, err
 }
 
+const mrpActiveBoms = `-- name: MrpActiveBoms :many
+SELECT DISTINCT ON (item_id) id, item_id, yield_qty FROM boms
+WHERE company_id = $1 AND is_active AND effective_from <= $2
+ORDER BY item_id, effective_from DESC
+`
+
+type MrpActiveBomsParams struct {
+	CompanyID int64
+	OnDate    time.Time
+}
+
+type MrpActiveBomsRow struct {
+	ID       int64
+	ItemID   int64
+	YieldQty decimal.Decimal
+}
+
+// 每個成品今天適用的 BOM(已生效且啟用中,生效日最晚的一份)
+func (q *Queries) MrpActiveBoms(ctx context.Context, arg MrpActiveBomsParams) ([]MrpActiveBomsRow, error) {
+	rows, err := q.db.Query(ctx, mrpActiveBoms, arg.CompanyID, arg.OnDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpActiveBomsRow{}
+	for rows.Next() {
+		var i MrpActiveBomsRow
+		if err := rows.Scan(&i.ID, &i.ItemID, &i.YieldQty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpItems = `-- name: MrpItems :many
+
+SELECT i.id, i.code, i.name, u.name AS unit_name, i.safety_stock
+FROM items i JOIN units u ON u.id = i.base_unit_id
+WHERE i.company_id = $1 AND i.is_active AND i.item_type = 'goods'
+`
+
+type MrpItemsRow struct {
+	ID          int64
+	Code        string
+	Name        string
+	UnitName    string
+	SafetyStock decimal.Decimal
+}
+
+// ======== MRP 需求計算(D89) ========
+// 參與計算的料品:啟用中的商品類
+func (q *Queries) MrpItems(ctx context.Context, companyID int64) ([]MrpItemsRow, error) {
+	rows, err := q.db.Query(ctx, mrpItems, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpItemsRow{}
+	for rows.Next() {
+		var i MrpItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.UnitName,
+			&i.SafetyStock,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpOnHand = `-- name: MrpOnHand :many
+SELECT item_id, SUM(qty)::numeric AS qty FROM inventory_balances WHERE company_id = $1 GROUP BY item_id
+`
+
+type MrpOnHandRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+func (q *Queries) MrpOnHand(ctx context.Context, companyID int64) ([]MrpOnHandRow, error) {
+	rows, err := q.db.Query(ctx, mrpOnHand, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpOnHandRow{}
+	for rows.Next() {
+		var i MrpOnHandRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpPurchaseSupply = `-- name: MrpPurchaseSupply :many
+SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
+FROM purchase_order_lines l
+JOIN purchase_orders o ON o.id = l.order_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(rl.qty), 0)::numeric AS received_qty FROM goods_receipt_lines rl
+    JOIN goods_receipts r ON r.id = rl.receipt_id
+    WHERE rl.po_line_id = l.id AND r.status = 'posted'
+) rec
+WHERE o.company_id = $1 AND o.status = 'approved' AND l.qty > rec.received_qty
+GROUP BY l.item_id
+`
+
+type MrpPurchaseSupplyRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+// 已核准採購單尚未進貨的量(基本單位)
+func (q *Queries) MrpPurchaseSupply(ctx context.Context, companyID int64) ([]MrpPurchaseSupplyRow, error) {
+	rows, err := q.db.Query(ctx, mrpPurchaseSupply, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpPurchaseSupplyRow{}
+	for rows.Next() {
+		var i MrpPurchaseSupplyRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpSalesDemand = `-- name: MrpSalesDemand :many
+SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
+FROM sales_order_lines l
+JOIN sales_orders o ON o.id = l.order_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(dl.qty), 0)::numeric AS delivered_qty FROM delivery_lines dl
+    JOIN deliveries d ON d.id = dl.delivery_id
+    WHERE dl.so_line_id = l.id AND d.status = 'posted'
+) dlv
+WHERE o.company_id = $1 AND o.doc_type = 'order' AND o.status = 'approved' AND l.qty > dlv.delivered_qty
+GROUP BY l.item_id
+`
+
+type MrpSalesDemandRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+// 已核准訂單尚未出貨的量(基本單位)
+func (q *Queries) MrpSalesDemand(ctx context.Context, companyID int64) ([]MrpSalesDemandRow, error) {
+	rows, err := q.db.Query(ctx, mrpSalesDemand, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpSalesDemandRow{}
+	for rows.Next() {
+		var i MrpSalesDemandRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpWorkOrderDemand = `-- name: MrpWorkOrderDemand :many
+SELECT l.item_id, SUM(l.qty)::numeric AS qty
+FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
+WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY l.item_id
+`
+
+type MrpWorkOrderDemandRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+// 尚未完工(待審 / 已核准)的工單領料量
+func (q *Queries) MrpWorkOrderDemand(ctx context.Context, companyID int64) ([]MrpWorkOrderDemandRow, error) {
+	rows, err := q.db.Query(ctx, mrpWorkOrderDemand, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpWorkOrderDemandRow{}
+	for rows.Next() {
+		var i MrpWorkOrderDemandRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpWorkOrderSupply = `-- name: MrpWorkOrderSupply :many
+SELECT item_id, SUM(plan_qty)::numeric AS qty FROM work_orders
+WHERE company_id = $1 AND status IN ('pending', 'approved') GROUP BY item_id
+`
+
+type MrpWorkOrderSupplyRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+// 尚未完工(待審 / 已核准)的工單預計入庫量
+func (q *Queries) MrpWorkOrderSupply(ctx context.Context, companyID int64) ([]MrpWorkOrderSupplyRow, error) {
+	rows, err := q.db.Query(ctx, mrpWorkOrderSupply, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpWorkOrderSupplyRow{}
+	for rows.Next() {
+		var i MrpWorkOrderSupplyRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const productionConsumption = `-- name: ProductionConsumption :many
 
 SELECT w.item_id AS output_item_id, t.item_id AS material_id, SUM(t.qty)::numeric AS qty

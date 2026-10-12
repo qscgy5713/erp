@@ -1,5 +1,11 @@
 # 工作日誌
 
+## 2026-10-12 MRP 需求計算(D89)
+- 使用者把「生產進階」的範圍交給我決定:先做風險最低、價值最高的 MRP(唯讀,不碰成本與庫存分錄),分批完工 / WIP / 委外 / 標準成本 / 替代料留待後續各自一輪。
+- 後端:`queries/production.sql` 新增五個彙整查詢(訂單未出、採購在途、工單在途與領料、現有庫存)與 `MrpActiveBoms`;`production/mrp.go` 的 `mrpCompute` 純函式依低階碼逐階計算;`GET /production/mrp?shortage_only=false`。
+- 前端:生產 > 需求計算(MRP)頁,顯示各項需求與供給、建議生產 / 採購數量。
+- 測試:`TestMrpCompute`(多階、共用材料、安全庫存、在途)、`TestMrp`(待審工單的領料與在途、草稿不算)。
+
 ## 2026-10-12 Email 通知(D88)
 - migration 32:`notifications` 佇列(含 `dedupe_key` 唯一索引);`internal/notify`:`Enqueue`(交易內排信)、`SMTPSender`(STARTTLS / TLS)、`Worker`(每 30 秒寄、每小時掃描票據到期並清 60 天前的紀錄);`cmd/api/main.go` 在 SMTP 設定齊全時啟動。
 - 簽核接上通知:送審通知第 1 層(有權限者 + 代理人),分層核准通知下一層角色。

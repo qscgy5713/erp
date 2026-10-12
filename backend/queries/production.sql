@@ -188,3 +188,57 @@ WHERE company_id = @company_id AND item_id = @item_id AND source_type = 'work_or
 
 -- name: ItemHasWorkOrders :one
 SELECT EXISTS (SELECT 1 FROM work_orders WHERE company_id = @company_id AND item_id = @item_id);
+
+-- ======== MRP 需求計算(D89) ========
+
+-- name: MrpItems :many
+-- 參與計算的料品:啟用中的商品類
+SELECT i.id, i.code, i.name, u.name AS unit_name, i.safety_stock
+FROM items i JOIN units u ON u.id = i.base_unit_id
+WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods';
+
+-- name: MrpSalesDemand :many
+-- 已核准訂單尚未出貨的量(基本單位)
+SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
+FROM sales_order_lines l
+JOIN sales_orders o ON o.id = l.order_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(dl.qty), 0)::numeric AS delivered_qty FROM delivery_lines dl
+    JOIN deliveries d ON d.id = dl.delivery_id
+    WHERE dl.so_line_id = l.id AND d.status = 'posted'
+) dlv
+WHERE o.company_id = @company_id AND o.doc_type = 'order' AND o.status = 'approved' AND l.qty > dlv.delivered_qty
+GROUP BY l.item_id;
+
+-- name: MrpPurchaseSupply :many
+-- 已核准採購單尚未進貨的量(基本單位)
+SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
+FROM purchase_order_lines l
+JOIN purchase_orders o ON o.id = l.order_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(rl.qty), 0)::numeric AS received_qty FROM goods_receipt_lines rl
+    JOIN goods_receipts r ON r.id = rl.receipt_id
+    WHERE rl.po_line_id = l.id AND r.status = 'posted'
+) rec
+WHERE o.company_id = @company_id AND o.status = 'approved' AND l.qty > rec.received_qty
+GROUP BY l.item_id;
+
+-- name: MrpWorkOrderSupply :many
+-- 尚未完工(待審 / 已核准)的工單預計入庫量
+SELECT item_id, SUM(plan_qty)::numeric AS qty FROM work_orders
+WHERE company_id = @company_id AND status IN ('pending', 'approved') GROUP BY item_id;
+
+-- name: MrpWorkOrderDemand :many
+-- 尚未完工(待審 / 已核准)的工單領料量
+SELECT l.item_id, SUM(l.qty)::numeric AS qty
+FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
+WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY l.item_id;
+
+-- name: MrpOnHand :many
+SELECT item_id, SUM(qty)::numeric AS qty FROM inventory_balances WHERE company_id = @company_id GROUP BY item_id;
+
+-- name: MrpActiveBoms :many
+-- 每個成品今天適用的 BOM(已生效且啟用中,生效日最晚的一份)
+SELECT DISTINCT ON (item_id) id, item_id, yield_qty FROM boms
+WHERE company_id = @company_id AND is_active AND effective_from <= @on_date
+ORDER BY item_id, effective_from DESC;
