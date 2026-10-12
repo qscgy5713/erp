@@ -54,6 +54,12 @@ services:
       # nginx(web)與你前面的 TLS 代理的網段;沒填的話限流會把全公司當成同一個 IP
       TRUSTED_PROXIES: ${TRUSTED_PROXIES}
       JWT_SECRET: ${JWT_SECRET}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}

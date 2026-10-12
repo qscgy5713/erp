@@ -31,7 +31,17 @@ type Config struct {
 	LoginRateLimitPerMinute int
 	// RefreshRateLimitPerMinute 刷新 token 每個 IP 每分鐘次數
 	RefreshRateLimitPerMinute int
+
+	// 通知信(SMTP,例如 Gmail 搭配應用程式密碼);SMTPUser 空白 = 不寄信
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	AppBaseURL   string // 信件內連結的網址
 }
+
+func (c Config) SMTPEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
 // devSecretMarker 出現在 .env.example 的開發用密鑰中;正式環境禁止使用。
 const devSecretMarker = "dev-only"
@@ -45,7 +55,12 @@ func Load() (Config, error) {
 		TrustedProxies:  splitList(os.Getenv("TRUSTED_PROXIES")),
 		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
 		TOTPKey:         []byte(os.Getenv("TOTP_ENCRYPTION_KEY")),
+		SMTPHost:        getenv("SMTP_HOST", "smtp.gmail.com"),
+		SMTPUser:        os.Getenv("SMTP_USER"),
+		SMTPPassword:    os.Getenv("SMTP_PASSWORD"),
+		AppBaseURL:      strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"),
 	}
+	cfg.SMTPFrom = getenv("SMTP_FROM", cfg.SMTPUser)
 
 	var errs []error
 	if cfg.DatabaseURL == "" {
@@ -62,6 +77,9 @@ func Load() (Config, error) {
 	}
 
 	var err error
+	if cfg.SMTPPort, err = getPositiveInt("SMTP_PORT", 587); err != nil {
+		errs = append(errs, err)
+	}
 	if cfg.AccessTokenTTL, err = getDuration("ACCESS_TOKEN_TTL", 15*time.Minute); err != nil {
 		errs = append(errs, err)
 	}

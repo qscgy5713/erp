@@ -140,6 +140,8 @@ ADMIN_PASSWORD='至少8碼含英數' make admin u=admin   # 建立第一個超�
 | `APP_ENV` | `development` | `production` 時:log 改 JSON、cookie 加 Secure、拒絕開發用 JWT 密鑰 |
 | `JWT_SECRET` | 開發用值 | 至少 32 字元;**正式環境必須換掉**(`openssl rand -base64 48`) |
 | `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | `15m` / `168h` | token 有效期 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | `smtp.gmail.com` / `587` / 空 | 通知信(D88)。Gmail:帳號開啟兩步驟驗證後,建立「應用程式密碼」填 `SMTP_PASSWORD`;**`SMTP_USER` 空白 = 不寄信** |
+| `APP_BASE_URL` | 空 | 通知信內連結的網址,例:`https://erp.example.com` |
 | `RATE_LIMIT_PER_MINUTE` | `600` | 已登入 API 的限流,**以使用者計算**(同一帳號不論幾個 IP 共用額度) |
 | `LOGIN_RATE_LIMIT_PER_MINUTE` | `60` | 登入的限流,**以 IP 計算**(IPv6 以 /64 計);單一帳號的暴力破解另由「5 次失敗鎖定」處理 |
 | `REFRESH_RATE_LIMIT_PER_MINUTE` | `300` | 刷新 token 的限流,以 IP 計算;與登入分開,避免整頁載入的刷新把登入額度用完 |

@@ -1,5 +1,13 @@
 # 工作日誌
 
+## 2026-10-12 Email 通知(D88)
+- migration 32:`notifications` 佇列(含 `dedupe_key` 唯一索引);`internal/notify`:`Enqueue`(交易內排信)、`SMTPSender`(STARTTLS / TLS)、`Worker`(每 30 秒寄、每小時掃描票據到期並清 60 天前的紀錄);`cmd/api/main.go` 在 SMTP 設定齊全時啟動。
+- 簽核接上通知:送審通知第 1 層(有權限者 + 代理人),分層核准通知下一層角色。
+- `POST /notifications/test`(登入即可,只寄給自己)。
+- 設定:`SMTP_HOST/PORT/USER/PASSWORD/FROM`、`APP_BASE_URL`(已加進 `.env.example`、兩份 compose);本機 `.env` 已填入使用者提供的 Gmail 應用程式密碼(`.env` 被 git 忽略)。
+- 測試 `TestApprovalNotifications`(含代理人、失敗重試、測試信)、`TestCheckDueNotifications`(票據到期與去重)。
+- 實測:以 Gmail 應用程式密碼寄出測試信並確認收到(寄件帳號 qscgy5713@gmail.com)。
+
 ## 2026-10-12 簽核代理人與庫存單據簽核(D87)
 - migration 31:`approval_delegations`、`document_approvals.acting_for`、規則單據類型加 `stock_document`。
 - 後端:`auth.actorFor` 併入代理期間內委託人的 `*.approve` 權限;`approval.advance` 的角色判斷、同一人規則、收件匣與進度都納入委託人;`approval/delegation.go` 提供 `GET/POST/DELETE /approval/delegations`(登入即可,內部檢查);庫存單據動作接上 `approval.Intercept`(金額 0)。

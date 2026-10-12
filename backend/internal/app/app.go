@@ -14,6 +14,7 @@ import (
 	"erp/internal/imports"
 	"erp/internal/inventory"
 	"erp/internal/masterdata"
+	"erp/internal/notify"
 	"erp/internal/platform/config"
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpserver"
@@ -26,6 +27,7 @@ import (
 
 func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	store := database.NewStore(pool)
+	notify.Configure(cfg.SMTPEnabled(), cfg.AppBaseURL)
 	tokens := auth.NewTokenIssuer(cfg.JWTSecret, cfg.AccessTokenTTL)
 
 	// 限流:登入/刷新尚未登入,以 IP 計算;其餘 API 掛在驗證之後,以使用者計算
@@ -47,6 +49,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	dashboardModule := dashboard.New(store)
 	approvalModule := approval.New(store)
 	productionModule := production.New(store)
+	notifyHandler := notify.NewHandler(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
 		DB:             pool,
@@ -68,6 +71,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 			dashboardModule.Register(protected)
 			approvalModule.Register(protected)
 			productionModule.Register(protected)
+			notifyHandler.Register(protected)
 		},
 	})
 }

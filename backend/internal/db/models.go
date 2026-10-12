@@ -575,6 +575,23 @@ type ItemUnit struct {
 	Barcode *string
 }
 
+type Notification struct {
+	ID            int64
+	CompanyID     int64
+	UserID        int64
+	ToEmail       string
+	Event         string
+	Subject       string
+	Body          string
+	DedupeKey     string
+	Status        string
+	Attempts      int32
+	LastError     string
+	NextAttemptAt time.Time
+	CreatedAt     time.Time
+	SentAt        *time.Time
+}
+
 type PaymentTerm struct {
 	ID         int64
 	CompanyID  int64

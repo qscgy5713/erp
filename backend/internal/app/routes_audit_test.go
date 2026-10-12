@@ -33,6 +33,7 @@ var loginOnlyRoutes = map[string]string{
 	"GET /api/v1/approval/delegations":             "自己的代理人設定;scope=all 需簽核規則維護權限",
 	"POST /api/v1/approval/delegations":            "自己的代理人設定;替他人設定需簽核規則維護權限",
 	"DELETE /api/v1/approval/delegations/:id":      "委託人 / 代理人本人或簽核規則維護權限",
+	"POST /api/v1/notifications/test":              "只寄給自己的 email",
 	"GET /api/v1/approval/inbox":                   "待我核准,依核准權限與資料範圍過濾",
 	"GET /api/v1/dashboard":                        "依權限只回傳有權看的卡片",
 	"GET /api/v1/system/user-options":              "下拉選單",

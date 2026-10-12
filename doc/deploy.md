@@ -78,6 +78,8 @@ erp.example.com {
 | `TRUSTED_PROXIES` | 信任的反向代理網段,見第 3 節 | `172.28.0.0/24` + TLS 代理 |
 | `WEB_BIND` / `WEB_PORT` | web 對外位址與埠 | `127.0.0.1` / `8080`;改 `0.0.0.0` 只限內網測試 |
 | `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | 登入憑證效期 | `15m` / `168h` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 通知信(待我核准、票據到期)。Gmail 用「應用程式密碼」;`SMTP_USER` 空白 = 不寄信。使用者要有填 email 才收得到 | 空 |
+| `APP_BASE_URL` | 通知信內連結的網址(含 https,不含結尾斜線) | `https://erp.example.com` |
 | `RATE_LIMIT_PER_MINUTE` | 已登入使用者每分鐘請求上限 | `600` |
 | `LOGIN_RATE_LIMIT_PER_MINUTE` / `REFRESH_RATE_LIMIT_PER_MINUTE` | 登入、刷新每個 IP 每分鐘上限(IPv6 以 /64 計)。公司共用同一個對外 IP 且人數多時調高 | 範本 `120` / `600` |
 | `ADMIN_PASSWORD` | 只在 `create-admin` 時需要,用完清空 | 空 |

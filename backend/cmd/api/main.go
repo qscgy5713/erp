@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"erp/internal/app"
+	"erp/internal/db"
+	"erp/internal/notify"
 	"erp/internal/platform/config"
 	"erp/internal/platform/database"
 )
@@ -44,6 +46,14 @@ func run() error {
 	router, err := app.NewRouter(cfg, pool)
 	if err != nil {
 		return err
+	}
+
+	if cfg.SMTPEnabled() {
+		w := &notify.Worker{Q: db.New(pool), Sender: notify.SMTPSender{
+			Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
+		}}
+		go w.Run(ctx)
+		slog.Info("通知信已啟用", "smtp", cfg.SMTPHost, "from", cfg.SMTPFrom)
 	}
 
 	srv := &http.Server{

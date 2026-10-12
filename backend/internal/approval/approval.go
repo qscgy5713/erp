@@ -9,10 +9,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/shopspring/decimal"
 
 	"erp/internal/db"
+	"erp/internal/notify"
 	"erp/internal/platform/database"
 	"erp/internal/shared/apperr"
 	"erp/internal/shared/authctx"
@@ -74,7 +76,10 @@ func Intercept(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, doc
 	amount decimal.Decimal) (partial bool, msg string, err error) {
 	switch action {
 	case docstate.Submit:
-		return false, "", snapshot(ctx, q, a.CompanyID, docType, docID, amount)
+		if err := snapshot(ctx, q, a.CompanyID, docType, docID, amount); err != nil {
+			return false, "", err
+		}
+		return false, "", notifyApprovers(ctx, q, a, docType, nil)
 	case docstate.Reject, docstate.Unapprove, docstate.Void:
 		return false, "", q.DeleteDocumentApprovals(ctx, db.DeleteDocumentApprovalsParams{CompanyID: a.CompanyID, DocType: docType, DocID: docID})
 	case docstate.Approve:
@@ -172,6 +177,9 @@ func advance(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, docID
 		return false, "", nil // 最後一層 → 呼叫端完成核准
 	}
 	next := rows[cur+1]
+	if err := notifyApprovers(ctx, q, a, docType, next.RoleID); err != nil {
+		return false, "", err
+	}
 	return true, fmt.Sprintf("第 %d/%d 層核准,等待第 %d 層(%s)", step.StepNo, len(rows), next.StepNo, next.RoleName), nil
 }
 
@@ -190,4 +198,28 @@ func roleHolder(ctx authCtx, q *db.Queries, a *authctx.Actor, roleID int64) (int
 		}
 	}
 	return -1, nil
+}
+
+// notifyApprovers 單據送審或進到下一層時,通知「輪到核准」的人(Email,D88)。
+// roleID 為 nil 代表第 1 層(具該單據核准權限的人),否則為該層指定角色的人;都連同有效的代理人。
+// 不通知本人;信件不含單據內容,只提示到「待我核准」查看。
+func notifyApprovers(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, roleID *int64) error {
+	if !notify.Enabled() {
+		return nil
+	}
+	var ids []int64
+	var err error
+	if roleID != nil {
+		ids, err = q.ApproverIDsByRole(ctx, db.ApproverIDsByRoleParams{CompanyID: a.CompanyID, RoleID: *roleID})
+	} else {
+		ids, err = q.ApproverIDsByPermission(ctx, db.ApproverIDsByPermissionParams{CompanyID: a.CompanyID, Permission: docTypes[docType].Approve})
+	}
+	if err != nil {
+		return err
+	}
+	ids = slices.DeleteFunc(ids, func(id int64) bool { return id == a.UserID })
+	label := docTypes[docType].Label
+	return notify.Enqueue(ctx, q, a.CompanyID, ids, "approval_pending",
+		"有「"+label+"」待你核准",
+		"有一張「"+label+"」送審,輪到你(或你代理的人)核准。\n\n請到系統「待我核准」查看:"+notify.Link("/approval/inbox")+"\n\n(此為系統自動通知)", "")
 }

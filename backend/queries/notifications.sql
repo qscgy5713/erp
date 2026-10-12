@@ -1,0 +1,77 @@
+-- ======== 通知信(D88) ========
+
+-- name: EnqueueNotifications :execrows
+-- 對指定使用者(須啟用且有 email)排入寄信佇列;同一人同一 dedupe_key 只排一次
+INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
+SELECT u.company_id, u.id, u.email, @event, @subject, @body, @dedupe_key
+FROM users u
+WHERE u.company_id = @company_id AND u.id = ANY(@user_ids::bigint[]) AND u.is_active
+  AND COALESCE(u.email, '') <> ''
+ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING;
+
+-- name: ClaimNotifications :many
+-- 取出待寄的信並預約 10 分鐘(寄送中程式中斷時會自動重試);attempts 在這裡 +1
+UPDATE notifications SET attempts = attempts + 1, next_attempt_at = now() + interval '10 minutes'
+WHERE id IN (
+    SELECT n.id FROM notifications n
+    WHERE n.status = 'pending' AND n.next_attempt_at <= now()
+    ORDER BY n.id LIMIT @batch FOR UPDATE SKIP LOCKED
+) RETURNING *;
+
+-- name: MarkNotificationSent :exec
+UPDATE notifications SET status = 'sent', sent_at = now(), last_error = '' WHERE id = @id;
+
+-- name: MarkNotificationFailed :exec
+UPDATE notifications SET last_error = @last_error,
+    status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+    next_attempt_at = now() + (attempts * interval '5 minutes')
+WHERE id = @id;
+
+-- name: PurgeOldNotifications :execrows
+DELETE FROM notifications WHERE status <> 'pending' AND created_at < now() - interval '60 days';
+
+-- name: ApproverIDsByPermission :many
+-- 具某核准權限的人(含超級管理員),加上此時有效的代理人
+WITH base AS (
+    SELECT u.id FROM users u WHERE u.company_id = @company_id AND u.is_active AND u.is_superadmin
+    UNION
+    SELECT ur.user_id FROM user_roles ur
+    JOIN roles r ON r.id = ur.role_id AND r.is_active AND r.company_id = @company_id
+    JOIN role_permissions rp ON rp.role_id = r.id AND rp.permission = @permission::text
+)
+SELECT id FROM base
+UNION
+SELECT d.delegate_id FROM approval_delegations d
+WHERE d.company_id = @company_id AND d.delegator_id IN (SELECT id FROM base)
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to;
+
+-- name: ApproverIDsByRole :many
+-- 具某角色的人,加上此時有效的代理人
+WITH base AS (
+    SELECT ur.user_id AS id FROM user_roles ur
+    JOIN roles r ON r.id = ur.role_id AND r.is_active AND r.company_id = @company_id
+    WHERE ur.role_id = @role_id
+)
+SELECT id FROM base
+UNION
+SELECT d.delegate_id FROM approval_delegations d
+WHERE d.company_id = @company_id AND d.delegator_id IN (SELECT id FROM base)
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to;
+
+-- name: EnqueueCheckDueNotifications :execrows
+-- 未兌現票據在 @days 天內到期(含已逾期):通知具該方向過帳權限的人(含超級管理員);每張票據每人只通知一次
+INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
+SELECT k.company_id, u.id, u.email, 'check_due',
+       CASE k.side WHEN 'receipt' THEN '應收票據' ELSE '應付票據' END || (CASE WHEN k.due_date < CURRENT_DATE THEN '已逾期:' ELSE '即將到期:' END) || k.check_no,
+       CASE k.side WHEN 'receipt' THEN '應收票據' ELSE '應付票據' END || ' ' || k.check_no || ',金額 ' || k.amount::numeric(18,0)::text
+         || ',到期日 ' || to_char(k.due_date, 'YYYY-MM-DD') || '。' || E'\n\n' || @base_url::text || '/finance/' || (CASE k.side WHEN 'receipt' THEN 'checks/collection' ELSE 'checks/payment' END),
+       'check_due:' || k.id
+FROM checks k
+JOIN users u ON u.company_id = k.company_id AND u.is_active AND COALESCE(u.email, '') <> ''
+WHERE k.status = 'pending' AND k.due_date <= CURRENT_DATE + @days::int
+  AND (u.is_superadmin OR EXISTS (
+        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id AND r.is_active
+        JOIN role_permissions rp ON rp.role_id = r.id
+        WHERE ur.user_id = u.id
+          AND rp.permission = CASE k.side WHEN 'receipt' THEN 'finance.collection.post' ELSE 'finance.payment.post' END))
+ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING;
