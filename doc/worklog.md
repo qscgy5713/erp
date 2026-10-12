@@ -1,5 +1,10 @@
 # 工作日誌
 
+## 2026-10-12 待我核准收件匣、已交量評估(D84、D85)
+- **待我核准**:`GET /approval/inbox`(`approval/inbox.go`、`PendingApprovalDocs` 等三個查詢);判斷「輪到我」的規則見 D84。前端新增選單「待我核准」與 `InboxView.vue`,點單號進單據核准。
+- **已交量**:評估後不新增累計欄位(D85),原因是 D32 與 perf.md 的量測。
+- 測試:`TestMultiLevelApproval` 擴充(第 1 層 / 第 2 層的收件匣歸屬、開單者與無權限者看不到)、`TestApprovalInboxRespectsDataScope`;路由稽核測試加入 login-only 白名單。`make lint` 通過。
+
 ## 2026-10-12 把「需要使用者決定」的待辦以預設方案做完(D79–D83)
 使用者授權我自行決定規格,以下為採用的預設方案(詳見 plan.md D79–D83):
 - **信用額度超額覆核**:新權限 `sales.order.credit_override`;核准訂單被擋(SAL-003)時,有權限者在前端填寫原因後以 `credit_override_reason` 重送放行,並寫入稽核紀錄。

@@ -51,6 +51,19 @@ export const RECEIPT_ANY = [
 export const navigation: NavItem[] = [
   { title: '首頁', path: '/' },
   {
+    title: '待我核准',
+    path: '/approval/inbox',
+    perm: [
+      'purchase.order.approve',
+      'purchase.receipt.approve',
+      'sales.order.approve',
+      'sales.delivery.approve',
+      'finance.collection.approve',
+      'finance.payment.approve',
+      'production.order.approve',
+    ],
+  },
+  {
     title: '基本資料',
     children: [
       { title: '料品', path: '/masterdata/items', perm: ['masterdata.item.read'] },

@@ -26,6 +26,26 @@ func (c *client) progress(docType string, id int64) apprProgress {
 	return decode[apprProgress](c.e.t, res.Data)
 }
 
+type inboxRow struct {
+	DocType    string `json:"doc_type"`
+	DocID      int64  `json:"doc_id"`
+	Step       int    `json:"step"`
+	TotalSteps int    `json:"total_steps"`
+}
+
+// inboxHas 回傳該使用者的「待我核准」中是否有指定單據,以及其目前層級。
+func (c *client) inboxHas(docType string, id int64) (bool, inboxRow) {
+	c.e.t.Helper()
+	res := c.do(http.MethodGet, "/approval/inbox", nil)
+	expect(c.e.t, res, http.StatusOK, "")
+	for _, r := range decode[[]inboxRow](c.e.t, res.Data) {
+		if r.DocType == docType && r.DocID == id {
+			return true, r
+		}
+	}
+	return false, inboxRow{}
+}
+
 func TestMultiLevelApproval(t *testing.T) {
 	p := newPurCtx(t)
 	e, root := p.e, p.c
@@ -104,7 +124,27 @@ func TestMultiLevelApproval(t *testing.T) {
 	if !a1.progress("purchase_order", big.ID).CanApprove {
 		t.Fatal("a1 應能核准第 1 層")
 	}
+	// 待我核准:第 1 層由有核准權限者看到;開單者、無權限者看不到
+	if ok, r := a1.inboxHas("purchase_order", big.ID); !ok || r.Step != 1 || r.TotalSteps != 2 {
+		t.Fatalf("a1 的收件匣應有第 1/2 層,got %v %+v", ok, r)
+	}
+	if ok, _ := mk.inboxHas("purchase_order", big.ID); ok {
+		t.Fatal("開單者沒有核准權限,收件匣不應有")
+	}
+	if ok, _ := e.loggedIn("plain", pw).inboxHas("purchase_order", big.ID); ok {
+		t.Fatal("無核准權限者收件匣不應有")
+	}
 	expect(t, act(a1, &big, "approve"), http.StatusOK, "") // 第 1 層
+	// 第 2 層輪到 CFO 角色:a1 / a2 沒有該角色,boss 才有;且 a1 已核准過第 1 層
+	if ok, _ := a1.inboxHas("purchase_order", big.ID); ok {
+		t.Fatal("a1 已核准第 1 層,不應再出現")
+	}
+	if ok, _ := a2.inboxHas("purchase_order", big.ID); ok {
+		t.Fatal("a2 沒有 CFO 角色,不應出現")
+	}
+	if ok, r := boss.inboxHas("purchase_order", big.ID); !ok || r.Step != 2 {
+		t.Fatalf("boss 應在第 2 層看到,got %v %+v", ok, r)
+	}
 	if big.Status != "pending" {
 		t.Fatalf("第 1 層核准後仍應為待審,status=%s", big.Status)
 	}

@@ -192,6 +192,56 @@ func (q *Queries) DeleteDocumentApprovals(ctx context.Context, arg DeleteDocumen
 	return err
 }
 
+const documentApprovalsForDocs = `-- name: DocumentApprovalsForDocs :many
+SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id
+FROM document_approvals d
+WHERE d.company_id = $1
+  AND d.doc_type = ANY($2::text[]) AND d.doc_id = ANY($3::bigint[]) -- 超集合,程式再依 (類型, id) 配對
+ORDER BY d.doc_type, d.doc_id, d.step_no
+`
+
+type DocumentApprovalsForDocsParams struct {
+	CompanyID int64
+	Types     []string
+	Ids       []int64
+}
+
+type DocumentApprovalsForDocsRow struct {
+	DocType    string
+	DocID      int64
+	StepNo     int32
+	RoleID     *int64
+	RoleName   string
+	ApproverID *int64
+}
+
+func (q *Queries) DocumentApprovalsForDocs(ctx context.Context, arg DocumentApprovalsForDocsParams) ([]DocumentApprovalsForDocsRow, error) {
+	rows, err := q.db.Query(ctx, documentApprovalsForDocs, arg.CompanyID, arg.Types, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DocumentApprovalsForDocsRow{}
+	for rows.Next() {
+		var i DocumentApprovalsForDocsRow
+		if err := rows.Scan(
+			&i.DocType,
+			&i.DocID,
+			&i.StepNo,
+			&i.RoleID,
+			&i.RoleName,
+			&i.ApproverID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getApprovalRule = `-- name: GetApprovalRule :one
 SELECT id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at FROM approval_rules WHERE id = $1 AND company_id = $2
 `
@@ -403,6 +453,101 @@ func (q *Queries) MatchApprovalRule(ctx context.Context, arg MatchApprovalRulePa
 	return id, err
 }
 
+const pendingApprovalDocs = `-- name: PendingApprovalDocs :many
+SELECT doc_type, doc_id, doc_no, doc_date, partner_name, currency, amount, submitted_at FROM (
+    SELECT 'purchase_order'::text AS doc_type, x.id AS doc_id, x.doc_no, x.doc_date, s.name AS partner_name,
+           x.currency::text AS currency, x.total_amount AS amount, x.submitted_at
+    FROM purchase_orders x JOIN suppliers s ON s.id = x.supplier_id
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'purchase_order' = ANY($2::text[])
+  UNION ALL
+    SELECT 'goods_receipt', x.id, x.doc_no, x.doc_date, s.name, x.currency::text, x.total_amount, x.submitted_at
+    FROM goods_receipts x JOIN suppliers s ON s.id = x.supplier_id
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'goods_receipt' = ANY($2::text[])
+  UNION ALL
+    SELECT 'sales_order', x.id, x.doc_no, x.doc_date, c.name, x.currency::text, x.total_amount, x.submitted_at
+    FROM sales_orders x JOIN customers c ON c.id = x.customer_id LEFT JOIN users su ON su.id = x.sales_user_id
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'sales_order' = ANY($2::text[])
+      AND ($3::bigint IS NULL OR x.sales_user_id = $3)
+      AND ($4::bigint IS NULL OR su.department_id = $4)
+  UNION ALL
+    SELECT 'delivery', x.id, x.doc_no, x.doc_date, c.name, x.currency::text, x.total_amount, x.submitted_at
+    FROM deliveries x JOIN customers c ON c.id = x.customer_id LEFT JOIN users su ON su.id = x.sales_user_id
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'delivery' = ANY($2::text[])
+      AND ($3::bigint IS NULL OR x.sales_user_id = $3)
+      AND ($4::bigint IS NULL OR su.department_id = $4)
+  UNION ALL
+    SELECT CASE x.side WHEN 'receipt' THEN 'collection' ELSE 'payment' END, x.id, x.doc_no, x.doc_date,
+           COALESCE(c.name, sp.name), x.currency::text, x.amount, x.submitted_at
+    FROM settlements x LEFT JOIN customers c ON c.id = x.customer_id LEFT JOIN suppliers sp ON sp.id = x.supplier_id
+         LEFT JOIN users su ON su.id = x.sales_user_id
+    WHERE x.company_id = $1 AND x.status = 'pending'
+      AND (CASE x.side WHEN 'receipt' THEN 'collection' ELSE 'payment' END) = ANY($2::text[])
+      AND (x.side = 'payment'
+           OR (($3::bigint IS NULL OR x.sales_user_id = $3)
+               AND ($4::bigint IS NULL OR su.department_id = $4)))
+  UNION ALL
+    SELECT 'work_order', x.id, x.doc_no, x.doc_date, i.name, 'TWD', x.processing_cost, x.submitted_at
+    FROM work_orders x JOIN items i ON i.id = x.item_id
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'work_order' = ANY($2::text[])
+) t
+ORDER BY submitted_at NULLS LAST, doc_no
+LIMIT 300
+`
+
+type PendingApprovalDocsParams struct {
+	CompanyID   int64
+	Types       []string
+	ScopeUserID *int64
+	ScopeDeptID *int64
+}
+
+type PendingApprovalDocsRow struct {
+	DocType     string
+	DocID       int64
+	DocNo       string
+	DocDate     time.Time
+	PartnerName string
+	Currency    string
+	Amount      decimal.Decimal
+	SubmittedAt *time.Time
+}
+
+// 待核准清單(待我核准收件匣):各類單據中 status = 'pending' 的單據;只含呼叫者有核准權限的類型(@types),
+// 業務類單據套用資料範圍。是否輪到「我」由程式依簽核流程判斷。
+func (q *Queries) PendingApprovalDocs(ctx context.Context, arg PendingApprovalDocsParams) ([]PendingApprovalDocsRow, error) {
+	rows, err := q.db.Query(ctx, pendingApprovalDocs,
+		arg.CompanyID,
+		arg.Types,
+		arg.ScopeUserID,
+		arg.ScopeDeptID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PendingApprovalDocsRow{}
+	for rows.Next() {
+		var i PendingApprovalDocsRow
+		if err := rows.Scan(
+			&i.DocType,
+			&i.DocID,
+			&i.DocNo,
+			&i.DocDate,
+			&i.PartnerName,
+			&i.Currency,
+			&i.Amount,
+			&i.SubmittedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const roleCountInApprovalRules = `-- name: RoleCountInApprovalRules :one
 SELECT count(*) FROM approval_rule_steps WHERE role_id = $1
 `
@@ -466,4 +611,28 @@ func (q *Queries) UserHasRole(ctx context.Context, arg UserHasRoleParams) (bool,
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const userRoleIDs = `-- name: UserRoleIDs :many
+SELECT role_id FROM user_roles WHERE user_id = $1
+`
+
+func (q *Queries) UserRoleIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, userRoleIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var role_id int64
+		if err := rows.Scan(&role_id); err != nil {
+			return nil, err
+		}
+		items = append(items, role_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

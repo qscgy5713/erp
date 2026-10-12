@@ -60,6 +60,22 @@ const router = createRouter({
       meta: { title: '首頁' },
     },
     {
+      path: '/approval/inbox',
+      component: () => import('@/views/approval/InboxView.vue'),
+      meta: {
+        title: '待我核准',
+        perm: [
+          'purchase.order.approve',
+          'purchase.receipt.approve',
+          'sales.order.approve',
+          'sales.delivery.approve',
+          'finance.collection.approve',
+          'finance.payment.approve',
+          'production.order.approve',
+        ],
+      },
+    },
+    {
       path: '/masterdata/items',
       component: () => import('@/views/masterdata/ItemsView.vue'),
       meta: { title: '料品', perm: ['masterdata.item.read'] },

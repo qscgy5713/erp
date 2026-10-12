@@ -111,3 +111,32 @@ func TestApprovalProgressRespectsDataScope(t *testing.T) {
 	// 全部範圍的人看得到
 	expect(t, root.do(http.MethodGet, "/approval/progress?doc_type=sales_order&doc_id="+itoa(theirs.ID), nil), http.StatusOK, "")
 }
+
+// 待我核准:業務類單據套用資料範圍,只看得到自己負責客戶的待核准單。
+func TestApprovalInboxRespectsDataScope(t *testing.T) {
+	s := newSalCtx(t)
+	e, root := s.e, s.c
+	role := e.seedRole("SALES2", "self", "sales.order.read", "sales.order.write", "sales.order.approve")
+	amy := e.seedUser("amy", pw, false, false, role.ID)
+	ben := e.seedUser("ben", pw, false, false, role.ID)
+	cAmy, cBen := e.seedCustomer("C-AMY", "0", &amy.ID), e.seedCustomer("C-BEN", "0", &ben.ID)
+	mk := func(cust int64) purDoc {
+		d, res := root.createPur(salesOrders, s.header(map[string]any{
+			"doc_type": "order", "customer_id": cust, "lines": []map[string]any{line(s.item, s.box, "1", "100", nil)},
+		}))
+		expect(t, res, http.StatusCreated, "")
+		expect(t, root.actPur(salesOrders, &d, "submit"), http.StatusOK, "")
+		return d
+	}
+	mine, theirs := mk(cAmy), mk(cBen)
+	ac := e.loggedIn("amy", pw)
+	if ok, _ := ac.inboxHas("sales_order", mine.ID); !ok {
+		t.Fatal("自己負責客戶的待核准單應出現")
+	}
+	if ok, _ := ac.inboxHas("sales_order", theirs.ID); ok {
+		t.Fatal("他人負責客戶的單據不應出現")
+	}
+	if ok, _ := root.inboxHas("sales_order", theirs.ID); !ok {
+		t.Fatal("全部範圍者應看到")
+	}
+}

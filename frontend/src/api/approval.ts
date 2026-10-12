@@ -53,3 +53,33 @@ export const approvalApi = {
   progress: (doc_type: string, doc_id: number) =>
     http.get<ApprovalProgress>(`/approval/progress${qs({ doc_type, doc_id })}`),
 }
+
+export interface InboxRow {
+  doc_type: string
+  doc_label: string
+  doc_id: number
+  doc_no: string
+  doc_date: string
+  partner_name: string
+  currency: string
+  amount: Decimal
+  submitted_at: string | null
+  step: number
+  total_steps: number
+  step_role: string
+}
+
+/** 單據類型 → 單據編輯頁的路由名稱 */
+export const inboxRoutes: Record<string, string> = {
+  purchase_order: 'purchase-order',
+  goods_receipt: 'purchase-receipt',
+  sales_order: 'sales-order',
+  delivery: 'sales-delivery',
+  collection: 'collection',
+  payment: 'payment',
+  work_order: 'work-order',
+}
+
+export const inboxApi = {
+  list: () => http.get<InboxRow[]>('/approval/inbox'),
+}

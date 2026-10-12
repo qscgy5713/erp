@@ -30,6 +30,7 @@ var loginOnlyRoutes = map[string]string{
 	"POST /api/v1/auth/2fa/enable":                 "自己的雙因素設定",
 	"POST /api/v1/auth/2fa/disable":                "自己的雙因素設定(須密碼與驗證碼)",
 	"POST /api/v1/auth/2fa/recovery-codes":         "自己的備援碼(須密碼與驗證碼)",
+	"GET /api/v1/approval/inbox":                   "待我核准,依核准權限與資料範圍過濾",
 	"GET /api/v1/dashboard":                        "依權限只回傳有權看的卡片",
 	"GET /api/v1/system/user-options":              "下拉選單",
 	"GET /api/v1/masterdata/currencies":            "下拉選單",

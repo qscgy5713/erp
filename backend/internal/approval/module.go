@@ -31,6 +31,7 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/rules", auth.Require(permission.ApprovalWrite), m.createRule)
 	g.PUT("/rules/:id", auth.Require(permission.ApprovalWrite), m.updateRule)
 	g.DELETE("/rules/:id", auth.Require(permission.ApprovalWrite), m.deleteRule)
+	g.GET("/inbox", m.inbox)       // 登入即可,內容依核准權限過濾
 	g.GET("/progress", m.progress) // 權限依單據類型在內部檢查
 }
 
