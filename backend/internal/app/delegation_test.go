@@ -115,3 +115,14 @@ func TestApprovalDelegationAndStockDocs(t *testing.T) {
 	}), http.StatusCreated, "")
 	expect(t, dep.act(&d2, "approve"), http.StatusForbidden, "SYS-403")
 }
+
+// TestApprovalWriterCanListRoles 簽核規則維護者(只有簽核規則權限)要能列出角色,才選得到第 2 層起的角色。
+func TestApprovalWriterCanListRoles(t *testing.T) {
+	e := newEnv(t)
+	apr := e.seedRole("apr", "all", permission.ApprovalRead, permission.ApprovalWrite)
+	none := e.seedRole("none", "all", permission.InventoryRead)
+	e.seedUser("aprw", pw, false, false, apr.ID)
+	e.seedUser("other", pw, false, false, none.ID)
+	expect(t, e.loggedIn("aprw", pw).do(http.MethodGet, "/system/roles", nil), http.StatusOK, "")
+	expect(t, e.loggedIn("other", pw).do(http.MethodGet, "/system/roles", nil), http.StatusForbidden, "SYS-403")
+}

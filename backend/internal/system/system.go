@@ -44,7 +44,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/users/:id/reset-2fa", auth.Require(permission.UserWrite), m.resetTwoFactor)
 	g.POST("/users/:id/unlock", auth.Require(permission.UserWrite), m.unlockUser)
 
-	g.GET("/roles", auth.Require(permission.RoleRead, permission.UserRead, permission.UserWrite), m.listRoles)
+	// 簽核規則維護者需要挑選第 2 層起的角色,清單只含代碼 / 名稱 / 資料範圍,不含權限內容
+	g.GET("/roles", auth.Require(permission.RoleRead, permission.UserRead, permission.UserWrite, permission.ApprovalWrite), m.listRoles)
 	g.GET("/roles/:id", auth.Require(permission.RoleRead), m.getRole)
 	g.POST("/roles", auth.Require(permission.RoleWrite), m.createRole)
 	g.PUT("/roles/:id", auth.Require(permission.RoleWrite), m.updateRole)

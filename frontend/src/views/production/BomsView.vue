@@ -342,6 +342,10 @@ autoClear(form)
   gap: 6px;
   margin-top: 4px;
 }
+.sub .muted {
+  flex: none;
+  white-space: nowrap;
+}
 .ratio {
   width: 90px;
 }

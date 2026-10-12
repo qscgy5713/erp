@@ -29,7 +29,9 @@ async function load() {
     ;[rules.value, docTypes.value, roles.value] = await Promise.all([
       approvalApi.rules(),
       approvalApi.docTypes(),
-      auth.can(['system.role.read']) ? systemApi.roles() : Promise.resolve([] as Role[]),
+      auth.can(['system.role.read', 'system.approval.write'])
+        ? systemApi.roles()
+        : Promise.resolve([] as Role[]),
     ])
   } catch (e) {
     handle(e)
