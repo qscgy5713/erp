@@ -230,7 +230,7 @@ export const inventoryApi = {
   balances: (q: Q) => requestPage<Balance>(`/inventory/balances${qs(q)}`),
   movementSummary: (q: Q) => requestPage<MovementSummary>(`/inventory/movement-summary${qs(q)}`),
   itemLedger: (itemId: number, q: Q) =>
-    http.get<{ opening_qty: Decimal; entries: LedgerEntry[] }>(
+    http.get<{ opening_qty: Decimal; entries: LedgerEntry[]; truncated: boolean }>(
       `/inventory/items/${itemId}/ledger${qs(q)}`,
     ),
 

@@ -1,5 +1,8 @@
 # 工作日誌
 
+## 2026-10-12 異動明細截斷提示
+- `GET /inventory/items/{id}/ledger` 回傳新增 `truncated`(筆數達 1000 上限時為 true),前端料品異動抽屜顯示「請縮小期間」警示。常數 `ledgerMaxRows` 須與 SQL 的 LIMIT 一致。
+
 ## 2026-10-12 料品最近進價帶入
 - 後端 `GET /purchase/last-prices?supplier_id=&currency=&item_ids=`(需採購單或進貨單的編輯權限):每個料品取同供應商、同幣別、最近一張**已過帳進貨單**(不含退出與草稿)的單價與單位;`queries/reports.sql` 的 `LastPurchasePrices`、`purchase/lastprice.go`。
 - 前端採購單 / 進貨單選料品時,若單價空白且不是帶入的明細,自動帶入單價與當時的單位並提示來源單號;查詢失敗不影響開單。

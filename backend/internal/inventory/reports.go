@@ -168,7 +168,10 @@ type ledgerEntryDTO struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
-// itemLedger 料品異動明細:期初結存 + 每筆異動與累計結存(最多 1000 筆)。
+// ledgerMaxRows 須與 ItemLedger 查詢的 LIMIT 一致;達到時回傳 truncated 提示使用者縮小期間。
+const ledgerMaxRows = 1000
+
+// itemLedger 料品異動明細:期初結存 + 每筆異動與累計結存(最多 ledgerMaxRows 筆)。
 func (m *Module) itemLedger(c *gin.Context) {
 	ctx := c.Request.Context()
 	itemID, err := httpx.ParamID(c, "id")
@@ -209,5 +212,5 @@ func (m *Module) itemLedger(c *gin.Context) {
 			IsReversal: r.ReversalOf != nil, Qty: r.Qty, BalanceQty: opening.Add(r.RunningQty), CreatedAt: r.CreatedAt,
 		}
 	}
-	response.OK(c, gin.H{"opening_qty": opening, "entries": entries})
+	response.OK(c, gin.H{"opening_qty": opening, "entries": entries, "truncated": len(rows) >= ledgerMaxRows})
 }

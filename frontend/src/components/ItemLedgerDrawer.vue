@@ -16,6 +16,7 @@ const { handle } = useApiError()
 
 const opening = ref('0')
 const entries = ref<LedgerEntry[]>([])
+const truncated = ref(false)
 const loading = ref(false)
 
 const sourceLabels: Record<string, string> = {
@@ -42,6 +43,7 @@ watch(
       })
       opening.value = res.opening_qty
       entries.value = res.entries
+      truncated.value = res.truncated
     } catch (e) {
       handle(e)
     } finally {
@@ -53,6 +55,14 @@ watch(
 
 <template>
   <el-drawer v-model="visible" :title="title" size="60%">
+    <el-alert
+      v-if="truncated"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="異動筆數過多,只顯示前 1000 筆,請縮小期間"
+      style="margin-bottom: 8px"
+    />
     <p class="muted">{{ from }} ~ {{ to }},期初結存 {{ opening }}</p>
     <el-table v-loading="loading" :data="entries" border size="small">
       <el-table-column prop="doc_date" label="日期" width="110" />

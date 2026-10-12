@@ -330,8 +330,9 @@ func TestLedgerAndBalancesReports(t *testing.T) {
 			Qty        string `json:"qty"`
 			BalanceQty string `json:"balance_qty"`
 		} `json:"entries"`
+		Truncated bool `json:"truncated"`
 	}](t, c.do(http.MethodGet, "/inventory/items/"+itoa(item)+"/ledger?from=2026-10-01&to=2026-10-31", nil).Data)
-	if led.OpeningQty != "10" || len(led.Entries) != 2 || led.Entries[1].BalanceQty != "12" {
+	if led.OpeningQty != "10" || len(led.Entries) != 2 || led.Entries[1].BalanceQty != "12" || led.Truncated {
 		t.Fatalf("ledger = %+v", led)
 	}
 	sum := decode[[]struct {
