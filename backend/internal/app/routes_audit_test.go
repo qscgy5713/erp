@@ -15,6 +15,7 @@ import (
 // 之後新增路由若忘了加權限檢查,這個測試會失敗;確實只要登入即可的才需要加進白名單。
 var publicRoutes = map[string]bool{
 	"GET /api/v1/health":          true,
+	"GET /api/v1/auth/config":     true,
 	"POST /api/v1/auth/login":     true,
 	"POST /api/v1/auth/login/2fa": true,
 	"POST /api/v1/auth/refresh":   true,

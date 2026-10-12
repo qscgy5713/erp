@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -9,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"erp/internal/platform/httpx"
+	"erp/internal/platform/tenant"
 	"erp/internal/shared/apperr"
 	"erp/internal/shared/authctx"
 	"erp/internal/shared/response"
@@ -25,6 +29,7 @@ type Handler struct {
 	secureCookie bool
 	loginLimit   gin.HandlerFunc
 	refreshLimit gin.HandlerFunc
+	tenants      *tenant.Manager // 多租戶(D92);nil = 單租戶
 }
 
 // NewHandler loginLimit / refreshLimit 為登入與刷新的限流中介層(尚未登入,以 IP 計算)。
@@ -33,9 +38,52 @@ func NewHandler(svc *Service, tokens *TokenIssuer, secureCookie bool, loginLimit
 	return &Handler{svc: svc, tokens: tokens, secureCookie: secureCookie, loginLimit: loginLimit, refreshLimit: refreshLimit}
 }
 
+// WithTenants 啟用多租戶:登入須指定租戶,token 與 refresh cookie 都帶租戶代碼。
+func (h *Handler) WithTenants(m *tenant.Manager) *Handler {
+	h.tenants = m
+	return h
+}
+
+// bindTenant 多租戶時確認租戶存在且啟用,並把它放進 request context(之後所有資料庫查詢都送到該租戶的資料庫)。
+// 單租戶時什麼都不做。租戶不存在 / 已停用回傳 false。
+func (h *Handler) bindTenant(c *gin.Context, code string) bool {
+	if h.tenants == nil {
+		return true
+	}
+	code = strings.ToLower(strings.TrimSpace(code))
+	if !tenant.ValidCode(code) {
+		return false
+	}
+	if _, err := h.tenants.Active(c.Request.Context(), code); err != nil {
+		if !errors.Is(err, tenant.ErrUnknown) && !errors.Is(err, tenant.ErrDisabled) {
+			slog.ErrorContext(c.Request.Context(), "查詢租戶失敗(控制庫異常?)", "err", err)
+		}
+		return false
+	}
+	c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), code))
+	return true
+}
+
+// refreshCookieValue 多租戶時 cookie 值為「租戶代碼~token」,refresh 與 logout 才知道要去哪個資料庫找 token。
+func (h *Handler) refreshCookieValue(ctx context.Context, raw string) string {
+	if h.tenants == nil {
+		return raw
+	}
+	return tenant.From(ctx) + "~" + raw
+}
+
+func (h *Handler) splitRefreshCookie(v string) (code, raw string) {
+	if h.tenants == nil {
+		return "", v
+	}
+	code, raw, _ = strings.Cut(v, "~")
+	return code, raw
+}
+
 // Register 掛上 /auth 路由。protected 為已套用 Authenticate 的群組。
 func (h *Handler) Register(public, protected *gin.RouterGroup) {
 	g := public.Group("/auth")
+	g.GET("/config", h.config)
 	g.POST("/login", h.loginLimit, h.login)
 	g.POST("/login/2fa", h.loginLimit, h.loginTwoFactor)
 	g.POST("/refresh", h.refreshLimit, h.refresh)
@@ -51,7 +99,13 @@ func (h *Handler) Register(public, protected *gin.RouterGroup) {
 	p.POST("/2fa/recovery-codes", h.twoFactorRecoveryCodes)
 }
 
+// config GET /auth/config 登入頁需要的公開設定:是否為多租戶(要不要顯示「公司代碼」欄位)。
+func (h *Handler) config(c *gin.Context) {
+	response.OK(c, gin.H{"multi_tenant": h.tenants != nil})
+}
+
 type loginRequest struct {
+	Tenant   string `json:"tenant" binding:"max=31"` // 多租戶必填,單租戶忽略
 	Username string `json:"username" binding:"required,max=50"`
 	Password string `json:"password" binding:"required,max=200"`
 }
@@ -83,6 +137,11 @@ func (h *Handler) login(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
+	if !h.bindTenant(c, req.Tenant) {
+		burnPasswordCheck(req.Password)
+		response.Error(c, ErrInvalidCredentials) // 與帳密錯誤同一個回應,不洩漏有哪些租戶
+		return
+	}
 	res, err := h.svc.Login(c.Request.Context(), strings.TrimSpace(req.Username), req.Password)
 	if err != nil {
 		response.Error(c, err)
@@ -105,6 +164,13 @@ func (h *Handler) loginTwoFactor(c *gin.Context) {
 	if err := httpx.BindJSON(c, &req); err != nil {
 		response.Error(c, err)
 		return
+	}
+	// 租戶以挑戰憑證內簽章過的為準,不信任請求內容(否則可拿 A 租戶的挑戰去驗 B 租戶同編號的帳號)
+	if code, _, _, err := h.tokens.ParseChallenge(req.Challenge); err == nil {
+		if !h.bindTenant(c, code) {
+			response.Error(c, ErrChallengeExpired)
+			return
+		}
 	}
 	sess, err := h.svc.LoginTwoFactor(c.Request.Context(), req.Challenge, req.Code)
 	if err != nil {
@@ -183,7 +249,13 @@ func (h *Handler) twoFactorRecoveryCodes(c *gin.Context) {
 }
 
 func (h *Handler) refresh(c *gin.Context) {
-	raw, _ := c.Cookie(refreshCookie)
+	v, _ := c.Cookie(refreshCookie)
+	code, raw := h.splitRefreshCookie(v)
+	if !h.bindTenant(c, code) {
+		h.clearCookie(c)
+		response.Error(c, ErrSessionExpired)
+		return
+	}
 	sess, err := h.svc.Refresh(c.Request.Context(), raw)
 	if err != nil {
 		h.clearCookie(c)
@@ -194,7 +266,13 @@ func (h *Handler) refresh(c *gin.Context) {
 }
 
 func (h *Handler) logout(c *gin.Context) {
-	raw, _ := c.Cookie(refreshCookie)
+	v, _ := c.Cookie(refreshCookie)
+	code, raw := h.splitRefreshCookie(v)
+	if !h.bindTenant(c, code) {
+		h.clearCookie(c)
+		response.NoContent(c) // 租戶已不存在,視為已登出
+		return
+	}
 	if err := h.svc.Logout(c.Request.Context(), raw); err != nil {
 		response.Error(c, err)
 		return
@@ -243,7 +321,7 @@ func (h *Handler) respondSession(c *gin.Context, sess Session) {
 	}
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     refreshCookie,
-		Value:    sess.RefreshToken,
+		Value:    h.refreshCookieValue(c.Request.Context(), sess.RefreshToken),
 		Path:     cookiePath,
 		Expires:  sess.RefreshExpiresAt,
 		MaxAge:   int(time.Until(sess.RefreshExpiresAt).Seconds()),
@@ -300,6 +378,24 @@ func (h *Handler) Authenticate() gin.HandlerFunc {
 		claims, err := h.tokens.Parse(token)
 		if err != nil {
 			response.Error(c, apperr.ErrUnauthorized)
+			return
+		}
+		if h.tenants != nil {
+			if claims.Tenant == "" {
+				response.Error(c, apperr.ErrUnauthorized)
+				return
+			}
+			if _, err := h.tenants.Active(c.Request.Context(), claims.Tenant); err != nil {
+				if errors.Is(err, tenant.ErrUnknown) || errors.Is(err, tenant.ErrDisabled) {
+					response.Error(c, apperr.ErrUnauthorized)
+				} else {
+					response.Error(c, err)
+				}
+				return
+			}
+			c.Request = c.Request.WithContext(tenant.With(c.Request.Context(), claims.Tenant))
+		} else if claims.Tenant != "" {
+			response.Error(c, apperr.ErrUnauthorized) // 單租戶部署不接受多租戶簽發的 token
 			return
 		}
 		actor, err := h.svc.LoadActor(c.Request.Context(), claims)

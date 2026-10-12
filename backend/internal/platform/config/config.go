@@ -11,10 +11,15 @@ import (
 )
 
 type Config struct {
-	AppEnv          string // development / production
-	HTTPAddr        string
-	DatabaseURL     string
-	ShutdownTimeout time.Duration
+	AppEnv      string // development / production
+	HTTPAddr    string
+	DatabaseURL string
+	// ControlDatabaseURL 多租戶(D92):控制庫的連線字串。設定後改為「每個租戶一個資料庫」,租戶資料庫與控制庫在同一個
+	// PostgreSQL 伺服器;此時 DATABASE_URL 可不設。不設 = 單租戶(行為與以前完全相同)。
+	ControlDatabaseURL string
+	// TenantPoolMaxConns 每個租戶連線池的連線數上限
+	TenantPoolMaxConns int
+	ShutdownTimeout    time.Duration
 	// TrustedProxies 為可信任的反向代理 IP/CIDR;只有來自這些位址的
 	// X-Forwarded-For 才會被採用,避免使用者偽造來源 IP。
 	TrustedProxies []string
@@ -48,23 +53,24 @@ const devSecretMarker = "dev-only"
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:          getenv("APP_ENV", "development"),
-		HTTPAddr:        getenv("HTTP_ADDR", ":8080"),
-		DatabaseURL:     os.Getenv("DATABASE_URL"),
-		ShutdownTimeout: 10 * time.Second,
-		TrustedProxies:  splitList(os.Getenv("TRUSTED_PROXIES")),
-		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
-		TOTPKey:         []byte(os.Getenv("TOTP_ENCRYPTION_KEY")),
-		SMTPHost:        getenv("SMTP_HOST", "smtp.gmail.com"),
-		SMTPUser:        os.Getenv("SMTP_USER"),
-		SMTPPassword:    os.Getenv("SMTP_PASSWORD"),
-		AppBaseURL:      strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"),
+		AppEnv:             getenv("APP_ENV", "development"),
+		HTTPAddr:           getenv("HTTP_ADDR", ":8080"),
+		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		ControlDatabaseURL: os.Getenv("CONTROL_DATABASE_URL"),
+		ShutdownTimeout:    10 * time.Second,
+		TrustedProxies:     splitList(os.Getenv("TRUSTED_PROXIES")),
+		JWTSecret:          []byte(os.Getenv("JWT_SECRET")),
+		TOTPKey:            []byte(os.Getenv("TOTP_ENCRYPTION_KEY")),
+		SMTPHost:           getenv("SMTP_HOST", "smtp.gmail.com"),
+		SMTPUser:           os.Getenv("SMTP_USER"),
+		SMTPPassword:       os.Getenv("SMTP_PASSWORD"),
+		AppBaseURL:         strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"),
 	}
 	cfg.SMTPFrom = getenv("SMTP_FROM", cfg.SMTPUser)
 
 	var errs []error
-	if cfg.DatabaseURL == "" {
-		errs = append(errs, errors.New("DATABASE_URL 未設定"))
+	if cfg.DatabaseURL == "" && cfg.ControlDatabaseURL == "" {
+		errs = append(errs, errors.New("DATABASE_URL 未設定(多租戶請設定 CONTROL_DATABASE_URL)"))
 	}
 	if len(cfg.JWTSecret) < 32 {
 		errs = append(errs, errors.New("JWT_SECRET 至少 32 個字元"))
@@ -77,6 +83,9 @@ func Load() (Config, error) {
 	}
 
 	var err error
+	if cfg.TenantPoolMaxConns, err = getPositiveInt("TENANT_POOL_MAX_CONNS", 8); err != nil {
+		errs = append(errs, err)
+	}
 	if cfg.SMTPPort, err = getPositiveInt("SMTP_PORT", 587); err != nil {
 		errs = append(errs, err)
 	}
@@ -100,6 +109,8 @@ func Load() (Config, error) {
 	}
 	return cfg, nil
 }
+
+func (c Config) MultiTenant() bool { return c.ControlDatabaseURL != "" }
 
 func (c Config) IsProduction() bool { return c.AppEnv == "production" }
 

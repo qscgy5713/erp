@@ -49,6 +49,9 @@ services:
       # 可信任的反向代理(IP/CIDR,逗號分隔);空白表示不採用 X-Forwarded-For
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       JWT_SECRET: ${JWT_SECRET}
+      # 多租戶(D92):設定後改為每個租戶一個資料庫;空白 = 單租戶
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:-}
+      TENANT_POOL_MAX_CONNS: ${TENANT_POOL_MAX_CONNS:-8}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}

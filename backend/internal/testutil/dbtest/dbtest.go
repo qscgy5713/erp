@@ -19,7 +19,28 @@ import (
 	"erp/internal/platform/database"
 )
 
+// NewControl 建立一個空的暫存資料庫(不套用 migration)當多租戶的控制庫,回傳其連線字串。
+// 租戶資料庫由測試用 tenant.Manager.Provision 建立,測試結束時須自行 DropDatabase。
+func NewControl(t *testing.T) string {
+	t.Helper()
+	return create(t)
+}
+
 func New(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	u := create(t)
+	ctx := context.Background()
+	pool, err := database.Connect(ctx, u)
+	if err != nil {
+		t.Fatalf("dbtest: 連線暫存庫: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	applyMigrations(t, ctx, pool)
+	return pool
+}
+
+// create 建立暫存資料庫(測試結束刪除),回傳連線字串。
+func create(t *testing.T) string {
 	t.Helper()
 	baseURL := os.Getenv("DATABASE_URL")
 	if baseURL == "" {
@@ -56,14 +77,7 @@ func New(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("dbtest: DATABASE_URL 須為 URL 格式: %v", err)
 	}
 	u.Path = "/" + name
-	pool, err := database.Connect(ctx, u.String())
-	if err != nil {
-		t.Fatalf("dbtest: 連線暫存庫: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	applyMigrations(t, ctx, pool)
-	return pool
+	return u.String()
 }
 
 func applyMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

@@ -13,6 +13,7 @@ import (
 
 	"erp/internal/db"
 	"erp/internal/platform/database"
+	"erp/internal/platform/tenant"
 	"erp/internal/shared/apperr"
 	"erp/internal/shared/authctx"
 	"erp/internal/system/audit"
@@ -108,7 +109,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 	}
 
 	if u.TotpEnabled {
-		ch, err := s.tokens.IssueChallenge(u.ID, u.TokenVersion)
+		ch, err := s.tokens.IssueChallenge(tenant.From(ctx), u.ID, u.TokenVersion)
 		if err != nil {
 			return LoginResult{}, err
 		}
@@ -163,7 +164,7 @@ func (s *Service) completeLogin(ctx context.Context, u db.User, summary string) 
 
 // LoginTwoFactor 以挑戰憑證加驗證碼(6 位數 TOTP 或備援碼)完成登入。錯誤與密碼錯誤共用失敗計數與鎖定。
 func (s *Service) LoginTwoFactor(ctx context.Context, challenge, code string) (Session, error) {
-	uid, tv, err := s.tokens.ParseChallenge(challenge)
+	_, uid, tv, err := s.tokens.ParseChallenge(challenge)
 	if err != nil {
 		return Session{}, ErrChallengeExpired
 	}
@@ -548,7 +549,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPw, newPw
 }
 
 func (s *Service) newSession(ctx context.Context, q *db.Queries, u db.User, family uuid.UUID) (Session, error) {
-	access, accessExp, err := s.tokens.Issue(u.ID, u.CompanyID, u.TokenVersion)
+	access, accessExp, err := s.tokens.Issue(tenant.From(ctx), u.ID, u.CompanyID, u.TokenVersion)
 	if err != nil {
 		return Session{}, err
 	}

@@ -198,7 +198,42 @@ erp ps && curl https://你的網域/api/v1/health   # 4. 確認
 | 對帳檢查出現差異 | 見 [manual.md](manual.md) 的「對帳檢查」;匯入期初前已過帳、沒有傳票的單據是常見原因 |
 | 磁碟滿了 | `docker system df`;清舊備份、`docker image prune`;資料庫本身很少是主因 |
 
+## 9.5 多租戶(分庫不分表)
+
+預設是單租戶(一個資料庫,一家公司)。要服務多家客戶,啟用多租戶:**每個租戶一個獨立資料庫,表結構相同**,另有一個控制庫記錄租戶清單。租戶之間在資料庫層級完全隔離(連線字串不同的資料庫),不會因為漏寫 `WHERE` 而看到別人的資料。
+
+**啟用**(`.env.prod`):
+
+```
+CONTROL_DATABASE_URL=postgres://帳號:密碼@postgres:5432/erp_control?sslmode=disable
+TENANT_POOL_MAX_CONNS=8      # 每個租戶連線池的連線數上限;租戶很多時調小,並留意 PostgreSQL 的 max_connections
+```
+
+控制庫須事先存在(`CREATE DATABASE erp_control;`);租戶資料庫與控制庫在**同一個 PostgreSQL 伺服器、同一組帳密**,租戶資料庫由 CLI 自動建立(帳號需有 CREATEDB 權限,docker 預設的 `POSTGRES_USER` 有)。設定後 api 啟動即為多租戶模式,`DATABASE_URL` 不再使用。
+
+**日常指令**(同 `cli` 服務,見上方「日常維運」):
+
+```bash
+erp run --rm -e ADMIN_PASSWORD cli create-tenant -code acme -name "ACME 股份有限公司" -admin admin   # 建庫 + 建表 + 管理員
+erp run --rm cli list-tenants
+erp run --rm cli disable-tenant -code acme      # 停用:既有登入立即失效(其他 API 程序最慢 15 秒)
+erp run --rm cli enable-tenant -code acme
+erp run --rm cli migrate-tenants                # 升級後對每個租戶資料庫套用新的 migration(可加 -tenant acme 只升級一個)
+erp run --rm -e ADMIN_PASSWORD cli create-admin -tenant acme -username boss2
+erp run --rm cli cleanup-tokens                 # 多租戶時預設處理所有租戶
+```
+
+租戶代碼為小寫英數與連字號(2–31 字元),資料庫名稱為 `erp_<代碼>`(連字號換底線)。使用者登入時輸入該代碼。
+
+**把現有單租戶資料庫轉成第一個租戶**:設定 `CONTROL_DATABASE_URL` 後執行 `cli register-tenant -code main -name "公司名" -db erp`(`-db` 是既有資料庫名稱)。使用者之後登入多輸入 `main` 即可,資料完全不動。
+
+**升級時**:多租戶不會自動對每個租戶升級——部署新版後**一定要執行 `cli migrate-tenants`**,否則新程式碰到舊表結構會出錯。(舊的 `migrate` 服務只會升級 `DATABASE_URL` 那一個資料庫。)
+
+**備份**:`scripts/backup.sh` 偵測到 `CONTROL_DATABASE_URL` 時,會備份控制庫與控制庫登記的每個租戶資料庫(各一個 `<資料庫名>_時間.dump`)。`scripts/restore.sh --verify` 可驗證任一個備份檔;還原某個租戶時請先 `disable-tenant`,再手動 `pg_restore -d erp_<代碼> --clean`,完成後 `enable-tenant`(`restore.sh --yes` 只還原 `POSTGRES_DB`,不適用租戶庫)。
+
 ## 10. 已知限制
+
+- 多租戶:租戶管理只有 CLI、沒有網頁介面;租戶資料庫必須和控制庫在同一個 PostgreSQL 伺服器;限流以使用者 / IP 計算,租戶之間不隔離額度;沒有跨租戶報表與用量計費。
 
 - 單機部署:沒有高可用(資料庫與 api 各一個)。資料安全靠備份;RTO 取決於還原時間(資料量小時為分鐘級)。
 - 沒有內建的監控與告警;請用外部服務監看 `/api/v1/health` 與備份是否成功。

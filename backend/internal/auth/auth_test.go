@@ -27,7 +27,7 @@ func TestValidatePassword(t *testing.T) {
 func TestTokenRoundTripAndTampering(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	iss := NewTokenIssuer(secret, time.Minute)
-	tok, _, err := iss.Issue(42, 1, 3)
+	tok, _, err := iss.Issue("", 42, 1, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestTokenRoundTripAndTampering(t *testing.T) {
 	// 過期
 	past := NewTokenIssuer(secret, time.Minute)
 	past.now = func() time.Time { return time.Now().Add(-2 * time.Minute) }
-	old, _, _ := past.Issue(1, 1, 1)
+	old, _, _ := past.Issue("", 1, 1, 1)
 	if _, err := iss.Parse(old); err == nil {
 		t.Fatal("過期 token 應無效")
 	}
@@ -69,5 +69,26 @@ func TestRefreshTokenHash(t *testing.T) {
 	}
 	if string(hashToken(raw)) != string(hash) {
 		t.Fatal("雜湊不一致")
+	}
+}
+
+// TestChallengeCarriesTenant 2FA 挑戰憑證綁定租戶(防止拿 A 租戶的挑戰去驗 B 租戶同編號的帳號)。
+func TestChallengeCarriesTenant(t *testing.T) {
+	iss := NewTokenIssuer([]byte("0123456789abcdef0123456789abcdef"), time.Minute)
+	ch, err := iss.IssueChallenge("alpha", 7, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, uid, tv, err := iss.ParseChallenge(ch)
+	if err != nil || code != "alpha" || uid != 7 || tv != 2 {
+		t.Fatalf("got %q %d %d %v", code, uid, tv, err)
+	}
+	tok, _, _ := iss.Issue("beta", 1, 1, 1)
+	claims, err := iss.Parse(tok)
+	if err != nil || claims.Tenant != "beta" {
+		t.Fatalf("access token 租戶 = %+v %v", claims, err)
+	}
+	if _, _, _, err := iss.ParseChallenge(tok); err == nil {
+		t.Fatal("access token 不可當作挑戰憑證")
 	}
 }

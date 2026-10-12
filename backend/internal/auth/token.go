@@ -16,8 +16,9 @@ const issuer = "erp"
 // Claims 為 access token 內容。TokenVersion 與 users.token_version 不符即失效
 // (改密碼、停用、重設密碼時遞增)。
 type Claims struct {
-	CompanyID    int64 `json:"cid"`
-	TokenVersion int32 `json:"tv"`
+	CompanyID    int64  `json:"cid"`
+	TokenVersion int32  `json:"tv"`
+	Tenant       string `json:"tn,omitempty"` // 多租戶:租戶代碼;單租戶為空
 	jwt.RegisteredClaims
 }
 
@@ -35,12 +36,13 @@ func NewTokenIssuer(secret []byte, ttl time.Duration) *TokenIssuer {
 	return &TokenIssuer{secret: secret, ttl: ttl, now: time.Now}
 }
 
-func (t *TokenIssuer) Issue(userID, companyID int64, tokenVersion int32) (string, time.Time, error) {
+func (t *TokenIssuer) Issue(tenantCode string, userID, companyID int64, tokenVersion int32) (string, time.Time, error) {
 	now := t.now()
 	exp := now.Add(t.ttl)
 	claims := Claims{
 		CompanyID:    companyID,
 		TokenVersion: tokenVersion,
+		Tenant:       tenantCode,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   strconv.FormatInt(userID, 10),
@@ -93,14 +95,16 @@ const (
 
 // challengeClaims 密碼驗證通過、等待輸入雙因素驗證碼的憑證。TokenVersion 與帳號不符(改密碼等)即失效。
 type challengeClaims struct {
-	TokenVersion int32 `json:"tv"`
+	TokenVersion int32  `json:"tv"`
+	Tenant       string `json:"tn,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func (t *TokenIssuer) IssueChallenge(userID int64, tokenVersion int32) (string, error) {
+func (t *TokenIssuer) IssueChallenge(tenantCode string, userID int64, tokenVersion int32) (string, error) {
 	now := t.now()
 	claims := challengeClaims{
 		TokenVersion: tokenVersion,
+		Tenant:       tenantCode,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer: challengeIssuer, Subject: strconv.FormatInt(userID, 10),
 			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(challengeTTL)),
@@ -109,17 +113,17 @@ func (t *TokenIssuer) IssueChallenge(userID int64, tokenVersion int32) (string, 
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(t.secret)
 }
 
-func (t *TokenIssuer) ParseChallenge(s string) (userID int64, tokenVersion int32, err error) {
+func (t *TokenIssuer) ParseChallenge(s string) (tenantCode string, userID int64, tokenVersion int32, err error) {
 	var claims challengeClaims
 	_, err = jwt.ParseWithClaims(s, &claims, func(*jwt.Token) (any, error) { return t.secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithIssuer(challengeIssuer), jwt.WithExpirationRequired(), jwt.WithTimeFunc(t.now))
 	if err != nil {
-		return 0, 0, errInvalidToken
+		return "", 0, 0, errInvalidToken
 	}
 	userID, err = strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
-		return 0, 0, errInvalidToken
+		return "", 0, 0, errInvalidToken
 	}
-	return userID, claims.TokenVersion, nil
+	return claims.Tenant, userID, claims.TokenVersion, nil
 }

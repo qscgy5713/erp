@@ -19,14 +19,24 @@ import (
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpserver"
 	"erp/internal/platform/ratelimit"
+	"erp/internal/platform/tenant"
 	"erp/internal/production"
 	"erp/internal/purchase"
 	"erp/internal/sales"
 	"erp/internal/system"
 )
 
+// NewRouter 單租戶。
 func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
-	store := database.NewStore(pool)
+	return newRouter(cfg, database.NewStore(pool), pool, nil)
+}
+
+// NewTenantRouter 多租戶(D92):每個租戶一個資料庫,依登入者的租戶選擇。
+func NewTenantRouter(cfg config.Config, m *tenant.Manager) (*gin.Engine, error) {
+	return newRouter(cfg, database.NewResolvedStore(m), m, m)
+}
+
+func newRouter(cfg config.Config, store *database.Store, health httpserver.Pinger, tenants *tenant.Manager) (*gin.Engine, error) {
 	notify.Configure(cfg.SMTPEnabled(), cfg.AppBaseURL)
 	tokens := auth.NewTokenIssuer(cfg.JWTSecret, cfg.AccessTokenTTL)
 
@@ -36,6 +46,9 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	}
 	authHandler := auth.NewHandler(auth.NewService(store, tokens, cfg.RefreshTokenTTL).WithTOTPKey(cfg.TOTPKey, cfg.JWTSecret), tokens,
 		cfg.IsProduction(), limiter(cfg.LoginRateLimitPerMinute), limiter(cfg.RefreshRateLimitPerMinute))
+	if tenants != nil {
+		authHandler.WithTenants(tenants)
+	}
 	apiLimit := limiter(cfg.RateLimitPerMinute)
 	systemModule := system.New(store)
 	masterdataModule := masterdata.New(store)
@@ -52,7 +65,7 @@ func NewRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error) {
 	notifyHandler := notify.NewHandler(store)
 
 	return httpserver.NewRouter(httpserver.Deps{
-		DB:             pool,
+		DB:             health,
 		Production:     cfg.IsProduction(),
 		TrustedProxies: cfg.TrustedProxies,
 		Authenticate:   authHandler.Authenticate(),

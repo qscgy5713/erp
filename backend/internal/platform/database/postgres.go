@@ -10,6 +10,11 @@ import (
 )
 
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
+	return ConnectOpts(ctx, url, 0, 0)
+}
+
+// ConnectOpts 同 Connect,另可指定連線數上限與閒置連線回收時間(0 = 用預設);多租戶時每個租戶一個小連線池。
+func ConnectOpts(ctx context.Context, url string, maxConns int32, maxIdle time.Duration) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("解析 DATABASE_URL: %w", err)
@@ -21,6 +26,12 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	// 強制每次依實際參數規劃,多花的規劃時間(約 1 ms)遠小於退化的代價。
 	cfg.ConnConfig.RuntimeParams["plan_cache_mode"] = "force_custom_plan"
 
+	if maxConns > 0 {
+		cfg.MaxConns = maxConns
+	}
+	if maxIdle > 0 {
+		cfg.MaxConnIdleTime = maxIdle
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("建立連線池: %w", err)

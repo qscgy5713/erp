@@ -40,8 +40,10 @@ export interface TwoFactorSetup {
 }
 
 export const authApi = {
-  login: (username: string, password: string) =>
-    http.post<Session | TwoFactorChallenge>('/auth/login', { username, password }),
+  /** 登入頁需要的公開設定:多租戶時要顯示「公司代碼」欄位 */
+  config: () => http.get<{ multi_tenant: boolean }>('/auth/config'),
+  login: (username: string, password: string, tenant?: string) =>
+    http.post<Session | TwoFactorChallenge>('/auth/login', { username, password, tenant }),
   loginTwoFactor: (challenge: string, code: string) =>
     http.post<Session>('/auth/login/2fa', { challenge, code }),
   twoFactorStatus: () => http.get<TwoFactorStatus>('/auth/2fa'),

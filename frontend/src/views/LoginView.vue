@@ -1,17 +1,30 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError } from '@/api/http'
+import { authApi } from '@/api/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
 const formRef = ref<FormInstance>()
-const form = reactive({ username: '', password: '' })
+const TENANT_KEY = 'erp_tenant'
+// 多租戶部署才需要輸入公司代碼;記住上次輸入的,下次不用再打
+const multiTenant = ref(false)
+const form = reactive({ tenant: '', username: '', password: '' })
+onMounted(async () => {
+  try {
+    multiTenant.value = (await authApi.config()).multi_tenant
+    form.tenant = localStorage.getItem(TENANT_KEY) ?? ''
+  } catch {
+    // 讀不到設定就當單租戶,送出時若需要租戶後端會回登入失敗
+  }
+})
 const rules: FormRules = {
+  tenant: [{ required: true, message: '請輸入公司代碼', trigger: 'blur' }],
   username: [{ required: true, message: '請輸入帳號', trigger: 'blur' }],
   password: [{ required: true, message: '請輸入密碼', trigger: 'blur' }],
 }
@@ -31,7 +44,15 @@ async function submit() {
   loading.value = true
   error.value = ''
   try {
-    const ch = await auth.login(form.username, form.password)
+    const tenant = multiTenant.value ? form.tenant.trim().toLowerCase() : undefined
+    const ch = await auth.login(form.username, form.password, tenant)
+    if (tenant) {
+      try {
+        localStorage.setItem(TENANT_KEY, tenant)
+      } catch {
+        // 無痕模式等情況存不了,不影響登入
+      }
+    }
     if (ch) {
       challenge.value = ch
       return
@@ -114,8 +135,11 @@ function backToPassword() {
         label-position="top"
         @submit.prevent="submit"
       >
+        <el-form-item v-if="multiTenant" label="公司代碼" prop="tenant">
+          <el-input v-model="form.tenant" autocomplete="organization" autofocus />
+        </el-form-item>
         <el-form-item label="帳號" prop="username">
-          <el-input v-model="form.username" autocomplete="username" autofocus />
+          <el-input v-model="form.username" autocomplete="username" :autofocus="!multiTenant" />
         </el-form-item>
         <el-form-item label="密碼" prop="password">
           <el-input

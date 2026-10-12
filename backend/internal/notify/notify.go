@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"erp/internal/db"
+	"erp/internal/platform/tenant"
 )
 
 var (
@@ -123,6 +124,30 @@ type Worker struct {
 	Sender Sender
 	// CheckDueDays 票據在幾天內到期就通知
 	CheckDueDays int
+	// Tenants 多租戶(D92):回傳要處理的租戶代碼,逐一以該租戶的 context 執行;nil = 單租戶(context 不帶租戶)
+	Tenants func(ctx context.Context) ([]string, error)
+}
+
+// each 對每個租戶(單租戶只有一次)執行 fn;某個租戶失敗不影響其他租戶。
+func (w *Worker) each(ctx context.Context, what string, fn func(ctx context.Context) error) {
+	if w.Tenants == nil {
+		if err := fn(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn(what+"失敗", "err", err)
+		}
+		return
+	}
+	codes, err := w.Tenants(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn(what+":取得租戶清單失敗", "err", err)
+		}
+		return
+	}
+	for _, code := range codes {
+		if err := fn(tenant.With(ctx, code)); err != nil && ctx.Err() == nil {
+			slog.Warn(what+"失敗", "tenant", code, "err", err)
+		}
+	}
 }
 
 // Flush 寄出一批到期的佇列,回傳成功寄出的封數。
@@ -167,21 +192,15 @@ func (w *Worker) Run(ctx context.Context) {
 	scan := time.NewTicker(time.Hour)
 	defer flush.Stop()
 	defer scan.Stop()
-	if err := w.Scan(ctx); err != nil {
-		slog.Warn("通知掃描失敗", "err", err)
-	}
+	w.each(ctx, "通知掃描", w.Scan)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-flush.C:
-			if _, err := w.Flush(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("通知寄送失敗", "err", err)
-			}
+			w.each(ctx, "通知寄送", func(ctx context.Context) error { _, err := w.Flush(ctx); return err })
 		case <-scan.C:
-			if err := w.Scan(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("通知掃描失敗", "err", err)
-			}
+			w.each(ctx, "通知掃描", w.Scan)
 		}
 	}
 }

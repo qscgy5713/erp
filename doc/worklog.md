@@ -1,5 +1,12 @@
 # 工作日誌
 
+## 2026-10-12 多租戶:分庫不分表(D92)
+- 使用者要求「多租戶,分庫不分表」→ 每租戶一個獨立資料庫、表結構不變;控制庫記錄租戶。
+- 關鍵設計:sqlc 的每個查詢本來就帶 ctx,所以把 `Store` 的 `Queries` 接到一個依 ctx 選連線池的 `DBTX` router,業務模組完全不用改;沒有租戶的 ctx 一律失敗,絕不預設。
+- 新增:`platform/tenant`(Manager、Fixed、Provision)、`platform/migrate`(內嵌 migration 的執行器,與 golang-migrate 相容)、`backend/migrations/embed.go`、`cmd/cli/tenant.go`;auth 的 token / 2FA 挑戰 / refresh cookie 帶租戶;`GET /auth/config`;登入頁多一個「公司代碼」欄位(多租戶才顯示,記住上次輸入);通知信背景工作逐租戶執行;`scripts/backup.sh` 涵蓋控制庫與所有租戶庫。
+- 測試:`TestTenantIsolation`(同名帳號各登入各租戶、錯誤一致、資料物理隔離、無租戶 ctx 失敗、refresh 跨租戶冒用、停用 / 啟用租戶、單租戶 token 不被接受)、`TestTenantProvisionRollback`、`TestChallengeCarriesTenant`。實機:用 CLI 建兩個租戶、`migrate` 工具讀得到版本、API 多租戶模式登入驗證(測完已清除)。
+- 既有部署不受影響(不設 `CONTROL_DATABASE_URL` 就是單租戶);要轉入多租戶見 doc/deploy.md「多租戶」。
+
 ## 2026-10-12 標準成本與成本差異(D91)
 - 本輪「生產進階」範圍由我決定:標準成本與差異是唯讀的管理報表,不碰庫存與會計分錄,風險最低,先做;分批完工 / WIP / 委外會改到成本與傳票,留給後續各自一輪。
 - migration 34:`item_standard_costs`;新權限 `costing.standard.write`。

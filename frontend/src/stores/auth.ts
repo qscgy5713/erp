@@ -60,8 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   /** 回傳挑戰憑證表示還需要雙因素驗證碼(呼叫 loginTwoFactor 完成);否則已登入,回傳 null */
-  async function login(username: string, password: string): Promise<string | null> {
-    const res = await authApi.login(username, password)
+  async function login(
+    username: string,
+    password: string,
+    tenant?: string,
+  ): Promise<string | null> {
+    const res = await authApi.login(username, password, tenant)
     if ('two_factor_required' in res) return res.challenge
     apply(res)
     initialized.value = true
