@@ -424,7 +424,9 @@ func (m *Module) upload(c *gin.Context) {
 		}
 		res.ErrorCount = len(r.errs)
 		res.Errors = r.errs[:min(len(r.errs), maxErrors)]
-		res.Summary = r.summary
+		if len(r.errs) == 0 { // 有錯誤時整批不寫入,不回報「新增 N 筆」以免誤導
+			res.Summary = r.summary
+		}
 		if len(r.errs) > 0 || dry {
 			return errRollback
 		}

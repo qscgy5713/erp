@@ -439,7 +439,7 @@ func TestImportWarehousesCategoriesUnitsAndUpdate(t *testing.T) {
 	// 分類:子分類排在父分類之後;上層不存在要報錯
 	ch := c.importHeaders("categories")
 	_, out = c.upload("categories", "", xlsx(t, ch, []string{"DAIRY", "乳製品", "FOOD", ""}, []string{"FOOD", "食品", "", "1"}))
-	if out.OK || !out.hasError("上層分類代號", "不存在") {
+	if out.OK || !out.hasError("上層分類代號", "不存在") || out.Summary != "" { // 有錯誤時不可回報「新增 N 筆」
 		t.Fatalf("分類預檢 = %+v", out)
 	}
 	_, out = c.upload("categories", "", xlsx(t, ch, []string{"FOOD", "食品", "", "1"}, []string{"DAIRY", "乳製品", "FOOD", ""}))
