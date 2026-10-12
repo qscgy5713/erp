@@ -149,9 +149,28 @@ type DeleteStandardCostParams struct {
 	CompanyID int64
 }
 
+// 清除某個料品的全部標準成本版本
 func (q *Queries) DeleteStandardCost(ctx context.Context, arg DeleteStandardCostParams) error {
 	_, err := q.db.Exec(ctx, deleteStandardCost, arg.ItemID, arg.CompanyID)
 	return err
+}
+
+const deleteStandardCostVersion = `-- name: DeleteStandardCostVersion :execrows
+DELETE FROM item_standard_costs WHERE item_id = $1 AND company_id = $2 AND effective_from = $3
+`
+
+type DeleteStandardCostVersionParams struct {
+	ItemID        int64
+	CompanyID     int64
+	EffectiveFrom time.Time
+}
+
+func (q *Queries) DeleteStandardCostVersion(ctx context.Context, arg DeleteStandardCostVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStandardCostVersion, arg.ItemID, arg.CompanyID, arg.EffectiveFrom)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const gLBalanceAsOf = `-- name: GLBalanceAsOf :one
@@ -530,13 +549,57 @@ func (q *Queries) ListItemCostsRaw(ctx context.Context, closingID int64) ([]Item
 	return items, nil
 }
 
+const listStandardCostVersions = `-- name: ListStandardCostVersions :many
+SELECT s.effective_from, s.standard_cost, s.updated_at, COALESCE(u.name, '')::text AS updated_by_name
+FROM item_standard_costs s LEFT JOIN users u ON u.id = s.updated_by
+WHERE s.item_id = $1 AND s.company_id = $2 ORDER BY s.effective_from DESC
+`
+
+type ListStandardCostVersionsParams struct {
+	ItemID    int64
+	CompanyID int64
+}
+
+type ListStandardCostVersionsRow struct {
+	EffectiveFrom time.Time
+	StandardCost  decimal.Decimal
+	UpdatedAt     time.Time
+	UpdatedByName string
+}
+
+func (q *Queries) ListStandardCostVersions(ctx context.Context, arg ListStandardCostVersionsParams) ([]ListStandardCostVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listStandardCostVersions, arg.ItemID, arg.CompanyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStandardCostVersionsRow{}
+	for rows.Next() {
+		var i ListStandardCostVersionsRow
+		if err := rows.Scan(
+			&i.EffectiveFrom,
+			&i.StandardCost,
+			&i.UpdatedAt,
+			&i.UpdatedByName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStandardCosts = `-- name: ListStandardCosts :many
 
 SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        sc.standard_cost, sc.updated_at,
        EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active) AS has_bom
 FROM items i JOIN units u ON u.id = i.base_unit_id
-LEFT JOIN item_standard_costs sc ON sc.item_id = i.id
+LEFT JOIN item_standard_costs sc ON sc.item_id = i.id AND sc.effective_from = (
+    SELECT max(s2.effective_from) FROM item_standard_costs s2 WHERE s2.item_id = i.id AND s2.effective_from <= CURRENT_DATE)
 WHERE i.company_id = $1 AND i.is_active AND i.item_type = 'goods'
   AND ($2::text IS NULL OR i.code ILIKE '%' || $2 || '%' OR i.name ILIKE '%' || $2 || '%')
   AND (NOT $3::boolean OR EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active))
@@ -671,13 +734,17 @@ SELECT t.item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        SUM(t.qty)::numeric AS produced_qty,
        COALESCE(SUM(t.qty * t.unit_cost) FILTER (WHERE t.unit_cost IS NOT NULL), 0)::numeric AS actual_amount,
        COALESCE(SUM(t.qty) FILTER (WHERE t.unit_cost IS NULL), 0)::numeric AS uncosted_qty,
-       sc.standard_cost
+       COALESCE(SUM(t.qty * sc.standard_cost) FILTER (WHERE sc.standard_cost IS NOT NULL), 0)::numeric AS standard_amount,
+       COALESCE(SUM(t.qty) FILTER (WHERE sc.standard_cost IS NULL), 0)::numeric AS no_std_qty
 FROM inventory_transactions t
 JOIN items i ON i.id = t.item_id JOIN units u ON u.id = i.base_unit_id
-LEFT JOIN item_standard_costs sc ON sc.item_id = t.item_id
+LEFT JOIN LATERAL (
+    SELECT s.standard_cost FROM item_standard_costs s
+    WHERE s.item_id = t.item_id AND s.effective_from <= t.doc_date ORDER BY s.effective_from DESC LIMIT 1
+) sc ON TRUE
 WHERE t.company_id = $1 AND t.source_type IN ('work_order_receipt', 'wo_completion_receipt')
   AND t.doc_date BETWEEN $2::date AND $3::date
-GROUP BY t.item_id, i.code, i.name, u.name, sc.standard_cost
+GROUP BY t.item_id, i.code, i.name, u.name
 HAVING SUM(t.qty) <> 0
 ORDER BY i.code
 `
@@ -689,17 +756,19 @@ type StandardCostVarianceParams struct {
 }
 
 type StandardCostVarianceRow struct {
-	ItemID       int64
-	ItemCode     string
-	ItemName     string
-	UnitName     string
-	ProducedQty  decimal.Decimal
-	ActualAmount decimal.Decimal
-	UncostedQty  decimal.Decimal
-	StandardCost *decimal.Decimal
+	ItemID         int64
+	ItemCode       string
+	ItemName       string
+	UnitName       string
+	ProducedQty    decimal.Decimal
+	ActualAmount   decimal.Decimal
+	UncostedQty    decimal.Decimal
+	StandardAmount decimal.Decimal
+	NoStdQty       decimal.Decimal
 }
 
-// 期間內完工入庫的成品:數量、實際成本(月結寫回的單位成本 × 數量)與標準成本;uncosted_qty > 0 表示該月尚未月結
+// 期間內完工入庫的成品:數量、實際成本(月結寫回的單位成本 × 數量)與標準成本(依各筆完工日當時有效的版本);
+// uncosted_qty > 0 表示該月尚未月結;no_std_qty > 0 表示有完工量找不到當時有效的標準成本
 func (q *Queries) StandardCostVariance(ctx context.Context, arg StandardCostVarianceParams) ([]StandardCostVarianceRow, error) {
 	rows, err := q.db.Query(ctx, standardCostVariance, arg.CompanyID, arg.StartDate, arg.EndDate)
 	if err != nil {
@@ -717,7 +786,8 @@ func (q *Queries) StandardCostVariance(ctx context.Context, arg StandardCostVari
 			&i.ProducedQty,
 			&i.ActualAmount,
 			&i.UncostedQty,
-			&i.StandardCost,
+			&i.StandardAmount,
+			&i.NoStdQty,
 		); err != nil {
 			return nil, err
 		}
@@ -730,12 +800,15 @@ func (q *Queries) StandardCostVariance(ctx context.Context, arg StandardCostVari
 }
 
 const standardCostsOf = `-- name: StandardCostsOf :many
-SELECT item_id, standard_cost FROM item_standard_costs WHERE company_id = $1 AND item_id = ANY($2::bigint[])
+SELECT DISTINCT ON (item_id) item_id, standard_cost FROM item_standard_costs
+WHERE company_id = $1 AND item_id = ANY($2::bigint[]) AND effective_from <= $3::date
+ORDER BY item_id, effective_from DESC
 `
 
 type StandardCostsOfParams struct {
 	CompanyID int64
 	ItemIds   []int64
+	AsOf      time.Time
 }
 
 type StandardCostsOfRow struct {
@@ -743,8 +816,9 @@ type StandardCostsOfRow struct {
 	StandardCost decimal.Decimal
 }
 
+// 各料品在指定日期當時有效的標準成本
 func (q *Queries) StandardCostsOf(ctx context.Context, arg StandardCostsOfParams) ([]StandardCostsOfRow, error) {
-	rows, err := q.db.Query(ctx, standardCostsOf, arg.CompanyID, arg.ItemIds)
+	rows, err := q.db.Query(ctx, standardCostsOf, arg.CompanyID, arg.ItemIds, arg.AsOf)
 	if err != nil {
 		return nil, err
 	}
@@ -821,22 +895,24 @@ func (q *Queries) UncostedStockMonths(ctx context.Context, arg UncostedStockMont
 }
 
 const upsertStandardCost = `-- name: UpsertStandardCost :exec
-INSERT INTO item_standard_costs (item_id, company_id, standard_cost, updated_by)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (item_id) DO UPDATE SET standard_cost = EXCLUDED.standard_cost, updated_by = EXCLUDED.updated_by, updated_at = now()
+INSERT INTO item_standard_costs (item_id, company_id, effective_from, standard_cost, updated_by)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (item_id, effective_from) DO UPDATE SET standard_cost = EXCLUDED.standard_cost, updated_by = EXCLUDED.updated_by, updated_at = now()
 `
 
 type UpsertStandardCostParams struct {
-	ItemID       int64
-	CompanyID    int64
-	StandardCost decimal.Decimal
-	ActorID      *int64
+	ItemID        int64
+	CompanyID     int64
+	EffectiveFrom time.Time
+	StandardCost  decimal.Decimal
+	ActorID       *int64
 }
 
 func (q *Queries) UpsertStandardCost(ctx context.Context, arg UpsertStandardCostParams) error {
 	_, err := q.db.Exec(ctx, upsertStandardCost,
 		arg.ItemID,
 		arg.CompanyID,
+		arg.EffectiveFrom,
 		arg.StandardCost,
 		arg.ActorID,
 	)

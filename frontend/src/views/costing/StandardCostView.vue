@@ -2,7 +2,7 @@
 // 標準成本:成品的目標單位成本(基本單位),只做管理用的差異分析,不入帳
 import { computed, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { costingApi, type StandardCost } from '@/api/costing'
+import { costingApi, type StandardCost, type StandardCostVersion } from '@/api/costing'
 import type { PageMeta } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
@@ -54,6 +54,54 @@ async function save(row: StandardCost) {
   }
 }
 
+// ---- 版本:不同生效日的標準成本,差異報表依各筆完工日取當時有效的一筆 ----
+const BASE = '2000-01-01'
+const vDialog = reactive({
+  open: false,
+  row: null as StandardCost | null,
+  rows: [] as StandardCostVersion[],
+  date: '',
+  cost: '',
+})
+
+async function openVersions(row: StandardCost) {
+  vDialog.row = row
+  vDialog.date = ''
+  vDialog.cost = ''
+  try {
+    vDialog.rows = await costingApi.standardVersions(row.item_id)
+    vDialog.open = true
+  } catch (e) {
+    handle(e)
+  }
+}
+
+async function addVersion() {
+  if (!vDialog.row || !vDialog.date || vDialog.cost.trim() === '') return
+  try {
+    await costingApi.setStandardVersion(vDialog.row.item_id, vDialog.cost.trim(), vDialog.date)
+    vDialog.rows = await costingApi.standardVersions(vDialog.row.item_id)
+    vDialog.date = ''
+    vDialog.cost = ''
+    ElMessage.success('已儲存')
+    await load()
+  } catch (e) {
+    handle(e)
+  }
+}
+
+async function removeVersion(v: StandardCostVersion) {
+  if (!vDialog.row) return
+  try {
+    await costingApi.setStandardVersion(vDialog.row.item_id, null, v.effective_from)
+    vDialog.rows = await costingApi.standardVersions(vDialog.row.item_id)
+    ElMessage.success('已刪除')
+    await load()
+  } catch (e) {
+    handle(e)
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -71,7 +119,9 @@ onMounted(load)
       <el-checkbox v-model="state.onlyBom" @change="((state.page = 1), load())"
         >只看有 BOM 的成品</el-checkbox
       >
-      <span class="hint">單位成本以基本單位計;清空欄位即清除。標準成本不入帳。</span>
+      <span class="hint"
+        >單位成本以基本單位計;清空欄位即清除全部版本。上方輸入的是「一直有效」的版本,要依日期調整請按「版本」。標準成本不入帳。</span
+      >
     </div>
     <el-table v-loading="state.loading" :data="state.rows" border empty-text="沒有資料">
       <el-table-column prop="item_code" label="料號" width="140" />
@@ -89,7 +139,45 @@ onMounted(load)
           />
         </template>
       </el-table-column>
+      <el-table-column label="版本" width="100">
+        <template #default="{ row }">
+          <el-button link type="primary" @click="openVersions(row)">版本</el-button>
+        </template>
+      </el-table-column>
     </el-table>
+    <el-dialog
+      v-model="vDialog.open"
+      :title="`標準成本版本 ${vDialog.row?.item_code ?? ''}`"
+      width="560px"
+    >
+      <p class="hint">
+        完工日落在哪個生效日之後,就用那一版;「一直有效」是最早的基準。標準成本不入帳。
+      </p>
+      <el-table :data="vDialog.rows" border size="small" empty-text="還沒有版本">
+        <el-table-column label="生效日" width="140">
+          <template #default="{ row }">{{
+            row.effective_from === BASE ? '一直有效' : row.effective_from
+          }}</template>
+        </el-table-column>
+        <el-table-column prop="standard_cost" label="標準單位成本" align="right" />
+        <el-table-column prop="updated_by_name" label="維護者" width="110" />
+        <el-table-column v-if="canWrite" width="70">
+          <template #default="{ row }">
+            <el-button link type="danger" @click="removeVersion(row)">刪除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="canWrite" class="add-version">
+        <el-date-picker
+          v-model="vDialog.date"
+          value-format="YYYY-MM-DD"
+          placeholder="生效日"
+          style="width: 160px"
+        />
+        <el-input v-model="vDialog.cost" placeholder="標準單位成本" style="width: 160px" />
+        <el-button type="primary" @click="addVersion">新增 / 更新版本</el-button>
+      </div>
+    </el-dialog>
     <div class="pager">
       <el-pagination
         v-model:current-page="state.page"
@@ -103,3 +191,16 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped>
+.hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.add-version {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+</style>

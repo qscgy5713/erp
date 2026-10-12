@@ -280,6 +280,37 @@ func TestWorkOrderLifecycleAndCosting(t *testing.T) {
 	if v := variance("2026-09"); len(v) != 1 || v[0].Status != "ok" || *v[0].StandardUnit != "400" || *v[0].Variance != "500" || *v[0].VariancePct != "12.5" {
 		t.Fatalf("差異 = %+v", v)
 	}
+	// 標準成本版本(D99):完工在 9/10。9/15 起改 500 不影響 9 月(仍 400);9/05 起 380 > 9/10 前一版,取最近一個不晚於完工日者
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "500", "effective_from": "2026-09-15"}), http.StatusNoContent, "")
+	if v := variance("2026-09"); *v[0].StandardUnit != "400" || *v[0].Variance != "500" {
+		t.Fatalf("9/15 起的版本不應影響 9/10 完工,got %+v", v[0])
+	}
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "380", "effective_from": "2026-09-05"}), http.StatusNoContent, "")
+	if v := variance("2026-09"); *v[0].StandardUnit != "380" || *v[0].Variance != "700" {
+		t.Fatalf("應取 9/05 版本,got %+v", v[0])
+	}
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "1", "effective_from": "bad"}), http.StatusUnprocessableEntity, "SYS-422")
+	vers := decode[[]struct {
+		EffectiveFrom string `json:"effective_from"`
+		StandardCost  string `json:"standard_cost"`
+	}](t, c.do(http.MethodGet, stdPath+"/versions", nil).Data)
+	if len(vers) != 3 || vers[0].EffectiveFrom != "2026-09-15" || vers[2].EffectiveFrom != "2000-01-01" || vers[2].StandardCost != "400" {
+		t.Fatalf("版本列表 = %+v", vers)
+	}
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil, "effective_from": "2026-01-01"}), http.StatusNotFound, "SYS-404")
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil, "effective_from": "2026-09-05"}), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil, "effective_from": "2026-09-15"}), http.StatusNoContent, "")
+	if v := variance("2026-09"); *v[0].StandardUnit != "400" {
+		t.Fatalf("刪除版本後應回到 400,got %+v", v[0])
+	}
+	// 只有 9/20 起的版本:完工(9/10)當時沒有有效標準 → 視為未設
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "400", "effective_from": "2026-09-20"}), http.StatusNoContent, "")
+	if v := variance("2026-09"); v[0].Status != "no_standard" {
+		t.Fatalf("完工日前沒有有效版本應為未設標準,got %+v", v[0])
+	}
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "400"}), http.StatusNoContent, "")
 	if v := variance("2026-10"); len(v) != 0 {
 		t.Fatalf("沒有完工的月份應為空,got %+v", v)
 	}

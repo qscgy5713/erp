@@ -152,7 +152,8 @@ SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit
        sc.standard_cost, sc.updated_at,
        EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active) AS has_bom
 FROM items i JOIN units u ON u.id = i.base_unit_id
-LEFT JOIN item_standard_costs sc ON sc.item_id = i.id
+LEFT JOIN item_standard_costs sc ON sc.item_id = i.id AND sc.effective_from = (
+    SELECT max(s2.effective_from) FROM item_standard_costs s2 WHERE s2.item_id = i.id AND s2.effective_from <= CURRENT_DATE)
 WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
   AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%')
   AND (NOT @only_bom::boolean OR EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active))
@@ -166,29 +167,43 @@ WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
   AND (NOT @only_bom::boolean OR EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active));
 
 -- name: UpsertStandardCost :exec
-INSERT INTO item_standard_costs (item_id, company_id, standard_cost, updated_by)
-VALUES (@item_id, @company_id, @standard_cost, @actor_id)
-ON CONFLICT (item_id) DO UPDATE SET standard_cost = EXCLUDED.standard_cost, updated_by = EXCLUDED.updated_by, updated_at = now();
+INSERT INTO item_standard_costs (item_id, company_id, effective_from, standard_cost, updated_by)
+VALUES (@item_id, @company_id, @effective_from, @standard_cost, @actor_id)
+ON CONFLICT (item_id, effective_from) DO UPDATE SET standard_cost = EXCLUDED.standard_cost, updated_by = EXCLUDED.updated_by, updated_at = now();
 
 -- name: DeleteStandardCost :exec
+-- 清除某個料品的全部標準成本版本
 DELETE FROM item_standard_costs WHERE item_id = @item_id AND company_id = @company_id;
+
+-- name: DeleteStandardCostVersion :execrows
+DELETE FROM item_standard_costs WHERE item_id = @item_id AND company_id = @company_id AND effective_from = @effective_from;
+
+-- name: ListStandardCostVersions :many
+SELECT s.effective_from, s.standard_cost, s.updated_at, COALESCE(u.name, '')::text AS updated_by_name
+FROM item_standard_costs s LEFT JOIN users u ON u.id = s.updated_by
+WHERE s.item_id = @item_id AND s.company_id = @company_id ORDER BY s.effective_from DESC;
 
 -- name: StandardCostItemOK :one
 SELECT EXISTS (SELECT 1 FROM items WHERE id = @id AND company_id = @company_id AND item_type = 'goods');
 
 -- name: StandardCostVariance :many
--- 期間內完工入庫的成品:數量、實際成本(月結寫回的單位成本 × 數量)與標準成本;uncosted_qty > 0 表示該月尚未月結
+-- 期間內完工入庫的成品:數量、實際成本(月結寫回的單位成本 × 數量)與標準成本(依各筆完工日當時有效的版本);
+-- uncosted_qty > 0 表示該月尚未月結;no_std_qty > 0 表示有完工量找不到當時有效的標準成本
 SELECT t.item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        SUM(t.qty)::numeric AS produced_qty,
        COALESCE(SUM(t.qty * t.unit_cost) FILTER (WHERE t.unit_cost IS NOT NULL), 0)::numeric AS actual_amount,
        COALESCE(SUM(t.qty) FILTER (WHERE t.unit_cost IS NULL), 0)::numeric AS uncosted_qty,
-       sc.standard_cost
+       COALESCE(SUM(t.qty * sc.standard_cost) FILTER (WHERE sc.standard_cost IS NOT NULL), 0)::numeric AS standard_amount,
+       COALESCE(SUM(t.qty) FILTER (WHERE sc.standard_cost IS NULL), 0)::numeric AS no_std_qty
 FROM inventory_transactions t
 JOIN items i ON i.id = t.item_id JOIN units u ON u.id = i.base_unit_id
-LEFT JOIN item_standard_costs sc ON sc.item_id = t.item_id
+LEFT JOIN LATERAL (
+    SELECT s.standard_cost FROM item_standard_costs s
+    WHERE s.item_id = t.item_id AND s.effective_from <= t.doc_date ORDER BY s.effective_from DESC LIMIT 1
+) sc ON TRUE
 WHERE t.company_id = @company_id AND t.source_type IN ('work_order_receipt', 'wo_completion_receipt')
   AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-GROUP BY t.item_id, i.code, i.name, u.name, sc.standard_cost
+GROUP BY t.item_id, i.code, i.name, u.name
 HAVING SUM(t.qty) <> 0
 ORDER BY i.code;
 
@@ -233,4 +248,7 @@ HAVING SUM(x.qty) <> 0
 ORDER BY x.output_item_id, mi.code;
 
 -- name: StandardCostsOf :many
-SELECT item_id, standard_cost FROM item_standard_costs WHERE company_id = @company_id AND item_id = ANY(@item_ids::bigint[]);
+-- 各料品在指定日期當時有效的標準成本
+SELECT DISTINCT ON (item_id) item_id, standard_cost FROM item_standard_costs
+WHERE company_id = @company_id AND item_id = ANY(@item_ids::bigint[]) AND effective_from <= @as_of::date
+ORDER BY item_id, effective_from DESC;

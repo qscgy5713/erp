@@ -28,6 +28,32 @@ type standardCostDTO struct {
 	HasBom       bool             `json:"has_bom"`
 }
 
+type standardVersionDTO struct {
+	EffectiveFrom string          `json:"effective_from"` // 2000-01-01 = 一直有效
+	StandardCost  decimal.Decimal `json:"standard_cost"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	UpdatedByName string          `json:"updated_by_name"`
+}
+
+// listStandardVersions GET /costing/standard-costs/:item_id/versions
+func (m *Module) listStandardVersions(c *gin.Context) {
+	itemID, err := httpx.ParamID(c, "item_id")
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	rows, err := m.store.ListStandardCostVersions(c.Request.Context(), db.ListStandardCostVersionsParams{ItemID: itemID, CompanyID: actor(c).CompanyID})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	out := make([]standardVersionDTO, len(rows))
+	for i, r := range rows {
+		out[i] = standardVersionDTO{EffectiveFrom: r.EffectiveFrom.Format(time.DateOnly), StandardCost: r.StandardCost, UpdatedAt: r.UpdatedAt, UpdatedByName: r.UpdatedByName}
+	}
+	response.OK(c, out)
+}
+
 // listStandardCosts GET /costing/standard-costs?keyword=&only_bom=true
 func (m *Module) listStandardCosts(c *gin.Context) {
 	pg := page.Parse(c.Query("page"), c.Query("size"))
@@ -54,9 +80,13 @@ func (m *Module) listStandardCosts(c *gin.Context) {
 }
 
 type standardCostInput struct {
-	// null 或空白 = 清除標準成本
+	// null 或空白 = 清除標準成本:未指定生效日清除全部版本,指定生效日只清除該版本
 	StandardCost *decimal.Decimal `json:"standard_cost"`
+	// EffectiveFrom 生效日(YYYY-MM-DD);空白 = 一直有效(基準版本,2000-01-01)。差異報表依各筆完工日取當時有效的版本
+	EffectiveFrom string `json:"effective_from"`
 }
+
+const baseEffective = "2000-01-01"
 
 // setStandardCost PUT /costing/standard-costs/:item_id
 func (m *Module) setStandardCost(c *gin.Context) {
@@ -74,6 +104,15 @@ func (m *Module) setStandardCost(c *gin.Context) {
 		response.Error(c, apperr.Validation(map[string]string{"standard_cost": "須 ≥ 0,最多 6 位小數"}))
 		return
 	}
+	eff := baseEffective
+	if in.EffectiveFrom != "" {
+		eff = in.EffectiveFrom
+	}
+	effDate, perr := time.Parse(time.DateOnly, eff)
+	if perr != nil {
+		response.Error(c, apperr.Validation(map[string]string{"effective_from": "請輸入日期 YYYY-MM-DD"}))
+		return
+	}
 	a := actor(c)
 	ctx := c.Request.Context()
 	err = m.store.InTx(ctx, func(q *db.Queries) error {
@@ -85,15 +124,29 @@ func (m *Module) setStandardCost(c *gin.Context) {
 			return apperr.ErrNotFound
 		}
 		summary := "清除標準成本"
-		if in.StandardCost == nil {
+		switch {
+		case in.StandardCost == nil && in.EffectiveFrom == "":
 			if err := q.DeleteStandardCost(ctx, db.DeleteStandardCostParams{ItemID: itemID, CompanyID: a.CompanyID}); err != nil {
 				return err
 			}
-		} else {
-			if err := q.UpsertStandardCost(ctx, db.UpsertStandardCostParams{ItemID: itemID, CompanyID: a.CompanyID, StandardCost: *in.StandardCost, ActorID: &a.UserID}); err != nil {
+		case in.StandardCost == nil:
+			n, err := q.DeleteStandardCostVersion(ctx, db.DeleteStandardCostVersionParams{ItemID: itemID, CompanyID: a.CompanyID, EffectiveFrom: effDate})
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return apperr.ErrNotFound
+			}
+			summary = "刪除標準成本版本 " + eff
+		default:
+			if err := q.UpsertStandardCost(ctx, db.UpsertStandardCostParams{ItemID: itemID, CompanyID: a.CompanyID, EffectiveFrom: effDate,
+				StandardCost: *in.StandardCost, ActorID: &a.UserID}); err != nil {
 				return err
 			}
 			summary = "設定標準成本 " + in.StandardCost.String()
+			if in.EffectiveFrom != "" {
+				summary += "(" + eff + " 起)"
+			}
 		}
 		return audit.Record(ctx, q, audit.Entry{Action: audit.Update, EntityType: "standard_cost", EntityID: &itemID, Summary: summary, After: in})
 	})
@@ -112,7 +165,7 @@ type varianceRow struct {
 	ProducedQty  decimal.Decimal  `json:"produced_qty"`
 	ActualAmount decimal.Decimal  `json:"actual_amount"`
 	ActualUnit   *decimal.Decimal `json:"actual_unit"`   // 實際單位成本;尚未月結為 null
-	StandardUnit *decimal.Decimal `json:"standard_unit"` // 沒設標準成本為 null
+	StandardUnit *decimal.Decimal `json:"standard_unit"` // 標準金額 ÷ 完工量(各筆依完工日取當時版本);沒設標準成本為 null
 	StandardAmt  *decimal.Decimal `json:"standard_amount"`
 	Variance     *decimal.Decimal `json:"variance"`     // 實際 − 標準;正數 = 實際高於標準
 	VariancePct  *decimal.Decimal `json:"variance_pct"` // 差異 ÷ 標準 × 100
@@ -147,9 +200,10 @@ func (m *Module) variance(c *gin.Context) {
 		} else {
 			v.Status = "uncosted"
 		}
-		if r.StandardCost != nil {
-			su := *r.StandardCost
-			sa := money.Amount(su.Mul(r.ProducedQty))
+		// 完工量全部找得到當時有效的標準成本才比較;只有部分有版本視為未設標準
+		if r.NoStdQty.IsZero() {
+			sa := money.Amount(r.StandardAmount)
+			su := r.StandardAmount.Div(r.ProducedQty).Round(6)
 			v.StandardUnit, v.StandardAmt = &su, &sa
 			if costed {
 				d := money.Amount(r.ActualAmount).Sub(sa)

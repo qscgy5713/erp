@@ -59,6 +59,14 @@ export interface StandardCost {
   has_bom: boolean
 }
 
+export interface StandardCostVersion {
+  /** 2000-01-01 = 一直有效 */
+  effective_from: string
+  standard_cost: Decimal
+  updated_at: string
+  updated_by_name: string
+}
+
 export interface MaterialVariance {
   material_id: number
   material_code: string
@@ -105,6 +113,10 @@ export const costingApi = {
     requestPage<StandardCost>(`/costing/standard-costs${qs(q)}`),
   setStandardCost: (item_id: number, standard_cost: string | null) =>
     http.put<unknown>(`/costing/standard-costs/${item_id}`, { standard_cost }),
+  standardVersions: (item_id: number) =>
+    http.get<StandardCostVersion[]>(`/costing/standard-costs/${item_id}/versions`),
+  setStandardVersion: (item_id: number, standard_cost: string | null, effective_from: string) =>
+    http.put<unknown>(`/costing/standard-costs/${item_id}`, { standard_cost, effective_from }),
   variance: (period: string) =>
     http.get<{ period: string; rows: VarianceRow[] }>(`/costing/variance${qs({ period })}`),
   closings: () => http.get<Closing[]>('/costing/closings'),

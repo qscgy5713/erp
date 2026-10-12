@@ -19,7 +19,7 @@ import (
 //	加工費差異   = 總差異 − 用量差異 − 價格差異(= 實際加工費 − 標準加工費,含四捨五入尾差)
 //
 // 標準用量 = 期間結束日適用的 BOM 用量 × (1 + 損耗率) × 完工數量 ÷ 產出量;替代料不在 BOM 內,標準用量為 0,
-// 所以會表現為用量差異。材料標準單價取材料自己的標準成本,沒設就用實際單價(價格差異為 0)。
+// 所以會表現為用量差異。材料標準單價取材料自己在期間結束日有效的標準成本,沒設就用實際單價(價格差異為 0)。
 // 標準加工費 = 成品標準成本 × 完工數量 − 標準材料成本。
 
 type materialVariance struct {
@@ -78,7 +78,7 @@ func breakdowns(ctx context.Context, q *db.Queries, companyID int64, start, end 
 	for id := range matIDs {
 		mids = append(mids, id)
 	}
-	scs, err := q.StandardCostsOf(ctx, db.StandardCostsOfParams{CompanyID: companyID, ItemIds: mids})
+	scs, err := q.StandardCostsOf(ctx, db.StandardCostsOfParams{CompanyID: companyID, ItemIds: mids, AsOf: end})
 	if err != nil {
 		return nil, err
 	}
