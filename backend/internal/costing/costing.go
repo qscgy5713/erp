@@ -38,6 +38,9 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/closings/:period/run", auth.Require(permission.CostClose), m.run)
 	g.POST("/closings/:period/cancel", auth.Require(permission.CostClose), m.cancel)
 	g.GET("/reconcile", read, m.reconcile)
+	g.GET("/standard-costs", read, m.listStandardCosts)
+	g.PUT("/standard-costs/:item_id", auth.Require(permission.CostStandardWrite), m.setStandardCost)
+	g.GET("/variance", read, m.variance)
 }
 
 // ---- 計算(純函式,不碰資料庫) ----

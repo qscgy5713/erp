@@ -364,6 +364,16 @@ const router = createRouter({
       meta: { title: '月結成本', perm: ['costing.read', 'costing.close'] },
     },
     {
+      path: '/costing/standard',
+      component: () => import('@/views/costing/StandardCostView.vue'),
+      meta: { title: '標準成本', perm: ['costing.read', 'costing.close'] },
+    },
+    {
+      path: '/costing/variance',
+      component: () => import('@/views/costing/VarianceView.vue'),
+      meta: { title: '成本差異', perm: ['costing.read', 'costing.close'] },
+    },
+    {
       path: '/costing/reconcile',
       component: () => import('@/views/costing/ReconcileView.vue'),
       meta: { title: '對帳檢查', perm: ['costing.read', 'costing.close'] },

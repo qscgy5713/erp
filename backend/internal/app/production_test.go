@@ -246,6 +246,41 @@ func TestWorkOrderLifecycleAndCosting(t *testing.T) {
 	if err := e.pool.QueryRow(context.Background(), "SELECT unit_cost FROM inventory_transactions WHERE source_type = 'work_order_issue' AND item_id = $1 AND qty < 0", raw2).Scan(&issueCost); err != nil || !issueCost.Equal(decimal.NewFromInt(200)) {
 		t.Fatalf("領料單位成本 = %s err=%v", issueCost, err)
 	}
+	// 標準成本與差異(D91):實際 450 vs 標準 400 → 差異 +500(+12.5%);未設標準、未月結的月份給對應狀態
+	type varRow struct {
+		ItemID       int64   `json:"item_id"`
+		ProducedQty  string  `json:"produced_qty"`
+		ActualUnit   *string `json:"actual_unit"`
+		StandardUnit *string `json:"standard_unit"`
+		Variance     *string `json:"variance"`
+		VariancePct  *string `json:"variance_pct"`
+		Status       string  `json:"status"`
+	}
+	variance := func(period string) []varRow {
+		res := c.do(http.MethodGet, "/costing/variance?period="+period, nil)
+		expect(t, res, http.StatusOK, "")
+		return decode[struct {
+			Rows []varRow `json:"rows"`
+		}](t, res.Data).Rows
+	}
+	if v := variance("2026-09"); len(v) != 1 || v[0].ItemID != fg || v[0].ProducedQty != "10" || *v[0].ActualUnit != "450" || v[0].Status != "no_standard" || v[0].Variance != nil {
+		t.Fatalf("未設標準成本 = %+v", v)
+	}
+	stdPath := "/costing/standard-costs/" + itoa(fg)
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "-1"}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, c.do(http.MethodPut, "/costing/standard-costs/99999", map[string]any{"standard_cost": "1"}), http.StatusNotFound, "SYS-404")
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": "400"}), http.StatusNoContent, "")
+	if v := variance("2026-09"); len(v) != 1 || v[0].Status != "ok" || *v[0].StandardUnit != "400" || *v[0].Variance != "500" || *v[0].VariancePct != "12.5" {
+		t.Fatalf("差異 = %+v", v)
+	}
+	if v := variance("2026-10"); len(v) != 0 {
+		t.Fatalf("沒有完工的月份應為空,got %+v", v)
+	}
+	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
+	if v := variance("2026-09"); v[0].Status != "no_standard" {
+		t.Fatalf("清除後 = %+v", v)
+	}
+	expect(t, c.do(http.MethodGet, "/costing/variance?period=bad", nil), http.StatusUnprocessableEntity, "SYS-422")
 	// 對帳檢查全數通過(存貨子帳 9500 = 總帳)
 	rec := decode[struct {
 		Checks []struct {

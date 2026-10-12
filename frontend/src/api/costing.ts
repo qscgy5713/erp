@@ -49,7 +49,39 @@ export interface Reconcile {
   checks: Check[]
 }
 
+export interface StandardCost {
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  standard_cost: Decimal | null
+  updated_at: string | null
+  has_bom: boolean
+}
+
+export interface VarianceRow {
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  produced_qty: Decimal
+  actual_amount: Decimal
+  actual_unit: Decimal | null
+  standard_unit: Decimal | null
+  standard_amount: Decimal | null
+  /** 實際 − 標準;正數 = 實際高於標準(不利差異) */
+  variance: Decimal | null
+  variance_pct: Decimal | null
+  status: 'ok' | 'uncosted' | 'no_standard'
+}
+
 export const costingApi = {
+  standardCosts: (q: { keyword?: string; only_bom?: boolean; page: number; size: number }) =>
+    requestPage<StandardCost>(`/costing/standard-costs${qs(q)}`),
+  setStandardCost: (item_id: number, standard_cost: string | null) =>
+    http.put<unknown>(`/costing/standard-costs/${item_id}`, { standard_cost }),
+  variance: (period: string) =>
+    http.get<{ period: string; rows: VarianceRow[] }>(`/costing/variance${qs({ period })}`),
   closings: () => http.get<Closing[]>('/costing/closings'),
   items: (period: string, q: { keyword?: string; page: number; size: number }) =>
     requestPage<ItemCost>(`/costing/closings/${period}/items${qs(q)}`),

@@ -1,5 +1,12 @@
 # 工作日誌
 
+## 2026-10-12 標準成本與成本差異(D91)
+- 本輪「生產進階」範圍由我決定:標準成本與差異是唯讀的管理報表,不碰庫存與會計分錄,風險最低,先做;分批完工 / WIP / 委外會改到成本與傳票,留給後續各自一輪。
+- migration 34:`item_standard_costs`;新權限 `costing.standard.write`。
+- 後端 `costing/standard.go`:`GET /costing/standard-costs`(附有無 BOM,預設只看有 BOM 的成品)、`PUT /costing/standard-costs/:item_id`(null = 清除)、`GET /costing/variance?period=`。
+- 前端:庫存 > 標準成本(逐列編輯,離開欄位自動儲存)、成本差異(月份選擇、差異紅綠色)。
+- 測試:接在 `TestWorkOrderLifecycleAndCosting` 後:未設標準 → 設 400 後差異 +500(+12.5%)→ 清除;非法值 / 不存在料品 / 期間格式錯誤。
+
 ## 2026-10-12 BOM 替代料(D90)
 - migration 33:`bom_line_substitutes`(隨 `bom_lines` 連動刪除,所以 BOM 儲存時「先刪明細再重建」會一併重建替代料)。
 - 後端:BOM 讀寫與驗證(上限 5 個、不可是成品 / 其他主料 / 重複、比例 > 0)、循環檢查含替代料、工單展開 API 回傳 `substitutes`(用量 = 主料用量 × 比例)。

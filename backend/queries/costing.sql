@@ -143,3 +143,51 @@ SELECT (
         WHERE ib.company_id = @company_id AND i.lot_control <> 'none' AND ib.qty <> COALESCE(y.q, 0)
     ) c)
 )::bigint AS mismatches;
+
+-- ======== 標準成本與差異(D91) ========
+
+-- name: ListStandardCosts :many
+-- 啟用中的商品類料品與其標準成本(沒設定的 standard_cost 為 NULL);has_bom 表示有 BOM(通常是要設標準成本的成品)
+SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+       sc.standard_cost, sc.updated_at,
+       EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active) AS has_bom
+FROM items i JOIN units u ON u.id = i.base_unit_id
+LEFT JOIN item_standard_costs sc ON sc.item_id = i.id
+WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
+  AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%')
+  AND (NOT @only_bom::boolean OR EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active))
+ORDER BY i.code
+LIMIT @lim OFFSET @off;
+
+-- name: CountStandardCosts :one
+SELECT count(*) FROM items i
+WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
+  AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%')
+  AND (NOT @only_bom::boolean OR EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active));
+
+-- name: UpsertStandardCost :exec
+INSERT INTO item_standard_costs (item_id, company_id, standard_cost, updated_by)
+VALUES (@item_id, @company_id, @standard_cost, @actor_id)
+ON CONFLICT (item_id) DO UPDATE SET standard_cost = EXCLUDED.standard_cost, updated_by = EXCLUDED.updated_by, updated_at = now();
+
+-- name: DeleteStandardCost :exec
+DELETE FROM item_standard_costs WHERE item_id = @item_id AND company_id = @company_id;
+
+-- name: StandardCostItemOK :one
+SELECT EXISTS (SELECT 1 FROM items WHERE id = @id AND company_id = @company_id AND item_type = 'goods');
+
+-- name: StandardCostVariance :many
+-- 期間內完工入庫的成品:數量、實際成本(月結寫回的單位成本 × 數量)與標準成本;uncosted_qty > 0 表示該月尚未月結
+SELECT t.item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+       SUM(t.qty)::numeric AS produced_qty,
+       COALESCE(SUM(t.qty * t.unit_cost) FILTER (WHERE t.unit_cost IS NOT NULL), 0)::numeric AS actual_amount,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.unit_cost IS NULL), 0)::numeric AS uncosted_qty,
+       sc.standard_cost
+FROM inventory_transactions t
+JOIN items i ON i.id = t.item_id JOIN units u ON u.id = i.base_unit_id
+LEFT JOIN item_standard_costs sc ON sc.item_id = t.item_id
+WHERE t.company_id = @company_id AND t.source_type = 'work_order_receipt'
+  AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+GROUP BY t.item_id, i.code, i.name, u.name, sc.standard_cost
+HAVING SUM(t.qty) <> 0
+ORDER BY i.code;

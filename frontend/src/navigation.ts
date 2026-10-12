@@ -129,6 +129,8 @@ export const navigation: NavItem[] = [
       { title: '收發存', path: '/inventory/movement-summary', perm: INVENTORY_ANY },
       { title: '庫存單據', path: '/inventory/documents', perm: INVENTORY_ANY },
       { title: '月結成本', path: '/costing/closings', perm: ['costing.read', 'costing.close'] },
+      { title: '標準成本', path: '/costing/standard', perm: ['costing.read', 'costing.close'] },
+      { title: '成本差異', path: '/costing/variance', perm: ['costing.read', 'costing.close'] },
     ],
   },
   {

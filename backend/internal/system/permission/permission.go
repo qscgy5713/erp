@@ -63,8 +63,9 @@ const (
 	WorkOrderApprove = "production.order.approve" // 核准、退回、取消核准、作廢
 	WorkOrderPost    = "production.order.post"    // 完工(領料並成品入庫)、反完工
 	// 月結成本與對帳
-	CostRead  = "costing.read"  // 月結結果、對帳檢查
-	CostClose = "costing.close" // 月結 / 取消月結
+	CostRead          = "costing.read"           // 月結結果、對帳檢查
+	CostClose         = "costing.close"          // 月結 / 取消月結
+	CostStandardWrite = "costing.standard.write" // 維護標準成本
 	// 會計
 	AccountRead  = "gl.account.read" // 科目表、拋轉規則
 	AccountWrite = "gl.account.write"
@@ -133,7 +134,7 @@ var Groups = []Group{
 	{"生產", "工單", []Permission{
 		{WorkOrderRead, "檢視"}, {WorkOrderWrite, "開單/送審"}, {WorkOrderApprove, "核准/退回/作廢"}, {WorkOrderPost, "完工(領料入庫)/反完工"},
 	}},
-	{"庫存", "月結成本與對帳檢查", []Permission{{CostRead, "檢視"}, {CostClose, "月結/取消月結"}}},
+	{"庫存", "月結成本與對帳檢查", []Permission{{CostRead, "檢視"}, {CostClose, "月結/取消月結"}, {CostStandardWrite, "維護標準成本"}}},
 	{"會計", "會計科目與拋轉規則", []Permission{{AccountRead, "檢視"}, {AccountWrite, "新增/修改"}}},
 	{"會計", "傳票", []Permission{{VoucherRead, "檢視"}, {VoucherWrite, "開單"}, {VoucherPost, "過帳/沖銷"}}},
 	{"會計", "會計期間", []Permission{{PeriodRead, "檢視"}, {PeriodClose, "關帳/重開"}}},

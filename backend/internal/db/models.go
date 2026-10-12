@@ -575,6 +575,14 @@ type ItemLot struct {
 	CreatedAt  time.Time
 }
 
+type ItemStandardCost struct {
+	ItemID       int64
+	CompanyID    int64
+	StandardCost decimal.Decimal
+	UpdatedBy    *int64
+	UpdatedAt    time.Time
+}
+
 type ItemUnit struct {
 	ItemID  int64
 	UnitID  int64
