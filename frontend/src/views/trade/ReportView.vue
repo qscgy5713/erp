@@ -52,6 +52,8 @@ async function load() {
 
 function change() {
   page.value = 1
+  result.value = null
+  detail.value = []
   load()
 }
 
