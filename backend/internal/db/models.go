@@ -846,6 +846,17 @@ type UserRole struct {
 	RoleID int64
 }
 
+type VatPeriodSetting struct {
+	CompanyID   int64
+	Year        int32
+	Period      int32
+	PriorCredit decimal.Decimal
+	CustomsTax  decimal.Decimal
+	UseRatio    bool
+	UpdatedBy   *int64
+	UpdatedAt   time.Time
+}
+
 type Voucher struct {
 	ID          int64
 	CompanyID   int64
@@ -865,6 +876,18 @@ type Voucher struct {
 	Version     int32
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type VoucherAttachment struct {
+	ID          int64
+	CompanyID   int64
+	VoucherID   int64
+	Filename    string
+	ContentType string
+	SizeBytes   int32
+	Content     []byte
+	UploadedBy  *int64
+	UploadedAt  time.Time
 }
 
 type VoucherLine struct {

@@ -415,3 +415,102 @@ func TestImportRejectsZipBomb(t *testing.T) {
 		t.Fatalf("拒絕太慢: %v", time.Since(start))
 	}
 }
+
+func TestImportWarehousesCategoriesUnitsAndUpdate(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+
+	// 倉庫
+	wh := c.importHeaders("warehouses")
+	_, out := c.upload("warehouses", "", xlsx(t, wh, []string{"WH-A", "主倉", "", "否", "否"}, []string{"WH-B", "成品倉", "", "", "是"}, []string{"WH-A", "重複", "", "", ""}, []string{"WH-C", "壞", "", "也許", ""}))
+	if out.OK || !out.hasError("倉庫代號", "重複") || !out.hasError("允許負庫存", "是") || e.count("warehouses") != 0 {
+		t.Fatalf("倉庫預檢 = %+v", out)
+	}
+	_, out = c.upload("warehouses", "", xlsx(t, wh, []string{"WH-A", "主倉", "", "否", "否"}, []string{"WH-B", "成品倉", "", "", "是"}))
+	var bins bool
+	if !out.OK || e.count("warehouses") != 2 {
+		t.Fatalf("倉庫匯入 = %+v", out)
+	}
+	if err := e.pool.QueryRow(context.Background(), "SELECT use_bins FROM warehouses WHERE code = 'WH-B'").Scan(&bins); err != nil || !bins {
+		t.Fatalf("use_bins = %v err=%v", bins, err)
+	}
+
+	// 分類:子分類排在父分類之後;上層不存在要報錯
+	ch := c.importHeaders("categories")
+	_, out = c.upload("categories", "", xlsx(t, ch, []string{"DAIRY", "乳製品", "FOOD", ""}, []string{"FOOD", "食品", "", "1"}))
+	if out.OK || !out.hasError("上層分類代號", "不存在") {
+		t.Fatalf("分類預檢 = %+v", out)
+	}
+	_, out = c.upload("categories", "", xlsx(t, ch, []string{"FOOD", "食品", "", "1"}, []string{"DAIRY", "乳製品", "FOOD", ""}))
+	if !out.OK || e.count("item_categories") != 2 {
+		t.Fatalf("分類匯入 = %+v", out)
+	}
+
+	// 料品:預設倉庫與多單位換算
+	h := c.importHeaders("items")
+	item := func(code, name, price, whCode, units string) []string {
+		return []string{code, name, "", "DAIRY", "商品", "PCS", "", "TX5", "", price, "", "", whCode, units}
+	}
+	_, out = c.upload("items", "", xlsx(t, h, item("I-1", "鮮乳", "60", "NOPE", "BOX=0"), item("I-2", "優格", "", "", "PCS=1")))
+	if out.OK || !out.hasError("預設倉庫代號", "不存在") || !out.hasError("多單位換算", "大於 0") || !out.hasError("多單位換算", "基本單位") {
+		t.Fatalf("料品預檢 = %+v", out)
+	}
+	_, out = c.upload("items", "", xlsx(t, h, item("I-1", "鮮乳", "60", "WH-A", "BOX=12;PKG=144")))
+	if !out.OK {
+		t.Fatalf("料品匯入 = %+v", out)
+	}
+	var factor string
+	var defWh *int64
+	if err := e.pool.QueryRow(context.Background(), `SELECT trim_scale(iu.factor)::text, i.default_warehouse_id FROM items i
+		JOIN item_units iu ON iu.item_id = i.id JOIN units u ON u.id = iu.unit_id WHERE i.code = 'I-1' AND u.code = 'PKG'`).Scan(&factor, &defWh); err != nil || factor != "144" || defWh == nil {
+		t.Fatalf("units/warehouse: %s %v err=%v", factor, defWh, err)
+	}
+
+	// 覆蓋更新:不加 mode 仍視為重複;mode=update 時改名、改價、空白欄位保留、不可改基本單位
+	_, out = c.upload("items", "", xlsx(t, h, item("I-1", "鮮乳改名", "70", "", "")))
+	if out.OK || !out.hasError("料號", "覆蓋更新") {
+		t.Fatalf("未選覆蓋更新應報重複: %+v", out)
+	}
+	_, out = c.upload("items", "mode=update", xlsx(t, h, item("I-1", "鮮乳改名", "70", "", "")))
+	if !out.OK || !strings.Contains(out.Summary, "更新 1") {
+		t.Fatalf("覆蓋更新 = %+v", out)
+	}
+	var name, price string
+	var ver int
+	if err := e.pool.QueryRow(context.Background(), "SELECT name, trim_scale(list_price)::text, version FROM items WHERE code = 'I-1'").Scan(&name, &price, &ver); err != nil ||
+		name != "鮮乳改名" || price != "70" || ver != 2 {
+		t.Fatalf("更新後 %s %s v%d err=%v", name, price, ver, err)
+	}
+	if err := e.pool.QueryRow(context.Background(), "SELECT default_warehouse_id FROM items WHERE code = 'I-1'").Scan(&defWh); err != nil || defWh == nil {
+		t.Fatalf("空白欄位應保留預設倉庫: %v err=%v", defWh, err)
+	}
+	if e.count("item_units") != 2 {
+		t.Fatalf("多單位欄空白應保留原換算,item_units = %d", e.count("item_units"))
+	}
+	bad := item("I-1", "x", "", "", "")
+	bad[5] = "BOX"
+	_, out = c.upload("items", "mode=update", xlsx(t, h, bad))
+	if out.OK || !out.hasError("基本單位代號", "基本單位") {
+		t.Fatalf("不可改基本單位: %+v", out)
+	}
+	// 不支援覆蓋更新的類型
+	res, _ := c.upload("warehouses", "mode=update", xlsx(t, wh, []string{"WH-Z", "x", "", "", ""}))
+	expect(t, res, http.StatusUnprocessableEntity, "SYS-422")
+
+	// 客戶覆蓋更新:空白保留原值
+	cu := c.importHeaders("customers")
+	row := func(name, limit string) []string {
+		return []string{"C-1", name, "", "", "", "", "", "TX5", "M30", "王小明", "台北市", "", "", limit, ""}
+	}
+	_, out = c.upload("customers", "", xlsx(t, cu, row("甲公司", "1000")))
+	if !out.OK {
+		t.Fatalf("客戶建立 = %+v", out)
+	}
+	_, out = c.upload("customers", "mode=update", xlsx(t, cu, []string{"C-1", "甲公司(改)", "", "", "", "", "", "", "", "", "", "", "", "", ""}))
+	var cname, limit, contacts string
+	if err := e.pool.QueryRow(context.Background(), "SELECT name, trim_scale(credit_limit)::text, contacts::text FROM customers WHERE code = 'C-1'").Scan(&cname, &limit, &contacts); err != nil ||
+		!out.OK || cname != "甲公司(改)" || limit != "1000" || !strings.Contains(contacts, "王小明") {
+		t.Fatalf("客戶更新: %+v %s %s %s err=%v", out, cname, limit, contacts, err)
+	}
+}

@@ -69,6 +69,7 @@
 - 銷貨成本與庫存調整 / 盤點的傳票於 M7 月結後拋轉;M6 之前已過帳的單據不補傳票
 
 ### 已完成(M7 月結成本與對帳檢查)
+- **傳票附件**:原始憑證(PDF / PNG / JPEG / xlsx,每張最多 10 個、5MB)存資料庫;**現金流量表(直接法)**與**部門別損益**;**營業稅 401** 可輸入上期留抵、海關代徵、按比例扣抵並自動計算應納 / 留抵
 - **月結成本**:月加權平均成本(以料品為單位,期初 + 本月進貨);依月份順序月結,算出各料品平均成本、期末存貨金額;**自動拋銷貨成本與存貨盤損益傳票**,並把平均成本回寫到流水帳
 - 月結後該月的庫存異動鎖定;可取消最新一個月的月結並重算
 - **對帳檢查**:存貨 / 應收 / 應付子帳與總帳核對、庫存現有量與流水帳核對、傳票借貸平衡、未月結月份提醒
@@ -230,7 +231,9 @@ docker build --target prod -t erp-web frontend   # nginx 提供靜態檔並代�
 | `GET /costing/closings`、`GET …/{YYYY-MM}/items`、`POST …/{YYYY-MM}/{run\|cancel}` | 月結成本與各料品計算明細、月結 / 取消月結 |
 | `GET /costing/reconcile` | 自動對帳檢查 |
 | `GET /dashboard` | 首頁儀表板(依權限回傳卡片) |
-| `GET /imports/types`、`GET /imports/types/{type}/template`、`POST /imports/types/{type}?dry_run=&date=`(multipart `file`)、`GET /imports/batches`、`POST /imports/batches/{id}/undo` | Excel 匯入(類型:items、customers、suppliers、opening_stock、opening_ar、opening_ap、opening_balance) |
+| `GET/POST/DELETE /gl/vouchers/{id}/attachments[/{aid}]` | 傳票附件(上傳為 multipart `file`) |
+| `GET /gl/reports/cash-flow`、`GET /gl/reports/department-pnl`、`PUT /gl/reports/vat401/settings` | 現金流量表、部門別損益、401 申報輸入 |
+| `GET /imports/types`、`GET /imports/types/{type}/template`、`POST /imports/types/{type}?dry_run=&date=&mode=update`(multipart `file`)、`GET /imports/batches`、`POST /imports/batches/{id}/undo` | Excel 匯入(類型:items、customers、suppliers、warehouses、categories、opening_stock、opening_ar、opening_ap、opening_balance) |
 | `GET /finance/payables` | 應付帳款(`meta.base_amount_sum` 為本位幣合計) |
 
 ## 目錄結構

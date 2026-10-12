@@ -12,6 +12,75 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const getVatSettings = `-- name: GetVatSettings :one
+SELECT company_id, year, period, prior_credit, customs_tax, use_ratio, updated_by, updated_at FROM vat_period_settings WHERE company_id = $1 AND year = $2 AND period = $3
+`
+
+type GetVatSettingsParams struct {
+	CompanyID int64
+	Year      int32
+	Period    int32
+}
+
+func (q *Queries) GetVatSettings(ctx context.Context, arg GetVatSettingsParams) (VatPeriodSetting, error) {
+	row := q.db.QueryRow(ctx, getVatSettings, arg.CompanyID, arg.Year, arg.Period)
+	var i VatPeriodSetting
+	err := row.Scan(
+		&i.CompanyID,
+		&i.Year,
+		&i.Period,
+		&i.PriorCredit,
+		&i.CustomsTax,
+		&i.UseRatio,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertVatSettings = `-- name: UpsertVatSettings :one
+INSERT INTO vat_period_settings (company_id, year, period, prior_credit, customs_tax, use_ratio, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (company_id, year, period) DO UPDATE
+SET prior_credit = EXCLUDED.prior_credit, customs_tax = EXCLUDED.customs_tax, use_ratio = EXCLUDED.use_ratio,
+    updated_by = EXCLUDED.updated_by, updated_at = now()
+RETURNING company_id, year, period, prior_credit, customs_tax, use_ratio, updated_by, updated_at
+`
+
+type UpsertVatSettingsParams struct {
+	CompanyID   int64
+	Year        int32
+	Period      int32
+	PriorCredit decimal.Decimal
+	CustomsTax  decimal.Decimal
+	UseRatio    bool
+	UpdatedBy   *int64
+}
+
+func (q *Queries) UpsertVatSettings(ctx context.Context, arg UpsertVatSettingsParams) (VatPeriodSetting, error) {
+	row := q.db.QueryRow(ctx, upsertVatSettings,
+		arg.CompanyID,
+		arg.Year,
+		arg.Period,
+		arg.PriorCredit,
+		arg.CustomsTax,
+		arg.UseRatio,
+		arg.UpdatedBy,
+	)
+	var i VatPeriodSetting
+	err := row.Scan(
+		&i.CompanyID,
+		&i.Year,
+		&i.Period,
+		&i.PriorCredit,
+		&i.CustomsTax,
+		&i.UseRatio,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const vatPurchaseDocs = `-- name: VatPurchaseDocs :many
 SELECT r.id, r.doc_no, r.doc_type, r.doc_date, COALESCE(r.invoice_date, r.doc_date)::date AS eff_date, r.invoice_no,
        r.invoice_kind, r.base_untaxed, r.base_tax, t.kind AS tax_kind,

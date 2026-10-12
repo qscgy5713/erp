@@ -2,8 +2,15 @@
 // 傳票:手動傳票的草稿可編輯、過帳、作廢;已過帳可沖銷。自動拋轉的傳票唯讀,由來源單據反過帳沖銷。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { glApi, sourceLabels, type AccountOption, type Voucher, type VoucherLine } from '@/api/gl'
+import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+import {
+  glApi,
+  sourceLabels,
+  type AccountOption,
+  type Voucher,
+  type VoucherAttachment,
+  type VoucherLine,
+} from '@/api/gl'
 import { systemApi, type Department } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
@@ -27,6 +34,45 @@ const loading = ref(false)
 const saving = ref(false)
 const dirty = ref(false)
 const accounts = ref<AccountOption[]>([])
+const attachments = ref<VoucherAttachment[]>([])
+const canAttach = computed(
+  () => auth.can(['gl.voucher.write']) && !!doc.value && doc.value.status !== 'voided',
+)
+const canDetach = computed(() => auth.can(['gl.voucher.write']) && doc.value?.status === 'draft')
+
+async function loadAttachments() {
+  if (!doc.value) return
+  try {
+    attachments.value = await glApi.attachments(doc.value.id)
+  } catch (e) {
+    handle(e)
+  }
+}
+
+async function onAttach(f: UploadFile) {
+  if (!doc.value || !f.raw) return
+  try {
+    await glApi.uploadAttachment(doc.value.id, f.raw)
+    ElMessage.success('已上傳')
+    await loadAttachments()
+  } catch (e) {
+    handle(e)
+  }
+}
+
+async function removeAttachment(a: VoucherAttachment) {
+  if (!doc.value) return
+  try {
+    await ElMessageBox.confirm(`刪除附件「${a.filename}」?`, '刪除附件', { type: 'warning' })
+    await glApi.deleteAttachment(doc.value.id, a.id)
+    await loadAttachments()
+  } catch (e) {
+    if (e !== 'cancel') handle(e)
+  }
+}
+
+const fileSize = (n: number) =>
+  n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
 const departments = ref<Department[]>([])
 
 const today = () => {
@@ -192,6 +238,7 @@ onMounted(async () => {
     loading.value = false
   }
   await load()
+  await loadAttachments()
   if (editable.value) {
     try {
       departments.value = (await systemApi.departments()).filter((d) => d.is_active)
@@ -393,6 +440,32 @@ autoClear(form)
       </div>
     </el-card>
 
+    <el-card v-if="doc" shadow="never" class="mt">
+      <template #header>
+        附件(原始憑證)<span class="hint">PDF、PNG、JPEG、.xlsx,每個 5MB 以內,最多 10 個</span>
+      </template>
+      <el-empty v-if="!attachments.length" :image-size="40" description="沒有附件" />
+      <div v-for="a in attachments" :key="a.id" class="att">
+        <el-button link type="primary" @click="glApi.downloadAttachment(doc.id, a).catch(handle)">
+          {{ a.filename }}
+        </el-button>
+        <span class="hint">{{ fileSize(a.size_bytes) }} · {{ a.uploaded_by_name }}</span>
+        <el-button v-if="canDetach" link type="danger" @click="removeAttachment(a)">刪除</el-button>
+      </div>
+      <el-upload
+        v-if="canAttach"
+        :auto-upload="false"
+        :show-file-list="false"
+        accept=".pdf,.png,.jpg,.jpeg,.xlsx"
+        :on-change="onAttach"
+      >
+        <el-button size="small">上傳附件</el-button>
+      </el-upload>
+      <div v-if="doc.status === 'posted'" class="hint">
+        已過帳的傳票,附件是留存憑證,只能新增不能刪除。
+      </div>
+    </el-card>
+
     <el-descriptions v-if="doc" :column="3" border size="small" class="mt">
       <el-descriptions-item label="來源">
         {{ sourceLabels[doc.source_type] ?? doc.source_type }} {{ doc.source_no }}
@@ -448,5 +521,15 @@ autoClear(form)
   display: flex;
   gap: 16px;
   align-items: baseline;
+}
+.att {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-left: 8px;
 }
 </style>

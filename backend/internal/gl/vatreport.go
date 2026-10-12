@@ -2,16 +2,20 @@ package gl
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/xuri/excelize/v2"
 
 	"erp/internal/db"
+	"erp/internal/platform/database"
 	"erp/internal/shared/response"
+	"erp/internal/system/audit"
 )
 
 type vatDetail struct {
@@ -35,6 +39,11 @@ type vatDTO struct {
 	Issues    []VatIssue  `json:"issues"`
 	SalesRows []vatDetail `json:"sales"`
 	BuyRows   []vatDetail `json:"purchases"`
+	// 人工輸入與計算結果(上期留抵、海關代徵、扣抵比例)
+	Settings VatSettings `json:"settings"`
+	Result   VatResult   `json:"result"`
+	// 依上一期的申報結果算出的建議上期留抵(尚未填入時供參考)
+	SuggestedPriorCredit decimal.Decimal `json:"suggested_prior_credit"`
 }
 
 // vat401 GET /gl/reports/vat401?year=2026&period=5&format=xlsx
@@ -79,6 +88,16 @@ func (m *Module) vat401(c *gin.Context) {
 			InvoiceNo: r.InvoiceNo, TaxKind: r.TaxKind, Partner: r.PartnerName, PartnerID: r.PartnerTaxID, Untaxed: u.String(), Tax: t.String()})
 	}
 	dto.Summary, dto.Issues = BuildVat(sales, buys)
+	st, err := m.vatSettings(ctx, companyID, year, period)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	dto.Settings, dto.Result = st, CalcVat(dto.Summary, st)
+	if dto.SuggestedPriorCredit, err = m.suggestedPriorCredit(ctx, companyID, year, period); err != nil {
+		response.Error(c, err)
+		return
+	}
 
 	if c.Query("format") != "xlsx" {
 		response.OK(c, dto)
@@ -93,6 +112,100 @@ func (m *Module) vat401(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+urlEscape(name))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", data)
 }
+
+func (m *Module) vatSettings(ctx context.Context, companyID int64, year, period int) (VatSettings, error) {
+	r, err := m.store.GetVatSettings(ctx, db.GetVatSettingsParams{CompanyID: companyID, Year: int32(year), Period: int32(period)})
+	if database.IsNoRows(err) {
+		return VatSettings{}, nil
+	}
+	if err != nil {
+		return VatSettings{}, err
+	}
+	return VatSettings{PriorCredit: r.PriorCredit, CustomsTax: r.CustomsTax, UseRatio: r.UseRatio}, nil
+}
+
+// suggestedPriorCredit 上一期(跨年時為前一年第 6 期)申報後的累積留抵稅額。
+func (m *Module) suggestedPriorCredit(ctx context.Context, companyID int64, year, period int) (decimal.Decimal, error) {
+	py, pp := year, period-1
+	if pp == 0 {
+		py, pp = year-1, 6
+	}
+	from := time.Date(py, time.Month(pp*2-1), 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(py, time.Month(pp*2+1), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	sRows, err := m.store.VatSalesDocs(ctx, db.VatSalesDocsParams{CompanyID: companyID, FromDate: from, ToDate: to})
+	if err != nil {
+		return decimal.Zero, err
+	}
+	pRows, err := m.store.VatPurchaseDocs(ctx, db.VatPurchaseDocsParams{CompanyID: companyID, FromDate: from, ToDate: to})
+	if err != nil {
+		return decimal.Zero, err
+	}
+	sales := make([]VatSale, len(sRows))
+	buys := make([]VatPurchase, len(pRows))
+	for i, r := range sRows {
+		sales[i] = VatSale{DocNo: r.DocNo, DocType: r.DocType, InvoiceNo: r.InvoiceNo, TaxKind: r.TaxKind, PartnerTaxID: r.PartnerTaxID,
+			Untaxed: r.BaseUntaxed, Tax: r.BaseTax}
+	}
+	for i, r := range pRows {
+		buys[i] = VatPurchase{DocNo: r.DocNo, DocType: r.DocType, InvoiceNo: r.InvoiceNo, TaxKind: r.TaxKind,
+			Untaxed: r.BaseUntaxed, Tax: r.BaseTax, Goods: r.GoodsAmount, Expense: r.ExpenseAmount}
+	}
+	sum, _ := BuildVat(sales, buys)
+	st, err := m.vatSettings(ctx, companyID, py, pp)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return CalcVat(sum, st).CarryCredit, nil
+}
+
+type vatSettingsInput struct {
+	PriorCredit decimal.Decimal `json:"prior_credit"`
+	CustomsTax  decimal.Decimal `json:"customs_tax"`
+	UseRatio    bool            `json:"use_ratio"`
+}
+
+// saveVatSettings PUT /gl/reports/vat401/settings?year=&period=
+func (m *Module) saveVatSettings(c *gin.Context) {
+	year, period, _, _, err := vatPeriod(c)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	var in vatSettingsInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Error(c, err)
+		return
+	}
+	if in.PriorCredit.IsNegative() || in.CustomsTax.IsNegative() {
+		response.Error(c, fieldErr("prior_credit", "金額不可為負數"))
+		return
+	}
+	if in.PriorCredit.GreaterThan(maxVatAmount) || in.CustomsTax.GreaterThan(maxVatAmount) {
+		response.Error(c, fieldErr("prior_credit", "金額過大"))
+		return
+	}
+	ctx := c.Request.Context()
+	a := actor(c)
+	err = m.store.InTx(ctx, func(q *db.Queries) error {
+		if _, err := q.UpsertVatSettings(ctx, db.UpsertVatSettingsParams{
+			CompanyID: a.CompanyID, Year: int32(year), Period: int32(period), PriorCredit: in.PriorCredit.Round(0),
+			CustomsTax: in.CustomsTax.Round(0), UseRatio: in.UseRatio, UpdatedBy: &a.UserID,
+		}); err != nil {
+			return err
+		}
+		return audit.Record(ctx, q, audit.Entry{
+			Action: "update", EntityType: "vat_period_settings",
+			Summary: fmt.Sprintf("營業稅 401 %d 年第 %d 期設定:上期留抵 %s、海關代徵 %s、按比例扣抵 %v", year, period, in.PriorCredit, in.CustomsTax, in.UseRatio),
+		})
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, gin.H{"year": year, "period": period})
+}
+
+var maxVatAmount = decimal.NewFromInt(999999999999)
 
 // vatPeriod 解析 year、period(1–6,每期兩個月),回傳該期別的起訖日。
 func vatPeriod(c *gin.Context) (year, period int, from, to time.Time, err error) {
@@ -146,6 +259,13 @@ func vatXLSX(d vatDTO) ([]byte, error) {
 		{"零稅率 / 免稅進貨金額", money(s.NonTaxPurchase), false},
 		{"稅額計算", nil, true},
 		{"本期應納(+)/ 留抵(−)稅額 = 銷項稅額 − 進項稅額", money(s.NetTax), false},
+		{"申報稅額(含上期留抵、海關代徵、扣抵比例)", nil, true},
+		{"海關代徵營業稅額", money(d.Result.CustomsTax), false},
+		{"扣抵比例 %", money(d.Result.DeductRatio), false},
+		{"本期可扣抵稅額 = (進項稅額 + 海關代徵) × 扣抵比例", money(d.Result.DeductibleTax), false},
+		{"上期累積留抵稅額", money(d.Result.PriorCredit), false},
+		{"本期應納稅額", money(d.Result.TaxPayable), false},
+		{"本期累積留抵稅額", money(d.Result.CarryCredit), false},
 	}
 	for i, r := range rows {
 		put(sum, i+3, r.label, r.v)
@@ -156,7 +276,7 @@ func vatXLSX(d vatDTO) ([]byte, error) {
 		}
 	}
 	r := len(rows) + 5
-	put(sum, r, "注意:本表為依系統資料彙總的申報參考數字,不含上期留抵稅額、扣抵比例、海關代徵等項目,正式申報請由會計核對後填報。")
+	put(sum, r, "注意:本表為依系統資料彙總的申報參考數字,上期留抵、海關代徵與扣抵比例依「申報稅額」區塊的人工輸入計算,正式申報請由會計核對後填報。")
 	_ = f.SetColWidth(sum, "A", "A", 62)
 	_ = f.SetColWidth(sum, "B", "B", 18)
 

@@ -12,6 +12,7 @@ const types = ref<ImportType[]>([])
 const batches = ref<ImportBatch[]>([])
 const typeKey = ref('')
 const date = ref<string | null>(null)
+const update = ref(false)
 const file = ref<File | null>(null)
 const result = ref<ImportResult | null>(null)
 const busy = ref<'check' | 'import' | null>(null)
@@ -37,6 +38,7 @@ function onPick(f: UploadFile) {
 }
 
 function reset() {
+  update.value = false
   file.value = null
   result.value = null
 }
@@ -51,7 +53,7 @@ async function run(dryRun: boolean) {
   if (!dryRun) {
     try {
       await ElMessageBox.confirm(
-        `確定匯入「${t.label}」?${t.undoable ? '期初資料匯入後可在下方紀錄撤銷。' : '主檔匯入後無法整批撤銷,請確認預檢結果。'}`,
+        `確定${update.value && t.updatable ? '覆蓋更新' : '匯入'}「${t.label}」?${update.value && t.updatable ? '已存在的代號會被更新,空白欄位保留原值。' : ''}${t.undoable ? '期初資料匯入後可在下方紀錄撤銷。' : '主檔匯入後無法整批撤銷,請確認預檢結果。'}`,
         '確認匯入',
         { type: 'warning', confirmButtonText: '匯入', cancelButtonText: '取消' },
       )
@@ -64,6 +66,7 @@ async function run(dryRun: boolean) {
     result.value = await importsApi.run(t.key, file.value, {
       dryRun,
       date: date.value ?? undefined,
+      update: current.value?.updatable && update.value,
     })
     if (!dryRun && result.value.ok) {
       ElMessage.success(`匯入完成:${result.value.summary}`)
@@ -115,6 +118,13 @@ onMounted(load)
         </el-form-item>
         <el-form-item v-if="current" label="說明">
           <span class="hint">{{ current.desc }}</span>
+        </el-form-item>
+        <el-form-item v-if="current?.updatable" label="已存在的代號">
+          <el-radio-group v-model="update" @change="result = null">
+            <el-radio-button :value="false">視為錯誤</el-radio-button>
+            <el-radio-button :value="true">覆蓋更新</el-radio-button>
+          </el-radio-group>
+          <span class="hint ml">覆蓋更新時,空白欄位保留原值</span>
         </el-form-item>
         <el-form-item v-if="current?.needs_date" label="期初日期">
           <el-date-picker v-model="date" value-format="YYYY-MM-DD" placeholder="例如上線前一天" />

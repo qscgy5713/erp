@@ -64,7 +64,7 @@ onMounted(load)
         @change="load"
       />
       <el-button @click="load">重新整理</el-button>
-      <span class="hint">本位幣(TWD)、目前未沖餘額,依到期日與截止日的差距分組</span>
+      <span class="hint">本位幣(TWD)、回推到截止日當天的未沖餘額,依到期日與截止日的差距分組</span>
     </div>
     <el-table v-loading="loading" :data="rows" border size="small">
       <el-table-column :label="isAR ? '客戶' : '供應商'" min-width="200">

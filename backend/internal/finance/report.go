@@ -190,7 +190,7 @@ type agingRowDTO struct {
 
 // aging GET /finance/aging?side=&as_of=
 // 依到期日分組的未沖餘額(本位幣):尚未到期、逾期 1–30 / 31–60 / 61–90 / 90 天以上。
-// 餘額為「目前」未沖餘額(不回推歷史沖帳),as_of 只決定逾期天數與納入的單據日期。
+// 餘額回推到 as_of 當日:只扣除收付款日期在 as_of 以前、且目前仍為已過帳的沖帳。
 func (m *Module) aging(c *gin.Context) {
 	ctx := c.Request.Context()
 	a := authctx.ActorFrom(ctx)

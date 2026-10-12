@@ -105,6 +105,35 @@ func (q *Queries) DashboardLatestClosing(ctx context.Context, companyID int64) (
 	return period, err
 }
 
+const dashboardLatestClosingStats = `-- name: DashboardLatestClosingStats :one
+SELECT cc.period, cc.cogs_amount, cc.inventory_value,
+       COALESCE((SELECT SUM(ic.opening_value) FROM item_costs ic WHERE ic.closing_id = cc.id), 0)::numeric AS opening_value
+FROM cost_closings cc
+WHERE cc.company_id = $1
+ORDER BY cc.period DESC
+LIMIT 1
+`
+
+type DashboardLatestClosingStatsRow struct {
+	Period         string
+	CogsAmount     decimal.Decimal
+	InventoryValue decimal.Decimal
+	OpeningValue   decimal.Decimal
+}
+
+// 最近一次月結的銷貨成本、期末存貨與期初存貨(各料品期初金額加總),用於毛利與庫存週轉
+func (q *Queries) DashboardLatestClosingStats(ctx context.Context, companyID int64) (DashboardLatestClosingStatsRow, error) {
+	row := q.db.QueryRow(ctx, dashboardLatestClosingStats, companyID)
+	var i DashboardLatestClosingStatsRow
+	err := row.Scan(
+		&i.Period,
+		&i.CogsAmount,
+		&i.InventoryValue,
+		&i.OpeningValue,
+	)
+	return i, err
+}
+
 const dashboardLowStock = `-- name: DashboardLowStock :many
 SELECT i.id, i.code, i.name, i.safety_stock, u.name AS unit_name, t.total
 FROM items i
@@ -391,6 +420,86 @@ func (q *Queries) DashboardSalesDaily(ctx context.Context, arg DashboardSalesDai
 	for rows.Next() {
 		var i DashboardSalesDailyRow
 		if err := rows.Scan(&i.Day, &i.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashboardStagnantCount = `-- name: DashboardStagnantCount :one
+SELECT count(*) FROM (
+  SELECT i.id
+  FROM items i
+  JOIN inventory_balances b ON b.item_id = i.id
+  WHERE i.company_id = $1 AND i.item_type = 'goods' AND i.is_active
+  GROUP BY i.id
+  HAVING SUM(b.qty) > 0
+     AND COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date) < $2::date
+) x
+`
+
+type DashboardStagnantCountParams struct {
+	CompanyID int64
+	Cutoff    time.Time
+}
+
+// 呆滯料:有庫存的商品,最後一次庫存異動早於 cutoff(沒有任何異動者以建立日期判斷)
+func (q *Queries) DashboardStagnantCount(ctx context.Context, arg DashboardStagnantCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, dashboardStagnantCount, arg.CompanyID, arg.Cutoff)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const dashboardStagnantTop = `-- name: DashboardStagnantTop :many
+SELECT i.id, i.code, i.name, u.name AS unit_name, SUM(b.qty)::numeric AS total,
+       COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date)::date AS last_move
+FROM items i
+JOIN units u ON u.id = i.base_unit_id
+JOIN inventory_balances b ON b.item_id = i.id
+WHERE i.company_id = $1 AND i.item_type = 'goods' AND i.is_active
+GROUP BY i.id, u.name
+HAVING SUM(b.qty) > 0
+   AND COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date) < $2::date
+ORDER BY last_move, i.code
+LIMIT 5
+`
+
+type DashboardStagnantTopParams struct {
+	CompanyID int64
+	Cutoff    time.Time
+}
+
+type DashboardStagnantTopRow struct {
+	ID       int64
+	Code     string
+	Name     string
+	UnitName string
+	Total    decimal.Decimal
+	LastMove time.Time
+}
+
+func (q *Queries) DashboardStagnantTop(ctx context.Context, arg DashboardStagnantTopParams) ([]DashboardStagnantTopRow, error) {
+	rows, err := q.db.Query(ctx, dashboardStagnantTop, arg.CompanyID, arg.Cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DashboardStagnantTopRow{}
+	for rows.Next() {
+		var i DashboardStagnantTopRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.UnitName,
+			&i.Total,
+			&i.LastMove,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

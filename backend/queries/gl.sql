@@ -267,3 +267,46 @@ LIMIT 1;
 SELECT DISTINCT EXTRACT(YEAR FROM v.voucher_date)::int AS year FROM vouchers v
 WHERE v.company_id = @company_id AND v.status = 'posted' AND v.source_type <> 'year_end'
 ORDER BY year DESC;
+
+-- name: CashFlowAllocation :many
+-- 現金流量(直接法):每張已過帳傳票的現金淨增減(現金 = 對照表 settle.cash / settle.bank 的科目),
+-- 依「非現金明細」的金額比例分攤到對方科目;現金互轉(沒有非現金明細)不計。年度結帳傳票不涉現金。
+WITH cash_accts AS (
+  SELECT am.account_id FROM account_mappings am WHERE am.company_id = @company_id AND am.map_key IN ('settle.cash', 'settle.bank')
+), vc AS (
+  SELECT l.voucher_id,
+         SUM(l.debit - l.credit) FILTER (WHERE l.account_id IN (SELECT ca.account_id FROM cash_accts ca)) AS cash_net,
+         SUM(l.debit + l.credit) FILTER (WHERE l.account_id NOT IN (SELECT ca.account_id FROM cash_accts ca)) AS other_total
+  FROM voucher_lines l
+  JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+  WHERE v.company_id = @company_id AND v.voucher_date BETWEEN @from_date::date AND @to_date::date
+  GROUP BY l.voucher_id
+)
+SELECT a.id, a.code, a.name, a.acct_type,
+       SUM(vc.cash_net * (l.debit + l.credit) / vc.other_total)::numeric AS amount
+FROM vc
+JOIN voucher_lines l ON l.voucher_id = vc.voucher_id AND l.account_id NOT IN (SELECT ca.account_id FROM cash_accts ca)
+JOIN accounts a ON a.id = l.account_id
+WHERE vc.cash_net <> 0 AND vc.other_total > 0
+GROUP BY a.id
+ORDER BY a.code;
+
+-- name: CashBalanceAsOf :one
+SELECT COALESCE(SUM(l.debit - l.credit), 0)::numeric
+FROM voucher_lines l
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+WHERE v.company_id = @company_id AND v.voucher_date <= @as_of::date
+  AND l.account_id IN (SELECT am.account_id FROM account_mappings am WHERE am.company_id = @company_id AND am.map_key IN ('settle.cash', 'settle.bank'));
+
+-- name: DepartmentPnl :many
+-- 部門別損益:期間內已過帳傳票的收入 / 成本 / 費用,依明細的輔助核算部門分組(沒填部門的歸在「未指定」,department_id 為 NULL)
+SELECT l.department_id, d.code AS department_code, d.name AS department_name, a.acct_type,
+       COALESCE(SUM(l.credit - l.debit), 0)::numeric AS amount
+FROM voucher_lines l
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted' AND v.source_type <> 'year_end'
+JOIN accounts a ON a.id = l.account_id
+LEFT JOIN departments d ON d.id = l.department_id
+WHERE v.company_id = @company_id AND v.voucher_date BETWEEN @from_date::date AND @to_date::date
+  AND a.acct_type IN ('revenue', 'cost', 'expense')
+GROUP BY l.department_id, d.code, d.name, a.acct_type
+ORDER BY d.code NULLS LAST, a.acct_type;

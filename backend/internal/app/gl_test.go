@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -564,4 +567,183 @@ func TestFinancialStatementsAndYearEnd(t *testing.T) {
 	if w.Code != http.StatusOK || w.Body.Len() < 1000 || !strings.Contains(w.Header().Get("Content-Type"), "spreadsheetml") {
 		t.Fatalf("匯出失敗 %d len=%d", w.Code, w.Body.Len())
 	}
+}
+
+// 現金流量表(直接法)與部門別損益
+func TestCashFlowAndDepartmentPnl(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	id := func(code string) int64 { return e.idByCode("accounts", code) }
+	cash, bank, sales, rent, capital, ar := id("1101"), id("1102"), id("4101"), id("6102"), id("3101"), id("1131")
+	equip, res := c.do2(http.MethodPost, "/gl/accounts", map[string]any{"code": "1501", "name": "機器設備", "acct_type": "asset", "is_postable": true, "is_active": true})
+	expect(t, res, http.StatusCreated, "")
+	var deptID int64
+	if err := e.pool.QueryRow(context.Background(), "INSERT INTO departments (company_id, code, name) VALUES (1, 'D1', '業務部') RETURNING id").Scan(&deptID); err != nil {
+		t.Fatal(err)
+	}
+	post := func(date string, lines ...map[string]any) {
+		t.Helper()
+		v, res := c.createVoucherAPI(manualVoucher(date, lines...))
+		expect(t, res, http.StatusCreated, "")
+		expect(t, c.actVoucher(&v, "post"), http.StatusOK, "")
+	}
+	post("2026-01-02", vl(cash, "5000", "0"), vl(capital, "0", "5000"))  // 融資 +5000
+	post("2026-02-10", vl(cash, "3000", "0"), vl(sales, "0", "3000"))    // 營業 +3000
+	post("2026-03-10", vl(rent, "1200", "0"), vl(cash, "0", "1200"))     // 營業 −1200
+	post("2026-04-01", vl(equip.ID, "2000", "0"), vl(bank, "0", "2000")) // 投資:銀行不夠?先互轉再買
+	post("2026-04-05", vl(ar, "800", "0"), vl(sales, "0", "800"))        // 賒銷:沒有現金,不計
+	post("2026-04-06", vl(bank, "100", "0"), vl(cash, "0", "100"))       // 現金互轉:不計
+	post("2026-05-01", vl(cash, "400", "0"), vl(ar, "0", "400"))         // 收回帳款 營業 +400
+
+	type cf struct {
+		Lines []struct {
+			Kind   string `json:"kind"`
+			Label  string `json:"label"`
+			Amount string `json:"amount"`
+		} `json:"lines"`
+		Note string `json:"note"`
+	}
+	get := decode[cf](t, c.do(http.MethodGet, "/gl/reports/cash-flow?from=2026-01-01&to=2026-12-31", nil).Data)
+	amt := func(label string) string {
+		for _, l := range get.Lines {
+			if l.Label == label {
+				return l.Amount
+			}
+		}
+		t.Fatalf("現金流量表沒有「%s」", label)
+		return ""
+	}
+	// 銀行 2102... 買設備付的是銀行存款(+0 −2000);現金 = 現金 + 銀行
+	decEq(t, "營業", amt("營業活動淨現金流入(出)"), "2200")  // 3000 − 1200 + 400
+	decEq(t, "投資", amt("投資活動淨現金流入(出)"), "-2000") // 買設備
+	decEq(t, "融資", amt("融資活動淨現金流入(出)"), "5000")
+	decEq(t, "淨增減", amt("本期現金淨增減"), "5200")
+	decEq(t, "期初", amt("期初現金及銀行存款"), "0")
+	decEq(t, "期末", amt("期末現金及銀行存款"), "5200")
+	if get.Note != "" {
+		t.Fatalf("不應有核對警示: %s", get.Note)
+	}
+	// 另一個區間:期初為之前的累積
+	mid := decode[cf](t, c.do(http.MethodGet, "/gl/reports/cash-flow?from=2026-03-01&to=2026-03-31", nil).Data)
+	for _, l := range mid.Lines {
+		if l.Label == "期初現金及銀行存款" {
+			decEq(t, "3 月期初", l.Amount, "8000")
+		}
+	}
+	// 權限與參數
+	e.seedUser("nobody", pw, false, false)
+	expect(t, e.loggedIn("nobody", pw).do(http.MethodGet, "/gl/reports/cash-flow?from=2026-01-01&to=2026-12-31", nil), http.StatusForbidden, "SYS-403")
+
+	// 部門別損益:傳票明細指定部門;其餘歸「未指定部門」
+	v, res := c.createVoucherAPI(manualVoucher("2026-06-01",
+		map[string]any{"account_id": cash, "debit": "700", "credit": "0"},
+		map[string]any{"account_id": sales, "debit": "0", "credit": "700", "department_id": deptID}))
+	expect(t, res, http.StatusCreated, "")
+	expect(t, c.actVoucher(&v, "post"), http.StatusOK, "")
+	post("2026-06-02", vl(rent, "100", "0"), vl(cash, "0", "100"))
+	pnl := decode[struct {
+		Rows []struct {
+			Name    string `json:"name"`
+			Revenue string `json:"revenue"`
+			Expense string `json:"expense"`
+			Profit  string `json:"profit"`
+		} `json:"rows"`
+		Total struct {
+			Profit string `json:"profit"`
+		} `json:"total"`
+	}](t, c.do(http.MethodGet, "/gl/reports/department-pnl?from=2026-01-01&to=2026-12-31", nil).Data)
+	if len(pnl.Rows) != 2 || pnl.Rows[0].Name != "業務部" || pnl.Rows[1].Name != "未指定部門" {
+		t.Fatalf("部門別損益 = %+v", pnl.Rows)
+	}
+	decEq(t, "業務部收入", pnl.Rows[0].Revenue, "700")
+	decEq(t, "業務部損益", pnl.Rows[0].Profit, "700")
+	decEq(t, "未指定收入", pnl.Rows[1].Revenue, "3800") // 3000 + 800
+	decEq(t, "未指定費用", pnl.Rows[1].Expense, "1300") // 1200 + 100
+	decEq(t, "未指定損益", pnl.Rows[1].Profit, "2500")
+	decEq(t, "合計損益", pnl.Total.Profit, "3200")
+}
+
+// 傳票附件:類型 / 大小 / 數量限制、下載、草稿才能刪除、權限
+func TestVoucherAttachments(t *testing.T) {
+	e := newEnv(t)
+	e.seedUser("root", pw, true, false)
+	c := e.loggedIn("root", pw)
+	cash, sales := e.idByCode("accounts", "1101"), e.idByCode("accounts", "4101")
+	v, res := c.createVoucherAPI(manualVoucher("2026-02-10", vl(cash, "100", "0"), vl(sales, "0", "100")))
+	expect(t, res, http.StatusCreated, "")
+	base := "/gl/vouchers/" + itoa(v.ID) + "/attachments"
+
+	up := func(cl *client, path, name string, data []byte) apiResp {
+		t.Helper()
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		part, _ := w.CreateFormFile("file", name)
+		_, _ = part.Write(data)
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1"+path, &body)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.Header.Set("Authorization", "Bearer "+cl.token)
+		rec := httptest.NewRecorder()
+		e.r.ServeHTTP(rec, req)
+		var r apiResp
+		_ = json.Unmarshal(rec.Body.Bytes(), &r)
+		r.status = rec.Code
+		return r
+	}
+	pdf := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+	res = up(c, base, "invoice.pdf", pdf)
+	expect(t, res, http.StatusCreated, "")
+	att := decode[struct {
+		ID int64 `json:"id"`
+	}](t, res.Data)
+
+	// 類型不符:副檔名是 pdf 但內容不是、不支援的副檔名、HTML 偽裝成圖片
+	expect(t, up(c, base, "fake.pdf", []byte("<html><script>alert(1)</script>")), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, up(c, base, "x.exe", []byte("MZ....")), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, up(c, base, "pic.png", []byte("<html></html>")), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, up(c, base, "big.pdf", append([]byte("%PDF-"), make([]byte, 5<<20)...)), http.StatusUnprocessableEntity, "SYS-422")
+
+	list := decode[[]struct {
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		SizeBytes   int    `json:"size_bytes"`
+	}](t, c.do(http.MethodGet, base, nil).Data)
+	if len(list) != 1 || list[0].Filename != "invoice.pdf" || list[0].ContentType != "application/pdf" || list[0].SizeBytes != len(pdf) {
+		t.Fatalf("list = %+v", list)
+	}
+
+	// 下載:原內容、附件方式、nosniff
+	req := httptest.NewRequest(http.MethodGet, "/api/v1"+base+"/"+itoa(att.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	rec := httptest.NewRecorder()
+	e.r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), pdf) || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment") ||
+		rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("download: %d %q %v", rec.Code, rec.Body.String(), rec.Header())
+	}
+	expect(t, c.do(http.MethodGet, base+"/99999", nil), http.StatusNotFound, "SYS-404")
+
+	// 數量上限:再傳到 10 個之後被擋
+	for i := 1; i < 10; i++ {
+		expect(t, up(c, base, "a"+itoa(int64(i))+".pdf", pdf), http.StatusCreated, "")
+	}
+	expect(t, up(c, base, "extra.pdf", pdf), http.StatusConflict, "GL-051")
+
+	// 權限:只有檢視權限的人可看可下載,不能上傳 / 刪除
+	role := e.seedRole("VIEW", "all", "gl.voucher.read")
+	e.seedUser("viewer", pw, false, false, role.ID)
+	vw := e.loggedIn("viewer", pw)
+	expect(t, vw.do(http.MethodGet, base, nil), http.StatusOK, "")
+	expect(t, up(vw, base, "z.pdf", pdf), http.StatusForbidden, "SYS-403")
+	expect(t, vw.do(http.MethodDelete, base+"/"+itoa(att.ID), nil), http.StatusForbidden, "SYS-403")
+
+	// 草稿可刪;過帳後附件留存不能刪,但還能補傳(受數量限制)
+	expect(t, c.do(http.MethodDelete, base+"/"+itoa(att.ID), nil), http.StatusOK, "")
+	expect(t, c.actVoucher(&v, "post"), http.StatusOK, "")
+	expect(t, up(c, base, "after-post.pdf", pdf), http.StatusCreated, "")
+	list2 := decode[[]struct {
+		ID int64 `json:"id"`
+	}](t, c.do(http.MethodGet, base, nil).Data)
+	expect(t, c.do(http.MethodDelete, base+"/"+itoa(list2[0].ID), nil), http.StatusConflict, "GL-052")
 }

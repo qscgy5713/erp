@@ -517,7 +517,7 @@ func TestImportItemsLotControlColumn(t *testing.T) {
 	e.seedUser("root", pw, true, false)
 	c := e.loggedIn("root", pw)
 	h := c.importHeaders("items")
-	if len(h) != 12 || h[11] != "批號管理" {
+	if len(h) != 14 || h[11] != "批號管理" {
 		t.Fatalf("範本標題 = %v", h)
 	}
 	row := func(code, typ, lot string) []string {

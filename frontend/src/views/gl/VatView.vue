@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // 營業稅申報(401)資料:依申報期別(雙月)彙總銷項與進項,列明細與待處理單據,可匯出 Excel
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { glApi, type MediaPreview, type VatReport } from '@/api/gl'
+import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError } from '@/api/http'
 import { useApiError } from '@/composables/useApiError'
 
 const { handle } = useApiError()
+const auth = useAuthStore()
 
 const now = new Date()
 const year = ref(now.getFullYear())
@@ -35,6 +38,7 @@ const issueLabel = {
 
 const rows = computed(() => {
   const s = report.value?.summary
+  const r = report.value?.result
   if (!s) return []
   return [
     { label: '銷項', head: true },
@@ -56,8 +60,39 @@ const rows = computed(() => {
       v: s.net_tax,
       total: true,
     },
+    ...(r
+      ? [
+          { label: '申報稅額(含上期留抵、海關代徵、扣抵比例)', head: true },
+          { label: `扣抵比例 ${r.deduct_ratio}%` },
+          { label: '本期可扣抵稅額 =(進項稅額 + 海關代徵)× 扣抵比例', v: r.deductible_tax },
+          { label: '上期累積留抵稅額', v: r.prior_credit },
+          { label: '本期應納稅額', v: r.tax_payable, total: true },
+          { label: '本期累積留抵稅額(留抵下期或申請退稅)', v: r.carry_credit, total: true },
+        ]
+      : []),
   ]
 })
+
+const form = ref({ prior_credit: '0', customs_tax: '0', use_ratio: false })
+const saving = ref(false)
+const canEdit = computed(() => auth.can(['gl.voucher.post']))
+
+async function saveSettings() {
+  saving.value = true
+  try {
+    await glApi.saveVatSettings(year.value, period.value, {
+      prior_credit: form.value.prior_credit || '0',
+      customs_tax: form.value.customs_tax || '0',
+      use_ratio: form.value.use_ratio,
+    })
+    ElMessage.success('已儲存')
+    await run()
+  } catch (e) {
+    handle(e)
+  } finally {
+    saving.value = false
+  }
+}
 
 let seq = 0
 async function run() {
@@ -67,6 +102,11 @@ async function run() {
     const res = await glApi.vat401(year.value, period.value)
     if (mine === seq) {
       report.value = res
+      form.value = {
+        prior_credit: res.settings.prior_credit,
+        customs_tax: res.settings.customs_tax,
+        use_ratio: res.settings.use_ratio,
+      }
       media.value = null // 換了期別,先前的申報檔檢查結果作廢
       mediaError.value = ''
     }
@@ -143,6 +183,31 @@ onMounted(run)
     />
 
     <div v-loading="loading" class="vat">
+      <el-card v-if="report" shadow="never" class="settings">
+        <template #header>本期申報輸入(上期留抵、海關代徵、扣抵比例)</template>
+        <el-form inline :disabled="!canEdit">
+          <el-form-item label="上期累積留抵稅額">
+            <el-input v-model="form.prior_credit" style="width: 140px" />
+            <el-button
+              v-if="canEdit && Number(report.suggested_prior_credit) > 0"
+              link
+              type="primary"
+              @click="form.prior_credit = report.suggested_prior_credit"
+            >
+              帶入上一期留抵 {{ money(report.suggested_prior_credit) }}
+            </el-button>
+          </el-form-item>
+          <el-form-item label="海關代徵營業稅額">
+            <el-input v-model="form.customs_tax" style="width: 140px" />
+          </el-form-item>
+          <el-form-item>
+            <el-checkbox v-model="form.use_ratio">兼營免稅,進項稅額按比例扣抵</el-checkbox>
+          </el-form-item>
+          <el-button v-if="canEdit" type="primary" :loading="saving" @click="saveSettings">
+            儲存並重算
+          </el-button>
+        </el-form>
+      </el-card>
       <el-table
         v-if="report"
         :data="rows"
@@ -296,5 +361,8 @@ onMounted(run)
 }
 :deep(.k-total td) {
   font-weight: 600;
+}
+.settings {
+  margin-bottom: 12px;
 }
 </style>

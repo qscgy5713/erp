@@ -56,6 +56,10 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/vouchers", auth.Require(permission.VoucherWrite), m.createVoucher)
 	g.PUT("/vouchers/:id", auth.Require(permission.VoucherWrite), m.updateVoucher)
 	g.POST("/vouchers/:id/actions/:action", voucherRead, m.voucherAction)
+	g.GET("/vouchers/:id/attachments", voucherRead, m.listAttachments)
+	g.POST("/vouchers/:id/attachments", auth.Require(permission.VoucherWrite), m.uploadAttachment)
+	g.GET("/vouchers/:id/attachments/:aid", voucherRead, m.downloadAttachment)
+	g.DELETE("/vouchers/:id/attachments/:aid", auth.Require(permission.VoucherWrite), m.deleteAttachment)
 
 	g.GET("/periods", auth.Require(permission.PeriodRead, permission.PeriodClose), m.listPeriods)
 	g.POST("/periods/:period/:action", auth.Require(permission.PeriodClose), m.changePeriod)
@@ -66,8 +70,11 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/reports/journal", report, m.journal)
 	g.GET("/reports/income-statement", report, m.incomeStatement)
 	g.GET("/reports/balance-sheet", report, m.balanceSheet)
+	g.GET("/reports/cash-flow", report, m.cashFlow)
+	g.GET("/reports/department-pnl", report, m.departmentPnl)
 	g.GET("/reports/vat401", report, m.vat401)
 	g.GET("/reports/vat401/media", report, m.vat401Media)
+	g.PUT("/reports/vat401/settings", auth.Require(permission.VoucherPost), m.saveVatSettings)
 
 	// 年度結帳:與期間關帳同屬結帳權限
 	g.GET("/year-end", auth.Require(permission.PeriodRead, permission.PeriodClose), m.listYears)

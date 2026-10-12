@@ -1,4 +1,4 @@
-import { download, http, qs, requestPage } from './http'
+import { download, http, qs, requestPage, upload } from './http'
 import type { Decimal } from './masterdata'
 
 export type AcctType = 'asset' | 'liability' | 'equity' | 'revenue' | 'cost' | 'expense'
@@ -64,7 +64,35 @@ export interface Statement {
   prev_from?: string
   prev_to?: string
   balanced?: boolean
+  /** 報表自我核對的警示(例如現金流量表與現金科目餘額不一致) */
+  note?: string
   lines: StmtLine[]
+}
+
+export interface VoucherAttachment {
+  id: number
+  filename: string
+  content_type: string
+  size_bytes: number
+  uploaded_at: string
+  uploaded_by_name: string | null
+}
+
+export interface DeptPnlRow {
+  department_id: number | null
+  code: string
+  name: string
+  revenue: Decimal
+  cost: Decimal
+  expense: Decimal
+  profit: Decimal
+}
+
+export interface DeptPnl {
+  from: string
+  to: string
+  rows: DeptPnlRow[]
+  total: DeptPnlRow
 }
 
 export interface VatSummary {
@@ -112,6 +140,25 @@ export interface VatReport {
   issues: VatIssue[]
   sales: VatDetail[]
   purchases: VatDetail[]
+  settings: VatSettings
+  result: VatResult
+  suggested_prior_credit: Decimal
+}
+
+export interface VatSettings {
+  prior_credit: Decimal
+  customs_tax: Decimal
+  use_ratio: boolean
+}
+
+export interface VatResult {
+  deduct_ratio: Decimal
+  input_tax: Decimal
+  customs_tax: Decimal
+  deductible_tax: Decimal
+  prior_credit: Decimal
+  tax_payable: Decimal
+  carry_credit: Decimal
 }
 
 export interface MediaExcluded {
@@ -314,15 +361,28 @@ export const glApi = {
 
   incomeStatement: (from: string, to: string, compare: boolean) =>
     http.get<Statement>(`/gl/reports/income-statement${qs({ from, to, compare })}`),
+  attachments: (id: number) => http.get<VoucherAttachment[]>(`/gl/vouchers/${id}/attachments`),
+  uploadAttachment: (id: number, file: File) =>
+    upload<VoucherAttachment>(`/gl/vouchers/${id}/attachments`, file),
+  deleteAttachment: (id: number, aid: number) =>
+    http.delete<unknown>(`/gl/vouchers/${id}/attachments/${aid}`),
+  downloadAttachment: (id: number, a: VoucherAttachment) =>
+    download(`/gl/vouchers/${id}/attachments/${a.id}`, a.filename),
+  cashFlow: (from: string, to: string, compare: boolean) =>
+    http.get<Statement>(`/gl/reports/cash-flow${qs({ from, to, compare })}`),
+  departmentPnl: (from: string, to: string) =>
+    http.get<DeptPnl>(`/gl/reports/department-pnl${qs({ from, to })}`),
   balanceSheet: (as_of: string, compare: boolean) =>
     http.get<Statement>(`/gl/reports/balance-sheet${qs({ as_of, compare })}`),
   exportStatement: (
-    kind: 'income-statement' | 'balance-sheet',
+    kind: 'income-statement' | 'balance-sheet' | 'cash-flow',
     params: Record<string, string | boolean>,
     name: string,
   ) => download(`/gl/reports/${kind}${qs({ ...params, format: 'xlsx' })}`, name),
   vat401: (year: number, period: number) =>
     http.get<VatReport>(`/gl/reports/vat401${qs({ year, period })}`),
+  saveVatSettings: (year: number, period: number, input: VatSettings) =>
+    http.put<unknown>(`/gl/reports/vat401/settings${qs({ year, period })}`, input),
   vat401Media: (year: number, period: number) =>
     http.get<MediaPreview>(`/gl/reports/vat401/media${qs({ year, period })}`),
   downloadVat401Media: (year: number, period: number, fileName: string) =>

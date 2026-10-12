@@ -83,6 +83,34 @@ type expiryCard struct {
 	Items    []expiryItem `json:"items"`
 }
 
+type stagnantItem struct {
+	ID       int64           `json:"id"`
+	Code     string          `json:"code"`
+	Name     string          `json:"name"`
+	UnitName string          `json:"unit_name"`
+	Total    decimal.Decimal `json:"total"`
+	LastMove string          `json:"last_move"`
+}
+
+// stagnantCard 呆滯料:有庫存、但超過 Days 天沒有任何庫存異動的商品。
+type stagnantCard struct {
+	Count int64          `json:"count"`
+	Days  int            `json:"days"`
+	Items []stagnantItem `json:"items"`
+}
+
+// performanceCard 最近一次月結的經營指標(全公司):銷售、成本、毛利與庫存週轉。
+type performanceCard struct {
+	Period         string           `json:"period"`
+	Sales          decimal.Decimal  `json:"sales"`
+	Cogs           decimal.Decimal  `json:"cogs"`
+	Margin         decimal.Decimal  `json:"margin"`
+	MarginPct      *decimal.Decimal `json:"margin_pct"`
+	InventoryValue decimal.Decimal  `json:"inventory_value"`
+	Turnover       *decimal.Decimal `json:"turnover"`      // 當月週轉次數 = 銷貨成本 ÷ 平均存貨
+	TurnoverDays   *decimal.Decimal `json:"turnover_days"` // 週轉天數 = 30 ÷ 週轉次數
+}
+
 type lowStockCard struct {
 	Count int64          `json:"count"`
 	Items []lowStockItem `json:"items"`
@@ -203,6 +231,27 @@ func (m *Module) get(c *gin.Context) {
 		}
 		out["low_stock"] = card
 
+		// 呆滯料:90 天沒有任何異動卻還有庫存
+		const stagnantDays = 90
+		cutoff := today.AddDate(0, 0, -stagnantDays)
+		sc, err := q.DashboardStagnantCount(ctx, db.DashboardStagnantCountParams{CompanyID: a.CompanyID, Cutoff: cutoff})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		st := stagnantCard{Count: sc, Days: stagnantDays, Items: []stagnantItem{}}
+		if sc > 0 {
+			top, err := q.DashboardStagnantTop(ctx, db.DashboardStagnantTopParams{CompanyID: a.CompanyID, Cutoff: cutoff})
+			if err != nil {
+				response.Error(c, err)
+				return
+			}
+			for _, r := range top {
+				st.Items = append(st.Items, stagnantItem{ID: r.ID, Code: r.Code, Name: r.Name, UnitName: r.UnitName, Total: r.Total, LastMove: r.LastMove.Format(time.DateOnly)})
+			}
+		}
+		out["stagnant"] = st
+
 		// 效期警示:公司有效期管理的料品或已有即將到期 / 過期的批號時才顯示
 		const expiryDays = 30
 		until := today.AddDate(0, 0, expiryDays)
@@ -253,6 +302,35 @@ func (m *Module) get(c *gin.Context) {
 			return
 		}
 		out["costing"] = gin.H{"last_closing": last, "current_month": now.Format("2006-01")}
+		if last != "" {
+			cs, err := q.DashboardLatestClosingStats(ctx, a.CompanyID)
+			if err != nil {
+				response.Error(c, err)
+				return
+			}
+			first, err := time.Parse("2006-01", cs.Period)
+			if err != nil {
+				response.Error(c, err)
+				return
+			}
+			sales, err := q.DashboardSales(ctx, db.DashboardSalesParams{CompanyID: a.CompanyID, FromDate: first, ToDate: first.AddDate(0, 1, -1)})
+			if err != nil {
+				response.Error(c, err)
+				return
+			}
+			p := performanceCard{Period: cs.Period, Sales: sales.Amount, Cogs: cs.CogsAmount, InventoryValue: cs.InventoryValue}
+			p.Margin = p.Sales.Sub(p.Cogs)
+			if p.Sales.IsPositive() {
+				v := p.Margin.Div(p.Sales).Mul(decimal.NewFromInt(100)).Round(1)
+				p.MarginPct = &v
+			}
+			if avg := cs.OpeningValue.Add(cs.InventoryValue).Div(decimal.NewFromInt(2)); avg.IsPositive() && cs.CogsAmount.IsPositive() {
+				t := cs.CogsAmount.Div(avg).Round(2)
+				d := decimal.NewFromInt(30).Div(t).Round(1)
+				p.Turnover, p.TurnoverDays = &t, &d
+			}
+			out["performance"] = p
+		}
 	}
 	response.OK(c, out)
 }

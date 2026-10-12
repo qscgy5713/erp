@@ -100,3 +100,38 @@ func BuildVat(sales []VatSale, purchases []VatPurchase) (VatSummary, []VatIssue)
 	s.NetTax = s.OutputTax.Sub(s.InputTax)
 	return s, issues
 }
+
+// VatSettings 每期人工輸入的項目。
+type VatSettings struct {
+	PriorCredit decimal.Decimal `json:"prior_credit"` // 上期累積留抵稅額
+	CustomsTax  decimal.Decimal `json:"customs_tax"`  // 海關代徵營業稅額(進口貨物,可扣抵)
+	UseRatio    bool            `json:"use_ratio"`    // 兼營免稅:進項稅額按比例扣抵
+}
+
+// VatResult 申報稅額的計算結果。
+type VatResult struct {
+	DeductRatio   decimal.Decimal `json:"deduct_ratio"`   // 扣抵比例(%);未啟用或沒有免稅銷售時為 100
+	InputTax      decimal.Decimal `json:"input_tax"`      // 進項稅額(未乘比例)
+	CustomsTax    decimal.Decimal `json:"customs_tax"`    // 海關代徵
+	DeductibleTax decimal.Decimal `json:"deductible_tax"` // 本期可扣抵稅額 = (進項 + 海關代徵) × 比例
+	PriorCredit   decimal.Decimal `json:"prior_credit"`   // 上期累積留抵稅額
+	TaxPayable    decimal.Decimal `json:"tax_payable"`    // 本期應納稅額(≥ 0)
+	CarryCredit   decimal.Decimal `json:"carry_credit"`   // 本期累積留抵稅額(≥ 0),可留抵下期或申請退稅
+}
+
+// CalcVat 本期應納(留抵)稅額 = 銷項稅額 − (進項稅額 + 海關代徵) × 扣抵比例 − 上期累積留抵稅額。
+// 扣抵比例 = (應稅銷售額 + 零稅率銷售額) ÷ 銷售額總計,只有勾選「按比例扣抵」且銷售額總計 > 0 時才套用。
+func CalcVat(s VatSummary, st VatSettings) VatResult {
+	r := VatResult{DeductRatio: decimal.NewFromInt(100), InputTax: s.InputTax, CustomsTax: st.CustomsTax, PriorCredit: st.PriorCredit}
+	if st.UseRatio && s.TotalSales.IsPositive() {
+		r.DeductRatio = s.TaxableSales.Add(s.ZeroSales).Div(s.TotalSales).Mul(decimal.NewFromInt(100)).Round(2)
+	}
+	r.DeductibleTax = s.InputTax.Add(st.CustomsTax).Mul(r.DeductRatio).Div(decimal.NewFromInt(100)).Round(0)
+	net := s.OutputTax.Sub(r.DeductibleTax).Sub(st.PriorCredit)
+	if net.IsPositive() {
+		r.TaxPayable = net
+	} else {
+		r.CarryCredit = net.Neg()
+	}
+	return r
+}

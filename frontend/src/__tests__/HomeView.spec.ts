@@ -59,6 +59,30 @@ describe('HomeView', () => {
         daily: [{ date: '2026-10-08', amount: '2000' }],
         top_customers: [{ id: 1, code: 'C1', name: '甲公司', amount: '8888' }],
       },
+      stagnant: {
+        count: 1,
+        days: 90,
+        items: [
+          {
+            id: 9,
+            code: 'OLD-1',
+            name: '舊料',
+            unit_name: '個',
+            total: '7',
+            last_move: '2026-05-01',
+          },
+        ],
+      },
+      performance: {
+        period: '2026-09',
+        sales: '6000',
+        cogs: '3900',
+        margin: '2100',
+        margin_pct: '35.0',
+        inventory_value: '11050',
+        turnover: '0.58',
+        turnover_days: '51.7',
+      },
       pending: [
         {
           key: 'purchase_orders',
@@ -86,6 +110,9 @@ describe('HomeView', () => {
     const text = wrapper.text()
     expect(text).toContain('12,345')
     expect(text).toContain('甲公司')
+    expect(text).toContain('舊料')
+    expect(text).toContain('2,100')
+    expect(text).toContain('52 天')
     expect(text).toContain('8,888')
     expect(text).toContain('全公司')
     expect(text).toContain('3 筆待審')

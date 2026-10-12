@@ -188,9 +188,16 @@ SELECT txn_date, kind, doc_no, delta, ref_id FROM (
 -- name: ReceivableAging :many
 WITH items AS (
     SELECT r.customer_id AS partner_id, (sqlc.arg(as_of)::date - r.due_date)::int AS days,
-           (CASE WHEN r.amount = 0 THEN 0 ELSE r.base_amount * (r.amount - r.paid_amount) / r.amount END)::numeric AS bal
+           (CASE WHEN r.amount = 0 THEN 0 ELSE r.base_amount * (r.amount - pd.paid) / r.amount END)::numeric AS bal
     FROM accounts_receivable r
-    WHERE r.company_id = @company_id AND r.amount <> r.paid_amount AND r.doc_date <= sqlc.arg(as_of)::date
+    -- 回推 as_of 當日的已沖金額:只算收付款日期在 as_of 以前、且目前仍為已過帳的沖帳
+    CROSS JOIN LATERAL (
+        SELECT COALESCE(SUM(sl.amount), 0) AS paid
+        FROM settlement_lines sl
+        JOIN settlements st ON st.id = sl.settlement_id
+        WHERE sl.receivable_id = r.id AND st.status = 'posted' AND st.doc_date <= sqlc.arg(as_of)::date
+    ) pd
+    WHERE r.company_id = @company_id AND r.amount <> pd.paid AND r.doc_date <= sqlc.arg(as_of)::date
 )
 SELECT c.id AS partner_id, c.code AS partner_code, c.name AS partner_name,
        COALESCE(SUM(i.bal) FILTER (WHERE i.days <= 0), 0)::numeric AS not_due,
@@ -210,9 +217,16 @@ ORDER BY c.code;
 -- name: PayableAging :many
 WITH items AS (
     SELECT p.supplier_id AS partner_id, (sqlc.arg(as_of)::date - p.due_date)::int AS days,
-           (CASE WHEN p.amount = 0 THEN 0 ELSE p.base_amount * (p.amount - p.paid_amount) / p.amount END)::numeric AS bal
+           (CASE WHEN p.amount = 0 THEN 0 ELSE p.base_amount * (p.amount - pd.paid) / p.amount END)::numeric AS bal
     FROM accounts_payable p
-    WHERE p.company_id = @company_id AND p.amount <> p.paid_amount AND p.doc_date <= sqlc.arg(as_of)::date
+    -- 回推 as_of 當日的已沖金額:只算收付款日期在 as_of 以前、且目前仍為已過帳的沖帳
+    CROSS JOIN LATERAL (
+        SELECT COALESCE(SUM(sl.amount), 0) AS paid
+        FROM settlement_lines sl
+        JOIN settlements st ON st.id = sl.settlement_id
+        WHERE sl.payable_id = p.id AND st.status = 'posted' AND st.doc_date <= sqlc.arg(as_of)::date
+    ) pd
+    WHERE p.company_id = @company_id AND p.amount <> pd.paid AND p.doc_date <= sqlc.arg(as_of)::date
 )
 SELECT sp.id AS partner_id, sp.code AS partner_code, sp.name AS partner_name,
        COALESCE(SUM(i.bal) FILTER (WHERE i.days <= 0), 0)::numeric AS not_due,

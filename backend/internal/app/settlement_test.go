@@ -312,8 +312,17 @@ func TestStatementAndAging(t *testing.T) {
 	if nd, d, tot := ag("2026-12-05"); nd != "0" || d != "3200" || tot != "3200" {
 		t.Fatalf("12/05: %s %s %s", nd, d, tot)
 	}
+	// 回推歷史餘額:收款日期改在 12/01,則 11/20 時尚未收款(餘額 4200),12/05 已收(3200)
+	if _, err := e.pool.Exec(context.Background(), "UPDATE settlements SET doc_date = '2026-12-01'"); err != nil {
+		t.Fatal(err)
+	}
+	if nd, d, tot := ag("2026-11-20"); nd != "4200" || d != "0" || tot != "4200" {
+		t.Fatalf("回推 11/20: %s %s %s", nd, d, tot)
+	}
+	if nd, d, tot := ag("2026-12-05"); nd != "0" || d != "3200" || tot != "3200" {
+		t.Fatalf("回推 12/05: %s %s %s", nd, d, tot)
+	}
 	expect(t, c.do(http.MethodGet, "/finance/aging?side=bogus", nil), http.StatusUnprocessableEntity, "SYS-422")
-	_ = e
 }
 
 func TestSettlementPermissionsAndScope(t *testing.T) {

@@ -15,6 +15,8 @@ type vatResp struct {
 	} `json:"issues"`
 	Sales     []map[string]string `json:"sales"`
 	Purchases []map[string]string `json:"purchases"`
+	Result    map[string]string   `json:"result"`
+	Suggested string              `json:"suggested_prior_credit"`
 }
 
 func (c *client) vat(query string) (vatResp, apiResp) {
@@ -100,6 +102,30 @@ func TestVat401(t *testing.T) {
 		t.Errorf("待處理 = %+v", v.Issues)
 	}
 
+	// 上期留抵 / 海關代徵:預設都是 0,本期留抵 = 175
+	if v.Result["tax_payable"] != "0" || v.Result["carry_credit"] != "175" || v.Result["deduct_ratio"] != "100" {
+		t.Errorf("預設稅額計算 = %+v", v.Result)
+	}
+	put := func(body map[string]any, q string) apiResp {
+		return c.do(http.MethodPut, "/gl/reports/vat401/settings?"+q, body)
+	}
+	expect(t, put(map[string]any{"prior_credit": "100", "customs_tax": "50", "use_ratio": true}, "year=2026&period=5"), http.StatusOK, "")
+	v, _ = c.vat("year=2026&period=5")
+	// 可扣抵 = (325 + 50) × 100% = 375;150 − 375 − 100 = −325 → 留抵 325
+	if v.Result["deductible_tax"] != "375" || v.Result["carry_credit"] != "325" || v.Result["tax_payable"] != "0" || v.Result["prior_credit"] != "100" {
+		t.Errorf("設定後稅額計算 = %+v", v.Result)
+	}
+	// 下一期的建議上期留抵 = 本期累積留抵
+	if nv, _ := c.vat("year=2026&period=6"); nv.Suggested != "325" {
+		t.Errorf("建議上期留抵 = %q", nv.Suggested)
+	}
+	for _, bad := range []map[string]any{{"prior_credit": "-1"}, {"customs_tax": "-5"}} {
+		expect(t, put(bad, "year=2026&period=5"), http.StatusUnprocessableEntity, "SYS-422")
+	}
+	expect(t, put(map[string]any{}, "year=2026&period=9"), http.StatusUnprocessableEntity, "SYS-422")
+	e.seedUser("nobody2", pw, false, false)
+	expect(t, put2(e, "nobody2"), http.StatusForbidden, "SYS-403")
+
 	// 其他期別沒有資料;參數檢查;權限;Excel 匯出
 	if v, _ := c.vat("year=2026&period=4"); v.Summary["total_sales"] != "0" || len(v.Issues) != 0 {
 		t.Errorf("7–8 月應無資料: %+v", v)
@@ -118,4 +144,8 @@ func TestVat401(t *testing.T) {
 	if w.Code != http.StatusOK || w.Body.Len() < 1000 || !strings.Contains(w.Header().Get("Content-Disposition"), "401") {
 		t.Fatalf("匯出失敗 %d len=%d", w.Code, w.Body.Len())
 	}
+}
+
+func put2(e *env, user string) apiResp {
+	return e.loggedIn(user, pw).do(http.MethodPut, "/gl/reports/vat401/settings?year=2026&period=5", map[string]any{})
 }

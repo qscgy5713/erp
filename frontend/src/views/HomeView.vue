@@ -45,6 +45,8 @@ const hasAnyCard = computed(
       data.value.pending.length > 0 ||
       !!data.value.low_stock ||
       !!data.value.expiry ||
+      !!data.value.stagnant ||
+      !!data.value.performance ||
       !!data.value.receivable ||
       !!data.value.payable),
 )
@@ -250,6 +252,53 @@ const go = (path: string) => router.push(path)
           >
             查看全部
           </el-button>
+        </el-card>
+      </el-col>
+
+      <el-col v-if="data.performance" :xs="24" :md="12">
+        <el-card shadow="never" class="mb">
+          <template #header
+            >經營指標 {{ data.performance.period }}<span class="hint">最近一次月結</span></template
+          >
+          <div class="kpis">
+            <div>
+              <div class="num">{{ money(data.performance.margin) }}</div>
+              <div class="label">
+                毛利(銷售 {{ money(data.performance.sales) }} − 成本
+                {{ money(data.performance.cogs) }}
+                <template v-if="data.performance.margin_pct != null"
+                  >,{{ Number(data.performance.margin_pct).toFixed(1) }}%</template
+                >)
+              </div>
+            </div>
+            <div>
+              <div class="num">
+                {{
+                  data.performance.turnover_days == null
+                    ? '—'
+                    : `${Number(data.performance.turnover_days).toFixed(0)} 天`
+                }}
+              </div>
+              <div class="label">
+                庫存週轉天數(期末存貨 {{ money(data.performance.inventory_value) }})
+              </div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col v-if="data.stagnant" :xs="24" :md="12">
+        <el-card shadow="never" class="mb">
+          <template #header>
+            呆滯料<span class="hint"
+              >{{ data.stagnant.count }} 項超過 {{ data.stagnant.days }} 天沒有異動</span
+            >
+          </template>
+          <el-empty v-if="!data.stagnant.items.length" :image-size="48" description="沒有呆滯料" />
+          <div v-for="i in data.stagnant.items" :key="i.id" class="row">
+            <span>{{ i.code }} {{ i.name }}</span>
+            <span>最後異動 {{ i.last_move }} · {{ qty(i.total) }} {{ i.unit_name }}</span>
+          </div>
         </el-card>
       </el-col>
     </el-row>

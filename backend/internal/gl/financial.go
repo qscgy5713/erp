@@ -55,6 +55,7 @@ type statementDTO struct {
 	PrevFrom string     `json:"prev_from,omitempty"`
 	PrevTo   string     `json:"prev_to,omitempty"`
 	Balanced *bool      `json:"balanced,omitempty"`
+	Note     string     `json:"note,omitempty"` // 報表自我核對的警示
 	Lines    []StmtLine `json:"lines"`
 }
 

@@ -6,6 +6,7 @@ export interface ImportType {
   desc: string
   columns: string[]
   needs_date: boolean
+  updatable: boolean
   undoable: boolean
 }
 
@@ -43,9 +44,9 @@ export const importsApi = {
   types: () => http.get<ImportType[]>('/imports/types'),
   batches: () => http.get<ImportBatch[]>('/imports/batches'),
   template: (t: ImportType) => download(`/imports/types/${t.key}/template`, `${t.label}範本.xlsx`),
-  run: (key: string, file: File, opts: { dryRun: boolean; date?: string }) =>
+  run: (key: string, file: File, opts: { dryRun: boolean; date?: string; update?: boolean }) =>
     upload<ImportResult>(
-      `/imports/types/${key}?dry_run=${opts.dryRun}${opts.date ? `&date=${opts.date}` : ''}`,
+      `/imports/types/${key}?dry_run=${opts.dryRun}${opts.date ? `&date=${opts.date}` : ''}${opts.update ? '&mode=update' : ''}`,
       file,
     ),
   undo: (id: number) => http.post<unknown>(`/imports/batches/${id}/undo`),

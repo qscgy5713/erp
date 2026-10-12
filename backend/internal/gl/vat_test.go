@@ -45,3 +45,27 @@ func TestBuildVat(t *testing.T) {
 		t.Errorf("issues = %+v", issues)
 	}
 }
+
+func TestCalcVat(t *testing.T) {
+	s := VatSummary{TaxableSales: d("1300"), ZeroSales: d("700"), ExemptSales: d("300"), TotalSales: d("2300"), OutputTax: d("65"), InputTax: d("25")}
+	// 不套比例:65 − (25 + 10) − 5 = 25 應納
+	r := CalcVat(s, VatSettings{PriorCredit: d("5"), CustomsTax: d("10")})
+	if !r.TaxPayable.Equal(d("25")) || !r.CarryCredit.IsZero() || !r.DeductRatio.Equal(d("100")) {
+		t.Fatalf("不套比例 = %+v", r)
+	}
+	// 套比例:(1300 + 700) / 2300 = 86.96%;可扣抵 round(35 × 0.8696) = 30;65 − 30 = 35 應納
+	r = CalcVat(s, VatSettings{CustomsTax: d("10"), UseRatio: true})
+	if !r.DeductRatio.Equal(d("86.96")) || !r.DeductibleTax.Equal(d("30")) || !r.TaxPayable.Equal(d("35")) {
+		t.Fatalf("套比例 = %+v", r)
+	}
+	// 留抵:銷項小於扣抵 + 上期留抵
+	r = CalcVat(VatSummary{OutputTax: d("10"), InputTax: d("40"), TotalSales: d("200"), TaxableSales: d("200")}, VatSettings{PriorCredit: d("3")})
+	if !r.TaxPayable.IsZero() || !r.CarryCredit.Equal(d("33")) {
+		t.Fatalf("留抵 = %+v", r)
+	}
+	// 沒有銷售額時不套比例(避免除以 0)
+	r = CalcVat(VatSummary{InputTax: d("10")}, VatSettings{UseRatio: true})
+	if !r.DeductRatio.Equal(d("100")) || !r.CarryCredit.Equal(d("10")) {
+		t.Fatalf("無銷售 = %+v", r)
+	}
+}

@@ -161,6 +161,35 @@ func (q *Queries) AllCustomerCodes(ctx context.Context, companyID int64) ([]AllC
 	return items, nil
 }
 
+const allItemBarcodes = `-- name: AllItemBarcodes :many
+SELECT id, barcode FROM items WHERE company_id = $1 AND barcode IS NOT NULL
+`
+
+type AllItemBarcodesRow struct {
+	ID      int64
+	Barcode *string
+}
+
+func (q *Queries) AllItemBarcodes(ctx context.Context, companyID int64) ([]AllItemBarcodesRow, error) {
+	rows, err := q.db.Query(ctx, allItemBarcodes, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AllItemBarcodesRow{}
+	for rows.Next() {
+		var i AllItemBarcodesRow
+		if err := rows.Scan(&i.ID, &i.Barcode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const allItemCodes = `-- name: AllItemCodes :many
 SELECT id, code, item_type, base_unit_id, lot_control FROM items WHERE company_id = $1
 `
@@ -187,6 +216,52 @@ func (q *Queries) AllItemCodes(ctx context.Context, companyID int64) ([]AllItemC
 			&i.Code,
 			&i.ItemType,
 			&i.BaseUnitID,
+			&i.LotControl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const allItemsForImport = `-- name: AllItemsForImport :many
+SELECT id, company_id, code, name, spec, category_id, item_type, base_unit_id, barcode, tax_type_id, default_warehouse_id, safety_stock, list_price, note, is_active, created_by, updated_by, version, created_at, updated_at, lot_control FROM items WHERE company_id = $1
+`
+
+func (q *Queries) AllItemsForImport(ctx context.Context, companyID int64) ([]Item, error) {
+	rows, err := q.db.Query(ctx, allItemsForImport, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Item{}
+	for rows.Next() {
+		var i Item
+		if err := rows.Scan(
+			&i.ID,
+			&i.CompanyID,
+			&i.Code,
+			&i.Name,
+			&i.Spec,
+			&i.CategoryID,
+			&i.ItemType,
+			&i.BaseUnitID,
+			&i.Barcode,
+			&i.TaxTypeID,
+			&i.DefaultWarehouseID,
+			&i.SafetyStock,
+			&i.ListPrice,
+			&i.Note,
+			&i.IsActive,
+			&i.CreatedBy,
+			&i.UpdatedBy,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.LotControl,
 		); err != nil {
 			return nil, err
@@ -335,6 +410,173 @@ func (q *Queries) HasOpeningBalanceVoucher(ctx context.Context, companyID int64)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const importUpdateCustomer = `-- name: ImportUpdateCustomer :exec
+UPDATE customers
+SET name = $1,
+    short_name = COALESCE(NULLIF($2::text, ''), short_name),
+    tax_id = COALESCE($3::char(8), tax_id),
+    invoice_title = COALESCE(NULLIF($4::text, ''), invoice_title),
+    phone = COALESCE(NULLIF($5::text, ''), phone),
+    email = COALESCE(NULLIF($6::text, ''), email),
+    contacts = COALESCE($7::jsonb, contacts),
+    addresses = COALESCE($8::jsonb, addresses),
+    currency = COALESCE($9::char(3), currency),
+    tax_type_id = COALESCE($10::bigint, tax_type_id),
+    payment_term_id = COALESCE($11::bigint, payment_term_id),
+    credit_limit = COALESCE($12::numeric, credit_limit),
+    sales_user_id = COALESCE($13::bigint, sales_user_id),
+    note = COALESCE(NULLIF($14::text, ''), note),
+    version = version + 1, updated_by = $15
+WHERE id = $16 AND company_id = $17
+`
+
+type ImportUpdateCustomerParams struct {
+	Name          string
+	ShortName     string
+	TaxID         *string
+	InvoiceTitle  string
+	Phone         string
+	Email         string
+	Contacts      []byte
+	Addresses     []byte
+	Currency      *string
+	TaxTypeID     *int64
+	PaymentTermID *int64
+	CreditLimit   *decimal.Decimal
+	SalesUserID   *int64
+	Note          string
+	UpdatedBy     *int64
+	ID            int64
+	CompanyID     int64
+}
+
+// 覆蓋更新:空白(NULL / 空字串)代表保留原值
+func (q *Queries) ImportUpdateCustomer(ctx context.Context, arg ImportUpdateCustomerParams) error {
+	_, err := q.db.Exec(ctx, importUpdateCustomer,
+		arg.Name,
+		arg.ShortName,
+		arg.TaxID,
+		arg.InvoiceTitle,
+		arg.Phone,
+		arg.Email,
+		arg.Contacts,
+		arg.Addresses,
+		arg.Currency,
+		arg.TaxTypeID,
+		arg.PaymentTermID,
+		arg.CreditLimit,
+		arg.SalesUserID,
+		arg.Note,
+		arg.UpdatedBy,
+		arg.ID,
+		arg.CompanyID,
+	)
+	return err
+}
+
+const importUpdateItem = `-- name: ImportUpdateItem :exec
+UPDATE items
+SET name = $1, spec = $2, category_id = $3, barcode = $4,
+    tax_type_id = $5, default_warehouse_id = $6,
+    safety_stock = $7, list_price = $8, note = $9,
+    version = version + 1, updated_by = $10
+WHERE id = $11 AND company_id = $12
+`
+
+type ImportUpdateItemParams struct {
+	Name               string
+	Spec               string
+	CategoryID         *int64
+	Barcode            *string
+	TaxTypeID          *int64
+	DefaultWarehouseID *int64
+	SafetyStock        decimal.Decimal
+	ListPrice          decimal.Decimal
+	Note               string
+	UpdatedBy          *int64
+	ID                 int64
+	CompanyID          int64
+}
+
+// 匯入覆蓋更新:不動基本單位、類型、批號管理、啟用狀態(已有異動後改了會讓歷史失真)
+func (q *Queries) ImportUpdateItem(ctx context.Context, arg ImportUpdateItemParams) error {
+	_, err := q.db.Exec(ctx, importUpdateItem,
+		arg.Name,
+		arg.Spec,
+		arg.CategoryID,
+		arg.Barcode,
+		arg.TaxTypeID,
+		arg.DefaultWarehouseID,
+		arg.SafetyStock,
+		arg.ListPrice,
+		arg.Note,
+		arg.UpdatedBy,
+		arg.ID,
+		arg.CompanyID,
+	)
+	return err
+}
+
+const importUpdateSupplier = `-- name: ImportUpdateSupplier :exec
+UPDATE suppliers
+SET name = $1,
+    short_name = COALESCE(NULLIF($2::text, ''), short_name),
+    tax_id = COALESCE($3::char(8), tax_id),
+    phone = COALESCE(NULLIF($4::text, ''), phone),
+    email = COALESCE(NULLIF($5::text, ''), email),
+    contacts = COALESCE($6::jsonb, contacts),
+    addresses = COALESCE($7::jsonb, addresses),
+    currency = COALESCE($8::char(3), currency),
+    tax_type_id = COALESCE($9::bigint, tax_type_id),
+    payment_term_id = COALESCE($10::bigint, payment_term_id),
+    bank_name = COALESCE(NULLIF($11::text, ''), bank_name),
+    bank_account = COALESCE(NULLIF($12::text, ''), bank_account),
+    note = COALESCE(NULLIF($13::text, ''), note),
+    version = version + 1, updated_by = $14
+WHERE id = $15 AND company_id = $16
+`
+
+type ImportUpdateSupplierParams struct {
+	Name          string
+	ShortName     string
+	TaxID         *string
+	Phone         string
+	Email         string
+	Contacts      []byte
+	Addresses     []byte
+	Currency      *string
+	TaxTypeID     *int64
+	PaymentTermID *int64
+	BankName      string
+	BankAccount   string
+	Note          string
+	UpdatedBy     *int64
+	ID            int64
+	CompanyID     int64
+}
+
+func (q *Queries) ImportUpdateSupplier(ctx context.Context, arg ImportUpdateSupplierParams) error {
+	_, err := q.db.Exec(ctx, importUpdateSupplier,
+		arg.Name,
+		arg.ShortName,
+		arg.TaxID,
+		arg.Phone,
+		arg.Email,
+		arg.Contacts,
+		arg.Addresses,
+		arg.Currency,
+		arg.TaxTypeID,
+		arg.PaymentTermID,
+		arg.BankName,
+		arg.BankAccount,
+		arg.Note,
+		arg.UpdatedBy,
+		arg.ID,
+		arg.CompanyID,
+	)
+	return err
 }
 
 const insertOpeningPayable = `-- name: InsertOpeningPayable :exec

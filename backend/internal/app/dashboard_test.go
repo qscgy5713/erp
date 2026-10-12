@@ -185,3 +185,83 @@ func TestDashboardPendingOnlyForApprovers(t *testing.T) {
 		t.Fatalf("approved 後 pending = %+v", d.Pending)
 	}
 }
+
+func TestDashboardPerformanceAndStagnant(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	cust := e.seedCustomer("C1", "0", nil)
+
+	// 尚未月結:沒有經營指標;另一個料品 5/1 入庫後從未異動 → 呆滯料
+	stale := e.seedItem("OLD-1", "goods")
+	d, res := c.createDoc(map[string]any{
+		"doc_type": "adjustment", "doc_date": "2026-05-01", "warehouse_id": p.wh,
+		"lines": []map[string]any{{"item_id": stale, "unit_id": e.unitID("PCS"), "qty": "7"}},
+	})
+	expect(t, res, http.StatusCreated, "")
+	expect(t, c.postAll(&d), http.StatusOK, "")
+
+	type dash struct {
+		Performance *struct {
+			Period       string `json:"period"`
+			Sales        string `json:"sales"`
+			Cogs         string `json:"cogs"`
+			Margin       string `json:"margin"`
+			MarginPct    string `json:"margin_pct"`
+			Turnover     string `json:"turnover"`
+			TurnoverDays string `json:"turnover_days"`
+		} `json:"performance"`
+		Stagnant *struct {
+			Count int `json:"count"`
+			Days  int `json:"days"`
+			Items []struct {
+				Code     string `json:"code"`
+				Total    string `json:"total"`
+				LastMove string `json:"last_move"`
+			} `json:"items"`
+		} `json:"stagnant"`
+	}
+	get := func() dash { return decode[dash](t, c.do(http.MethodGet, "/dashboard", nil).Data) }
+	if g := get(); g.Performance != nil || g.Stagnant == nil || g.Stagnant.Count != 1 || g.Stagnant.Items[0].Code != "OLD-1" ||
+		g.Stagnant.Items[0].Total != "7" || g.Stagnant.Items[0].LastMove != "2026-05-01" || g.Stagnant.Days != 90 {
+		t.Fatalf("月結前 = %+v / %+v", g.Performance, g.Stagnant)
+	}
+
+	// 與 TestMonthlyCostClosing 同一組數字:9 月銷售 6000、銷貨成本 3900
+	p.receiveOn("2026-08-10", "2", "1200")
+	p.receiveOn("2026-09-05", "5", "1200")
+	p.receiveOn("2026-09-10", "5", "1440")
+	dn, res := c.createPur(deliveries, map[string]any{
+		"doc_date": "2026-09-15", "doc_type": "delivery", "customer_id": cust, "warehouse_id": p.wh, "currency": "TWD",
+		"tax_type_id": p.tax, "lines": []map[string]any{line(p.item, p.box, "3", "2000", nil)},
+	})
+	expect(t, res, http.StatusCreated, "")
+	c.approvePur(deliveries, &dn)
+	expect(t, c.actPur(deliveries, &dn, "post"), http.StatusOK, "")
+	for _, m := range []string{"05", "06", "07", "08", "09"} { // 月結須依序
+		expect(t, c.do(http.MethodPost, "/costing/closings/2026-"+m+"/run", nil), http.StatusOK, "")
+	}
+
+	g := get()
+	pf := g.Performance
+	if pf == nil || pf.Period != "2026-09" {
+		t.Fatalf("performance = %+v", pf)
+	}
+	decEq(t, "sales", pf.Sales, "6000")
+	decEq(t, "cogs", pf.Cogs, "3900")
+	decEq(t, "margin", pf.Margin, "2100")
+	decEq(t, "margin_pct", pf.MarginPct, "35")
+	if pf.Turnover == "" || pf.TurnoverDays == "" {
+		t.Fatalf("週轉 = %+v", pf)
+	}
+	if g.Stagnant.Count != 1 { // P1 在 9 月有異動,不是呆滯
+		t.Fatalf("stagnant = %+v", g.Stagnant)
+	}
+
+	// 沒有月結權限的人看不到經營指標
+	role := e.seedRole("INV", "all", "inventory.stock.read")
+	e.seedUser("clerk", pw, false, false, role.ID)
+	cg := decode[dash](t, e.loggedIn("clerk", pw).do(http.MethodGet, "/dashboard", nil).Data)
+	if cg.Performance != nil || cg.Stagnant == nil {
+		t.Fatalf("clerk = %+v / %+v", cg.Performance, cg.Stagnant)
+	}
+}

@@ -126,3 +126,37 @@ WHERE b.company_id = @company_id AND b.qty > 0 AND l.expiry_date IS NOT NULL AND
 GROUP BY l.id, i.code, i.name
 ORDER BY l.expiry_date, i.code
 LIMIT 5;
+
+-- name: DashboardLatestClosingStats :one
+-- 最近一次月結的銷貨成本、期末存貨與期初存貨(各料品期初金額加總),用於毛利與庫存週轉
+SELECT cc.period, cc.cogs_amount, cc.inventory_value,
+       COALESCE((SELECT SUM(ic.opening_value) FROM item_costs ic WHERE ic.closing_id = cc.id), 0)::numeric AS opening_value
+FROM cost_closings cc
+WHERE cc.company_id = @company_id
+ORDER BY cc.period DESC
+LIMIT 1;
+
+-- name: DashboardStagnantCount :one
+-- 呆滯料:有庫存的商品,最後一次庫存異動早於 cutoff(沒有任何異動者以建立日期判斷)
+SELECT count(*) FROM (
+  SELECT i.id
+  FROM items i
+  JOIN inventory_balances b ON b.item_id = i.id
+  WHERE i.company_id = @company_id AND i.item_type = 'goods' AND i.is_active
+  GROUP BY i.id
+  HAVING SUM(b.qty) > 0
+     AND COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date) < @cutoff::date
+) x;
+
+-- name: DashboardStagnantTop :many
+SELECT i.id, i.code, i.name, u.name AS unit_name, SUM(b.qty)::numeric AS total,
+       COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date)::date AS last_move
+FROM items i
+JOIN units u ON u.id = i.base_unit_id
+JOIN inventory_balances b ON b.item_id = i.id
+WHERE i.company_id = @company_id AND i.item_type = 'goods' AND i.is_active
+GROUP BY i.id, u.name
+HAVING SUM(b.qty) > 0
+   AND COALESCE((SELECT max(t.doc_date) FROM inventory_transactions t WHERE t.item_id = i.id), i.created_at::date) < @cutoff::date
+ORDER BY last_move, i.code
+LIMIT 5;

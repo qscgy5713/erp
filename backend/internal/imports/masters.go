@@ -20,11 +20,12 @@ type lookups struct {
 	terms      map[string]int64
 	categories map[string]int64
 	currencies map[string]int16
+	warehouses map[string]int64
 }
 
 func loadLookups(r *run) (*lookups, error) {
 	l := &lookups{units: map[string]int64{}, taxTypes: map[string]int64{}, terms: map[string]int64{},
-		categories: map[string]int64{}, currencies: map[string]int16{}}
+		categories: map[string]int64{}, currencies: map[string]int16{}, warehouses: map[string]int64{}}
 	cid := r.a.CompanyID
 	us, err := r.q.ListUnits(r.ctx, cid)
 	if err != nil {
@@ -60,6 +61,15 @@ func loadLookups(r *run) (*lookups, error) {
 	for _, c := range cs {
 		if c.IsActive {
 			l.categories[strings.ToUpper(c.Code)] = c.ID
+		}
+	}
+	ws, err := r.q.ListWarehouses(r.ctx, cid)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range ws {
+		if w.IsActive {
+			l.warehouses[strings.ToUpper(w.Code)] = w.ID
 		}
 	}
 	cu, err := r.q.CurrencyActive(r.ctx)
@@ -117,7 +127,8 @@ func nonNegative(r *run, row sheetRow, i int, col string, places int32) (decimal
 // ---- 料品 ----
 
 var itemsImporter = &importer{
-	key: "items", label: "料品", desc: "匯入料品主檔(單一基本單位;多單位換算請於畫面維護)。已存在的料號會被視為錯誤,不會覆蓋。",
+	key: "items", label: "料品", desc: "匯入料品主檔。預設已存在的料號視為錯誤;選「覆蓋更新」時改為更新(空白欄位保留原值,基本單位、類型、批號管理不可由匯入修改)。",
+	updatable: true,
 	columns: []column{
 		{"料號", true, "最多 40 字,不可與現有料品或檔內其他列重複"},
 		{"品名", true, "最多 200 字"},
@@ -131,33 +142,44 @@ var itemsImporter = &importer{
 		{"建議售價", false, "未稅、每基本單位,最多 6 位小數"},
 		{"備註", false, ""},
 		{"批號管理", false, "不管理(空白)/ 批號 / 批號與效期;服務類不可管理批號。匯入期初庫存前先設定好"},
+		{"預設倉庫代號", false, "須為已建立且啟用的倉庫代號"},
+		{"多單位換算", false, "格式「單位代號=幾個基本單位」,多筆以分號分隔,例如 BOX=12;CTN=144。覆蓋更新時有填才會取代原有換算"},
 	},
-	sample: [][]string{{"PEN-01", "原子筆", "藍 0.5mm", "", "商品", "PCS", "4710000000011", "TX5", "100", "15", "", ""}, {"MILK-01", "鮮乳 1L", "", "", "商品", "PCS", "", "TX5", "0", "60", "", "批號與效期"}},
+	sample: [][]string{{"PEN-01", "原子筆", "藍 0.5mm", "", "商品", "PCS", "4710000000011", "TX5", "100", "15", "", "", "", "BOX=12"}, {"MILK-01", "鮮乳 1L", "", "", "商品", "PCS", "", "TX5", "0", "60", "", "批號與效期", "", ""}},
 	exec: func(r *run) error {
 		l, err := loadLookups(r)
 		if err != nil {
 			return err
 		}
-		existing, err := r.q.AllItemCodes(r.ctx, r.a.CompanyID)
+		all, err := r.q.AllItemsForImport(r.ctx, r.a.CompanyID)
 		if err != nil {
 			return err
 		}
-		codes, barcodes := map[string]bool{}, map[string]bool{}
-		for _, e := range existing {
-			codes[strings.ToUpper(e.Code)] = true
+		existing := map[string]db.Item{} // 資料庫既有(大寫代號)
+		seen := map[string]bool{}        // 檔內已出現
+		for _, e := range all {
+			existing[strings.ToUpper(e.Code)] = e
 		}
-		bcs, err := r.q.AllBarcodes(r.ctx, r.a.CompanyID)
+		bcs, err := r.q.AllItemBarcodes(r.ctx, r.a.CompanyID)
 		if err != nil {
 			return err
 		}
+		barcodes := map[string]int64{} // 條碼 → 擁有者(檔內新增者記 0)
 		for _, b := range bcs {
-			if b != nil {
-				barcodes[*b] = true
+			if b.Barcode != nil {
+				barcodes[*b.Barcode] = b.ID
 			}
 		}
-		var todo []db.CreateItemParams
+		type pending struct {
+			create *db.CreateItemParams
+			update *db.ImportUpdateItemParams
+			units  []unitFactor // nil 表示不動
+		}
+		var todo []pending
 		for _, row := range r.rows {
 			code, name := row.get(0), row.get(1)
+			key := strings.ToUpper(code)
+			cur, exists := existing[key]
 			ok := true
 			switch {
 			case code == "":
@@ -166,10 +188,14 @@ var itemsImporter = &importer{
 			case utf8.RuneCountInString(code) > 40:
 				r.fail(row.n, "料號", "最多 40 字")
 				ok = false
-			case codes[strings.ToUpper(code)]:
-				r.fail(row.n, "料號", "「%s」已存在或在檔內重複", code)
+			case seen[key]:
+				r.fail(row.n, "料號", "「%s」在檔內重複", code)
+				ok = false
+			case exists && !r.update:
+				r.fail(row.n, "料號", "「%s」已存在(要更新既有料品請選「覆蓋更新」)", code)
 				ok = false
 			}
+			updating := exists && r.update
 			if name == "" {
 				r.fail(row.n, "品名", "必填")
 				ok = false
@@ -179,10 +205,21 @@ var itemsImporter = &importer{
 			ok = checkLen(r, row, "規格", row.get(2), 255) && ok
 			cat, c1 := ref(r, row, 3, "分類代號", l.categories)
 			itemType := "goods"
+			if updating {
+				itemType = cur.ItemType
+			}
 			switch row.get(4) {
-			case "", "商品":
-			case "服務":
-				itemType = "service"
+			case "":
+			case "商品", "服務":
+				t := "goods"
+				if row.get(4) == "服務" {
+					t = "service"
+				}
+				if updating && t != cur.ItemType {
+					r.fail(row.n, "類型", "既有料品不可由匯入修改類型")
+					ok = false
+				}
+				itemType = t
 			default:
 				r.fail(row.n, "類型", "須為「商品」或「服務」")
 				ok = false
@@ -192,29 +229,41 @@ var itemsImporter = &importer{
 				r.fail(row.n, "基本單位代號", "必填")
 				c2 = false
 			}
+			if updating && unit != nil && *unit != cur.BaseUnitID {
+				r.fail(row.n, "基本單位代號", "既有料品不可由匯入修改基本單位")
+				c2 = false
+			}
 			var barcode *string
 			if b := row.get(6); b != "" {
-				switch {
+				switch owner, taken := barcodes[b]; {
 				case utf8.RuneCountInString(b) > 50:
 					r.fail(row.n, "條碼", "最多 50 字")
 					ok = false
-				case barcodes[b]:
+				case taken && (!updating || owner != cur.ID):
 					r.fail(row.n, "條碼", "「%s」已存在或在檔內重複", b)
 					ok = false
 				default:
 					barcode = &b
 				}
+			} else if updating {
+				barcode = cur.Barcode
 			}
 			tax, c3 := ref(r, row, 7, "稅別代號", l.taxTypes)
 			safety, c4 := nonNegative(r, row, 8, "安全庫存", money.QuantityPlaces)
 			price, c5 := nonNegative(r, row, 9, "建議售價", money.UnitPricePlaces)
 			lotControl := "none"
+			if updating {
+				lotControl = cur.LotControl
+			}
 			switch row.get(11) {
-			case "", "不管理":
-			case "批號":
-				lotControl = "lot"
-			case "批號與效期":
-				lotControl = "lot_expiry"
+			case "":
+			case "不管理", "批號", "批號與效期":
+				lc := map[string]string{"不管理": "none", "批號": "lot", "批號與效期": "lot_expiry"}[row.get(11)]
+				if updating && lc != cur.LotControl {
+					r.fail(row.n, "批號管理", "既有料品不可由匯入修改批號管理")
+					ok = false
+				}
+				lotControl = lc
 			default:
 				r.fail(row.n, "批號管理", "須為「不管理」、「批號」或「批號與效期」")
 				ok = false
@@ -223,30 +272,146 @@ var itemsImporter = &importer{
 				r.fail(row.n, "批號管理", "服務類料品沒有庫存,不能做批號管理")
 				ok = false
 			}
-			if !ok || !c1 || !c2 || !c3 || !c4 || !c5 {
+			wh, c6 := ref(r, row, 12, "預設倉庫代號", l.warehouses)
+			var units []unitFactor
+			c7 := true
+			if v := row.get(13); v != "" {
+				units, c7 = parseUnitFactors(r, row, v, l.units, unit)
+			}
+			if !ok || !c1 || !c2 || !c3 || !c4 || !c5 || !c6 || !c7 {
 				continue
 			}
-			codes[strings.ToUpper(code)] = true
+			seen[key] = true
 			if barcode != nil {
-				barcodes[*barcode] = true
+				if updating {
+					barcodes[*barcode] = cur.ID
+				} else {
+					barcodes[*barcode] = 0
+				}
 			}
-			todo = append(todo, db.CreateItemParams{
+			if updating {
+				// 空白欄位保留原值
+				keep := func(v *int64, old *int64) *int64 {
+					if v == nil {
+						return old
+					}
+					return v
+				}
+				if row.get(8) == "" {
+					safety = cur.SafetyStock
+				}
+				if row.get(9) == "" {
+					price = cur.ListPrice
+				}
+				note := row.get(10)
+				if note == "" {
+					note = cur.Note
+				}
+				spec := row.get(2)
+				if spec == "" {
+					spec = cur.Spec
+				}
+				todo = append(todo, pending{units: units, update: &db.ImportUpdateItemParams{
+					ID: cur.ID, CompanyID: r.a.CompanyID, Name: name, Spec: spec, CategoryID: keep(cat, cur.CategoryID), Barcode: barcode,
+					TaxTypeID: keep(tax, cur.TaxTypeID), DefaultWarehouseID: keep(wh, cur.DefaultWarehouseID),
+					SafetyStock: safety, ListPrice: price, Note: note, UpdatedBy: &r.a.UserID,
+				}})
+				continue
+			}
+			todo = append(todo, pending{units: units, create: &db.CreateItemParams{
 				CompanyID: r.a.CompanyID, Code: code, Name: name, Spec: row.get(2), CategoryID: cat, ItemType: itemType,
-				BaseUnitID: *unit, Barcode: barcode, TaxTypeID: tax, SafetyStock: safety, ListPrice: price,
+				BaseUnitID: *unit, Barcode: barcode, TaxTypeID: tax, DefaultWarehouseID: wh, SafetyStock: safety, ListPrice: price,
 				Note: row.get(10), LotControl: lotControl, CreatedBy: &r.a.UserID,
-			})
+			}})
 		}
 		if len(r.errs) > 0 {
 			return nil
 		}
+		created, updated := 0, 0
 		for _, p := range todo {
-			if _, err := r.q.CreateItem(r.ctx, p); err != nil {
-				return err
+			var itemID int64
+			if p.create != nil {
+				it, err := r.q.CreateItem(r.ctx, *p.create)
+				if err != nil {
+					return err
+				}
+				itemID = it.ID
+				created++
+			} else {
+				if err := r.q.ImportUpdateItem(r.ctx, *p.update); err != nil {
+					return err
+				}
+				itemID = p.update.ID
+				updated++
+			}
+			if p.units != nil {
+				if err := r.q.DeleteItemUnits(r.ctx, itemID); err != nil {
+					return err
+				}
+				for _, u := range p.units {
+					if err := r.q.AddItemUnit(r.ctx, db.AddItemUnitParams{ItemID: itemID, UnitID: u.unitID, Factor: u.factor}); err != nil {
+						return err
+					}
+				}
 			}
 		}
-		r.summary = "新增 " + itoa(len(todo)) + " 筆料品"
+		r.summary = "新增 " + itoa(created) + " 筆料品"
+		if updated > 0 {
+			r.summary += "、更新 " + itoa(updated) + " 筆"
+		}
 		return nil
 	},
+}
+
+type unitFactor struct {
+	unitID int64
+	factor decimal.Decimal
+}
+
+// parseUnitFactors 解析「BOX=12;CTN=144」:單位須存在、不可是基本單位、不可重複,換算量須 > 0 且最多 6 位小數。
+func parseUnitFactors(r *run, row sheetRow, v string, units map[string]int64, base *int64) ([]unitFactor, bool) {
+	var out []unitFactor
+	seen := map[int64]bool{}
+	ok := true
+	for _, part := range strings.FieldsFunc(v, func(c rune) bool { return c == ';' || c == '\uff1b' || c == '\n' }) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		code, f, found := strings.Cut(part, "=")
+		if !found {
+			r.fail(row.n, "多單位換算", "「%s」格式應為 單位代號=數量", part)
+			ok = false
+			continue
+		}
+		id, exists := units[strings.ToUpper(strings.TrimSpace(code))]
+		fac, err := parseDecimal(strings.TrimSpace(f))
+		switch {
+		case !exists:
+			r.fail(row.n, "多單位換算", "單位「%s」不存在或已停用", strings.TrimSpace(code))
+			ok = false
+		case base != nil && id == *base:
+			r.fail(row.n, "多單位換算", "「%s」是基本單位,不必設定換算", strings.TrimSpace(code))
+			ok = false
+		case seen[id]:
+			r.fail(row.n, "多單位換算", "單位「%s」重複", strings.TrimSpace(code))
+			ok = false
+		case err != nil || !fac.IsPositive():
+			r.fail(row.n, "多單位換算", "「%s」的換算量須為大於 0 的數字", part)
+			ok = false
+		case !fac.Round(6).Equal(fac):
+			r.fail(row.n, "多單位換算", "「%s」的換算量最多 6 位小數", part)
+			ok = false
+		default:
+			seen[id] = true
+			out = append(out, unitFactor{unitID: id, factor: fac})
+		}
+	}
+	if ok && len(out) == 0 {
+		r.fail(row.n, "多單位換算", "沒有可用的換算內容")
+		ok = false
+	}
+	return out, ok
 }
 
 // ---- 客戶 / 供應商 ----
@@ -327,7 +492,8 @@ func parsePartner(r *run, row sheetRow, l *lookups, codes map[string]bool, pos [
 }
 
 var customersImporter = &importer{
-	key: "customers", label: "客戶", desc: "匯入客戶主檔。已存在的客戶代號會被視為錯誤,不會覆蓋。",
+	key: "customers", label: "客戶", desc: "匯入客戶主檔。預設已存在的代號視為錯誤;選「覆蓋更新」時改為更新(空白欄位保留原值)。",
+	updatable: true,
 	columns: []column{
 		{"客戶代號", true, "最多 20 字,不可重複"},
 		{"名稱", true, "最多 200 字"},
@@ -355,11 +521,9 @@ var customersImporter = &importer{
 		if err != nil {
 			return err
 		}
-		codes := map[string]bool{}
-		for _, e := range existing {
-			codes[strings.ToUpper(e.Code)] = true
-		}
+		codes, ids := existingCodes(r, existing)
 		var todo []db.CreateCustomerParams
+		var upd []db.ImportUpdateCustomerParams
 		for _, row := range r.rows {
 			p, ok := parsePartner(r, row, l, codes, [12]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, "客戶")
 			title := row.get(12)
@@ -381,6 +545,27 @@ var customersImporter = &importer{
 				continue
 			}
 			codes[strings.ToUpper(p.code)] = true
+			if id, found := ids[strings.ToUpper(p.code)]; r.update && found {
+				u := db.ImportUpdateCustomerParams{
+					ID: id, CompanyID: r.a.CompanyID, Name: p.name, ShortName: p.short, TaxID: p.taxID, InvoiceTitle: title,
+					Phone: p.phone, Email: p.email, TaxTypeID: p.taxType, PaymentTermID: p.term, SalesUserID: salesID,
+					Note: p.note, UpdatedBy: &r.a.UserID,
+				}
+				if row.get(6) != "" {
+					u.Currency = &p.currency
+				}
+				if row.get(9) != "" {
+					u.Contacts = p.contacts
+				}
+				if row.get(10) != "" {
+					u.Addresses = p.addresses
+				}
+				if row.get(13) != "" {
+					u.CreditLimit = &limit
+				}
+				upd = append(upd, u)
+				continue
+			}
 			todo = append(todo, db.CreateCustomerParams{
 				CompanyID: r.a.CompanyID, Code: p.code, Name: p.name, ShortName: p.short, TaxID: p.taxID,
 				InvoiceTitle: title, Phone: p.phone, Email: p.email, Contacts: p.contacts, Addresses: p.addresses,
@@ -396,13 +581,19 @@ var customersImporter = &importer{
 				return err
 			}
 		}
-		r.summary = "新增 " + itoa(len(todo)) + " 位客戶"
+		for _, u := range upd {
+			if err := r.q.ImportUpdateCustomer(r.ctx, u); err != nil {
+				return err
+			}
+		}
+		r.summary = "新增 " + itoa(len(todo)) + " 位客戶" + updatedNote(len(upd))
 		return nil
 	},
 }
 
 var suppliersImporter = &importer{
-	key: "suppliers", label: "供應商", desc: "匯入供應商主檔。已存在的供應商代號會被視為錯誤,不會覆蓋。",
+	key: "suppliers", label: "供應商", desc: "匯入供應商主檔。預設已存在的代號視為錯誤;選「覆蓋更新」時改為更新(空白欄位保留原值)。",
+	updatable: true,
 	columns: []column{
 		{"供應商代號", true, "最多 20 字,不可重複"},
 		{"名稱", true, "最多 200 字"},
@@ -429,11 +620,9 @@ var suppliersImporter = &importer{
 		if err != nil {
 			return err
 		}
-		codes := map[string]bool{}
-		for _, e := range existing {
-			codes[strings.ToUpper(e.Code)] = true
-		}
+		codes, ids := existingCodes(r, existing)
 		var todo []db.CreateSupplierParams
+		var upd []db.ImportUpdateSupplierParams
 		for _, row := range r.rows {
 			p, ok := parsePartner(r, row, l, codes, [12]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, "供應商")
 			ok = checkLen(r, row, "銀行名稱", row.get(12), 100) && checkLen(r, row, "銀行帳號", row.get(13), 50) && ok
@@ -441,6 +630,24 @@ var suppliersImporter = &importer{
 				continue
 			}
 			codes[strings.ToUpper(p.code)] = true
+			if id, found := ids[strings.ToUpper(p.code)]; r.update && found {
+				u := db.ImportUpdateSupplierParams{
+					ID: id, CompanyID: r.a.CompanyID, Name: p.name, ShortName: p.short, TaxID: p.taxID, Phone: p.phone, Email: p.email,
+					TaxTypeID: p.taxType, PaymentTermID: p.term, BankName: row.get(12), BankAccount: row.get(13),
+					Note: p.note, UpdatedBy: &r.a.UserID,
+				}
+				if row.get(6) != "" {
+					u.Currency = &p.currency
+				}
+				if row.get(9) != "" {
+					u.Contacts = p.contacts
+				}
+				if row.get(10) != "" {
+					u.Addresses = p.addresses
+				}
+				upd = append(upd, u)
+				continue
+			}
 			todo = append(todo, db.CreateSupplierParams{
 				CompanyID: r.a.CompanyID, Code: p.code, Name: p.name, ShortName: p.short, TaxID: p.taxID, Phone: p.phone,
 				Email: p.email, Contacts: p.contacts, Addresses: p.addresses, Currency: p.currency, TaxTypeID: p.taxType,
@@ -455,9 +662,43 @@ var suppliersImporter = &importer{
 				return err
 			}
 		}
-		r.summary = "新增 " + itoa(len(todo)) + " 家供應商"
+		for _, u := range upd {
+			if err := r.q.ImportUpdateSupplier(r.ctx, u); err != nil {
+				return err
+			}
+		}
+		r.summary = "新增 " + itoa(len(todo)) + " 家供應商" + updatedNote(len(upd))
 		return nil
 	},
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// existingCodes 回傳「視為重複的代號」與「既有代號 → id」。覆蓋更新模式下既有代號不算重複,
+// 只有檔內重複才算;因此 codes 起始為空。
+func existingCodes[T interface {
+	~struct {
+		ID   int64
+		Code string
+	}
+}](r *run, rows []T) (map[string]bool, map[string]int64) {
+	codes, ids := map[string]bool{}, map[string]int64{}
+	for _, e := range rows {
+		x := struct {
+			ID   int64
+			Code string
+		}(e)
+		ids[strings.ToUpper(x.Code)] = x.ID
+		if !r.update {
+			codes[strings.ToUpper(x.Code)] = true
+		}
+	}
+	return codes, ids
+}
+
+func updatedNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return "、更新 " + itoa(n) + " 筆"
+}

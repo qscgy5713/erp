@@ -71,3 +71,56 @@ SELECT customer_id AS partner_id, source_no FROM accounts_receivable WHERE compa
 
 -- name: OpeningPayableKeys :many
 SELECT supplier_id AS partner_id, source_no FROM accounts_payable WHERE company_id = @company_id AND source_type = 'opening';
+
+-- name: AllItemsForImport :many
+SELECT * FROM items WHERE company_id = @company_id;
+
+-- name: AllItemBarcodes :many
+SELECT id, barcode FROM items WHERE company_id = @company_id AND barcode IS NOT NULL;
+
+-- name: ImportUpdateItem :exec
+-- 匯入覆蓋更新:不動基本單位、類型、批號管理、啟用狀態(已有異動後改了會讓歷史失真)
+UPDATE items
+SET name = @name, spec = @spec, category_id = sqlc.narg(category_id), barcode = sqlc.narg(barcode),
+    tax_type_id = sqlc.narg(tax_type_id), default_warehouse_id = sqlc.narg(default_warehouse_id),
+    safety_stock = @safety_stock, list_price = @list_price, note = @note,
+    version = version + 1, updated_by = @updated_by
+WHERE id = @id AND company_id = @company_id;
+
+-- name: ImportUpdateCustomer :exec
+-- 覆蓋更新:空白(NULL / 空字串)代表保留原值
+UPDATE customers
+SET name = @name,
+    short_name = COALESCE(NULLIF(@short_name::text, ''), short_name),
+    tax_id = COALESCE(sqlc.narg(tax_id)::char(8), tax_id),
+    invoice_title = COALESCE(NULLIF(@invoice_title::text, ''), invoice_title),
+    phone = COALESCE(NULLIF(@phone::text, ''), phone),
+    email = COALESCE(NULLIF(@email::text, ''), email),
+    contacts = COALESCE(sqlc.narg(contacts)::jsonb, contacts),
+    addresses = COALESCE(sqlc.narg(addresses)::jsonb, addresses),
+    currency = COALESCE(sqlc.narg(currency)::char(3), currency),
+    tax_type_id = COALESCE(sqlc.narg(tax_type_id)::bigint, tax_type_id),
+    payment_term_id = COALESCE(sqlc.narg(payment_term_id)::bigint, payment_term_id),
+    credit_limit = COALESCE(sqlc.narg(credit_limit)::numeric, credit_limit),
+    sales_user_id = COALESCE(sqlc.narg(sales_user_id)::bigint, sales_user_id),
+    note = COALESCE(NULLIF(@note::text, ''), note),
+    version = version + 1, updated_by = @updated_by
+WHERE id = @id AND company_id = @company_id;
+
+-- name: ImportUpdateSupplier :exec
+UPDATE suppliers
+SET name = @name,
+    short_name = COALESCE(NULLIF(@short_name::text, ''), short_name),
+    tax_id = COALESCE(sqlc.narg(tax_id)::char(8), tax_id),
+    phone = COALESCE(NULLIF(@phone::text, ''), phone),
+    email = COALESCE(NULLIF(@email::text, ''), email),
+    contacts = COALESCE(sqlc.narg(contacts)::jsonb, contacts),
+    addresses = COALESCE(sqlc.narg(addresses)::jsonb, addresses),
+    currency = COALESCE(sqlc.narg(currency)::char(3), currency),
+    tax_type_id = COALESCE(sqlc.narg(tax_type_id)::bigint, tax_type_id),
+    payment_term_id = COALESCE(sqlc.narg(payment_term_id)::bigint, payment_term_id),
+    bank_name = COALESCE(NULLIF(@bank_name::text, ''), bank_name),
+    bank_account = COALESCE(NULLIF(@bank_account::text, ''), bank_account),
+    note = COALESCE(NULLIF(@note::text, ''), note),
+    version = version + 1, updated_by = @updated_by
+WHERE id = @id AND company_id = @company_id;

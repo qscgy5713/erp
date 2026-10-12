@@ -28,3 +28,14 @@ WHERE r.company_id = @company_id AND r.status = 'posted'
   AND COALESCE(r.invoice_date, r.doc_date) BETWEEN sqlc.arg(from_date)::date AND sqlc.arg(to_date)::date
 GROUP BY r.id, t.kind, s.id
 ORDER BY eff_date, r.doc_no;
+
+-- name: GetVatSettings :one
+SELECT * FROM vat_period_settings WHERE company_id = @company_id AND year = @year AND period = @period;
+
+-- name: UpsertVatSettings :one
+INSERT INTO vat_period_settings (company_id, year, period, prior_credit, customs_tax, use_ratio, updated_by)
+VALUES (@company_id, @year, @period, @prior_credit, @customs_tax, @use_ratio, @updated_by)
+ON CONFLICT (company_id, year, period) DO UPDATE
+SET prior_credit = EXCLUDED.prior_credit, customs_tax = EXCLUDED.customs_tax, use_ratio = EXCLUDED.use_ratio,
+    updated_by = EXCLUDED.updated_by, updated_at = now()
+RETURNING *;

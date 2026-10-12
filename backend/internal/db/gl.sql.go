@@ -178,6 +178,90 @@ func (q *Queries) AddVoucherLine(ctx context.Context, arg AddVoucherLineParams) 
 	return err
 }
 
+const cashBalanceAsOf = `-- name: CashBalanceAsOf :one
+SELECT COALESCE(SUM(l.debit - l.credit), 0)::numeric
+FROM voucher_lines l
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+WHERE v.company_id = $1 AND v.voucher_date <= $2::date
+  AND l.account_id IN (SELECT am.account_id FROM account_mappings am WHERE am.company_id = $1 AND am.map_key IN ('settle.cash', 'settle.bank'))
+`
+
+type CashBalanceAsOfParams struct {
+	CompanyID int64
+	AsOf      time.Time
+}
+
+func (q *Queries) CashBalanceAsOf(ctx context.Context, arg CashBalanceAsOfParams) (decimal.Decimal, error) {
+	row := q.db.QueryRow(ctx, cashBalanceAsOf, arg.CompanyID, arg.AsOf)
+	var column_1 decimal.Decimal
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const cashFlowAllocation = `-- name: CashFlowAllocation :many
+WITH cash_accts AS (
+  SELECT am.account_id FROM account_mappings am WHERE am.company_id = $1 AND am.map_key IN ('settle.cash', 'settle.bank')
+), vc AS (
+  SELECT l.voucher_id,
+         SUM(l.debit - l.credit) FILTER (WHERE l.account_id IN (SELECT ca.account_id FROM cash_accts ca)) AS cash_net,
+         SUM(l.debit + l.credit) FILTER (WHERE l.account_id NOT IN (SELECT ca.account_id FROM cash_accts ca)) AS other_total
+  FROM voucher_lines l
+  JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted'
+  WHERE v.company_id = $1 AND v.voucher_date BETWEEN $2::date AND $3::date
+  GROUP BY l.voucher_id
+)
+SELECT a.id, a.code, a.name, a.acct_type,
+       SUM(vc.cash_net * (l.debit + l.credit) / vc.other_total)::numeric AS amount
+FROM vc
+JOIN voucher_lines l ON l.voucher_id = vc.voucher_id AND l.account_id NOT IN (SELECT ca.account_id FROM cash_accts ca)
+JOIN accounts a ON a.id = l.account_id
+WHERE vc.cash_net <> 0 AND vc.other_total > 0
+GROUP BY a.id
+ORDER BY a.code
+`
+
+type CashFlowAllocationParams struct {
+	CompanyID int64
+	FromDate  time.Time
+	ToDate    time.Time
+}
+
+type CashFlowAllocationRow struct {
+	ID       int64
+	Code     string
+	Name     string
+	AcctType string
+	Amount   decimal.Decimal
+}
+
+// 現金流量(直接法):每張已過帳傳票的現金淨增減(現金 = 對照表 settle.cash / settle.bank 的科目),
+// 依「非現金明細」的金額比例分攤到對方科目;現金互轉(沒有非現金明細)不計。年度結帳傳票不涉現金。
+func (q *Queries) CashFlowAllocation(ctx context.Context, arg CashFlowAllocationParams) ([]CashFlowAllocationRow, error) {
+	rows, err := q.db.Query(ctx, cashFlowAllocation, arg.CompanyID, arg.FromDate, arg.ToDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CashFlowAllocationRow{}
+	for rows.Next() {
+		var i CashFlowAllocationRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.AcctType,
+			&i.Amount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countDraftVouchersInPeriod = `-- name: CountDraftVouchersInPeriod :one
 SELECT count(*) FROM vouchers
 WHERE company_id = $1 AND status = 'draft' AND to_char(voucher_date, 'YYYY-MM') = $2::text
@@ -406,6 +490,60 @@ DELETE FROM voucher_lines WHERE voucher_id = $1
 func (q *Queries) DeleteVoucherLines(ctx context.Context, voucherID int64) error {
 	_, err := q.db.Exec(ctx, deleteVoucherLines, voucherID)
 	return err
+}
+
+const departmentPnl = `-- name: DepartmentPnl :many
+SELECT l.department_id, d.code AS department_code, d.name AS department_name, a.acct_type,
+       COALESCE(SUM(l.credit - l.debit), 0)::numeric AS amount
+FROM voucher_lines l
+JOIN vouchers v ON v.id = l.voucher_id AND v.status = 'posted' AND v.source_type <> 'year_end'
+JOIN accounts a ON a.id = l.account_id
+LEFT JOIN departments d ON d.id = l.department_id
+WHERE v.company_id = $1 AND v.voucher_date BETWEEN $2::date AND $3::date
+  AND a.acct_type IN ('revenue', 'cost', 'expense')
+GROUP BY l.department_id, d.code, d.name, a.acct_type
+ORDER BY d.code NULLS LAST, a.acct_type
+`
+
+type DepartmentPnlParams struct {
+	CompanyID int64
+	FromDate  time.Time
+	ToDate    time.Time
+}
+
+type DepartmentPnlRow struct {
+	DepartmentID   *int64
+	DepartmentCode *string
+	DepartmentName *string
+	AcctType       string
+	Amount         decimal.Decimal
+}
+
+// 部門別損益:期間內已過帳傳票的收入 / 成本 / 費用,依明細的輔助核算部門分組(沒填部門的歸在「未指定」,department_id 為 NULL)
+func (q *Queries) DepartmentPnl(ctx context.Context, arg DepartmentPnlParams) ([]DepartmentPnlRow, error) {
+	rows, err := q.db.Query(ctx, departmentPnl, arg.CompanyID, arg.FromDate, arg.ToDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DepartmentPnlRow{}
+	for rows.Next() {
+		var i DepartmentPnlRow
+		if err := rows.Scan(
+			&i.DepartmentID,
+			&i.DepartmentCode,
+			&i.DepartmentName,
+			&i.AcctType,
+			&i.Amount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const generalLedger = `-- name: GeneralLedger :many

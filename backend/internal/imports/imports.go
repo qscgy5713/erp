@@ -70,6 +70,7 @@ type importer struct {
 	columns          []column
 	sample           [][]string
 	needsDate        bool // 期初類:須指定期初日期(date 參數)
+	updatable        bool // 主檔類:支援 mode=update(代號已存在時覆蓋更新,空白欄位保留原值)
 	undoable         bool
 	exec             func(r *run) error
 	undo             func(ctx context.Context, q *db.Queries, a *authctx.Actor, b db.ImportBatch) error
@@ -87,7 +88,7 @@ func (im *importer) headers() []string {
 }
 
 var importers = []*importer{
-	itemsImporter, customersImporter, suppliersImporter,
+	itemsImporter, customersImporter, suppliersImporter, warehousesImporter, categoriesImporter,
 	openingStockImporter, openingARImporter, openingAPImporter, openingBalanceImporter,
 }
 
@@ -127,6 +128,7 @@ type run struct {
 	im      *importer
 	rows    []sheetRow
 	date    time.Time
+	update  bool // mode=update:已存在的代號改為更新
 	batch   db.ImportBatch
 	errs    []RowError
 	summary string
@@ -181,6 +183,10 @@ func readSheet(data []byte, im *importer) ([]sheetRow, *apperr.Error) {
 		if i < len(all[0]) {
 			got = strings.TrimSpace(all[0][i])
 		}
+		// 舊版範本沒有後來新增的選填欄位:標題列到此結束就視為沒填
+		if got == "" && i >= len(all[0]) && !im.columns[i].required {
+			continue
+		}
 		if got != w {
 			return nil, apperr.New(http.StatusUnprocessableEntity, "IMP-003",
 				fmt.Sprintf("第 1 列第 %d 欄標題應為「%s」,目前是「%s」;請使用系統提供的範本,不要修改標題", i+1, w, got))
@@ -216,13 +222,14 @@ type typeDTO struct {
 	Desc      string   `json:"desc"`
 	Columns   []string `json:"columns"`
 	NeedsDate bool     `json:"needs_date"`
+	Updatable bool     `json:"updatable"`
 	Undoable  bool     `json:"undoable"`
 }
 
 func (m *Module) listTypes(c *gin.Context) {
 	out := make([]typeDTO, len(importers))
 	for i, im := range importers {
-		out[i] = typeDTO{Key: im.key, Label: im.label, Desc: im.desc, Columns: im.headers(), NeedsDate: im.needsDate, Undoable: im.undoable}
+		out[i] = typeDTO{Key: im.key, Label: im.label, Desc: im.desc, Columns: im.headers(), NeedsDate: im.needsDate, Updatable: im.updatable, Undoable: im.undoable}
 	}
 	response.OK(c, out)
 }
@@ -391,12 +398,17 @@ func (m *Module) upload(c *gin.Context) {
 		}
 	}
 	dry := c.Query("dry_run") == "true"
+	update := c.Query("mode") == "update"
+	if update && !im.updatable {
+		response.Error(c, apperr.Validation(map[string]string{"mode": "此類型的匯入不支援覆蓋更新"}))
+		return
+	}
 	ctx := c.Request.Context()
 	a := actor(c)
 	res := resultDTO{Type: im.key, DryRun: dry, RowCount: len(rows), Errors: []RowError{}}
 
 	err = m.store.InTx(ctx, func(q *db.Queries) error {
-		r := &run{ctx: ctx, q: q, a: a, im: im, rows: rows, date: date}
+		r := &run{ctx: ctx, q: q, a: a, im: im, rows: rows, date: date, update: update}
 		if im.needsDate {
 			// 期初類先建批次紀錄取得 id(預檢時隨交易一起回滾)
 			b, err := q.CreateImportBatch(ctx, db.CreateImportBatchParams{
