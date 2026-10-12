@@ -117,6 +117,8 @@ type varianceRow struct {
 	Variance     *decimal.Decimal `json:"variance"`     // 實際 − 標準;正數 = 實際高於標準
 	VariancePct  *decimal.Decimal `json:"variance_pct"` // 差異 ÷ 標準 × 100
 	Status       string           `json:"status"`       // ok / uncosted 尚未月結 / no_standard 未設標準成本
+	// Breakdown 差異拆解(用量 / 價格 / 加工費);尚未月結或沒設標準成本為 null
+	Breakdown *breakdown `json:"breakdown"`
 }
 
 // variance GET /costing/variance?period=YYYY-MM
@@ -133,6 +135,7 @@ func (m *Module) variance(c *gin.Context) {
 		return
 	}
 	out := make([]varianceRow, len(rows))
+	var inputs []itemInput
 	hundred := decimal.NewFromInt(100)
 	for i, r := range rows {
 		v := varianceRow{ItemID: r.ItemID, ItemCode: r.ItemCode, ItemName: r.ItemName, UnitName: r.UnitName,
@@ -151,6 +154,7 @@ func (m *Module) variance(c *gin.Context) {
 			if costed {
 				d := money.Amount(r.ActualAmount).Sub(sa)
 				v.Variance = &d
+				inputs = append(inputs, itemInput{ItemID: r.ItemID, ProducedQty: r.ProducedQty, ActualAmt: money.Amount(r.ActualAmount), StandardAmt: sa, Variance: d})
 				if !sa.IsZero() {
 					p := d.Div(sa).Mul(hundred).Round(2)
 					v.VariancePct = &p
@@ -160,6 +164,16 @@ func (m *Module) variance(c *gin.Context) {
 			v.Status = "no_standard"
 		}
 		out[i] = v
+	}
+	if len(inputs) > 0 {
+		bds, err := breakdowns(c.Request.Context(), m.store.Queries, actor(c).CompanyID, start, end, inputs)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		for i := range out {
+			out[i].Breakdown = bds[out[i].ItemID]
+		}
 	}
 	response.OK(c, gin.H{"period": period, "rows": out})
 }

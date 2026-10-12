@@ -9,7 +9,7 @@ import {
   type DocTypeOption,
   type RuleStep,
 } from '@/api/approval'
-import { systemApi, type Role } from '@/api/system'
+import { systemApi, type Department, type Role } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
 import { useApiError } from '@/composables/useApiError'
 
@@ -20,6 +20,7 @@ const { handle, fieldErrors, reset: clearErrors, autoClear } = useApiError()
 const rules = ref<ApprovalRule[]>([])
 const docTypes = ref<DocTypeOption[]>([])
 const roles = ref<Role[]>([])
+const departments = ref<Department[]>([])
 const loading = ref(false)
 
 const dialog = ref(false)
@@ -29,7 +30,12 @@ interface FormStep {
   role_ids: number[]
   mode: ApprovalMode
 }
-const form = reactive({ doc_type: '', min_amount: '0', steps: [] as FormStep[] })
+const form = reactive({
+  doc_type: '',
+  min_amount: '0',
+  department_id: null as number | null,
+  steps: [] as FormStep[],
+})
 
 /** 規則的一層顯示成「財務 或 法務(或簽)」「財務 + 法務(會簽)」 */
 function stepText(s: RuleStep): string {
@@ -43,12 +49,15 @@ const money = (v: string) => Number(v).toLocaleString('zh-TW')
 async function load() {
   loading.value = true
   try {
-    ;[rules.value, docTypes.value, roles.value] = await Promise.all([
+    ;[rules.value, docTypes.value, roles.value, departments.value] = await Promise.all([
       approvalApi.rules(),
       approvalApi.docTypes(),
       auth.can(['system.role.read', 'system.approval.write'])
         ? systemApi.roles()
         : Promise.resolve([] as Role[]),
+      auth.can(['system.department.read', 'system.approval.write'])
+        ? systemApi.departments()
+        : Promise.resolve([] as Department[]),
     ])
   } catch (e) {
     handle(e)
@@ -62,6 +71,7 @@ function open(rule: ApprovalRule | null) {
   editing.value = rule
   form.doc_type = rule?.doc_type ?? docTypes.value[0]?.key ?? ''
   form.min_amount = rule?.min_amount ?? '0'
+  form.department_id = rule?.department_id ?? null
   form.steps = rule
     ? rule.steps.map((s) => ({ role_ids: s.roles.map((r) => r.role_id), mode: s.mode }))
     : [{ role_ids: [], mode: 'any' }]
@@ -74,6 +84,7 @@ async function save() {
   const input = {
     doc_type: form.doc_type,
     min_amount: String(form.min_amount),
+    department_id: form.department_id,
     steps: form.steps
       .filter((s) => s.role_ids.length > 0)
       .map((s) => ({ role_ids: s.role_ids, mode: s.role_ids.length > 1 ? s.mode : 'any' })),
@@ -130,6 +141,9 @@ autoClear(form)
     </div>
     <el-table v-loading="loading" :data="rules" border>
       <el-table-column prop="doc_label" label="單據" width="170" />
+      <el-table-column label="適用部門" width="130">
+        <template #default="{ row }">{{ row.department_name || '全公司' }}</template>
+      </el-table-column>
       <el-table-column label="金額門檻(含稅,本位幣)" width="200" align="right">
         <template #default="{ row }">≥ {{ money(row.min_amount) }}</template>
       </el-table-column>
@@ -153,6 +167,22 @@ autoClear(form)
           <el-select v-model="form.doc_type" style="width: 100%">
             <el-option v-for="d in docTypes" :key="d.key" :label="d.label" :value="d.key" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="適用部門" :error="fieldErrors.department_id">
+          <el-select
+            v-model="form.department_id"
+            clearable
+            placeholder="全公司"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="d in departments"
+              :key="d.id"
+              :label="`${d.code} ${d.name}`"
+              :value="d.id"
+            />
+          </el-select>
+          <div class="muted">依送審者所屬部門(含下層部門)套用;越接近的部門規則越優先</div>
         </el-form-item>
         <el-form-item label="金額門檻" :error="fieldErrors.min_amount">
           <el-input v-model="form.min_amount" placeholder="含稅金額達此數字才適用" />

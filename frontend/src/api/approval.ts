@@ -20,6 +20,9 @@ export interface ApprovalRule {
   doc_type: string
   doc_label: string
   min_amount: Decimal
+  /** 限定送審者所屬部門(含下層部門);null = 全公司 */
+  department_id: number | null
+  department_name: string
   steps: RuleStep[]
   version: number
 }
@@ -27,6 +30,7 @@ export interface ApprovalRule {
 export interface ApprovalRuleInput {
   doc_type: string
   min_amount: string
+  department_id: number | null
   /** 第 2 層起的各層:一或多個角色與簽法 */
   steps: { role_ids: number[]; mode: ApprovalMode }[]
   version?: number

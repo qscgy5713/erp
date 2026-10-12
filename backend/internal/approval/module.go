@@ -73,8 +73,11 @@ type ruleDTO struct {
 	DocType   string          `json:"doc_type"`
 	DocLabel  string          `json:"doc_label"`
 	MinAmount decimal.Decimal `json:"min_amount"`
-	Steps     []stepDTO       `json:"steps"` // 第 2 層以後的角色(第 1 層固定為核准權限)
-	Version   int32           `json:"version"`
+	// DepartmentID 限定送審者所屬部門(含其下層部門);nil = 全公司
+	DepartmentID   *int64    `json:"department_id"`
+	DepartmentName string    `json:"department_name"`
+	Steps          []stepDTO `json:"steps"` // 第 2 層以後的角色(第 1 層固定為核准權限)
+	Version        int32     `json:"version"`
 }
 
 func loadRules(c *gin.Context, q *db.Queries, companyID int64) ([]ruleDTO, error) {
@@ -90,7 +93,7 @@ func loadRules(c *gin.Context, q *db.Queries, companyID int64) ([]ruleDTO, error
 	out := make([]ruleDTO, len(rules))
 	idx := map[int64]int{}
 	for i, r := range rules {
-		out[i] = ruleDTO{ID: r.ID, DocType: r.DocType, DocLabel: Label(r.DocType), MinAmount: r.MinAmount, Steps: []stepDTO{}, Version: r.Version}
+		out[i] = ruleDTO{ID: r.ID, DocType: r.DocType, DocLabel: Label(r.DocType), MinAmount: r.MinAmount, DepartmentID: r.DepartmentID, DepartmentName: r.DepartmentName, Steps: []stepDTO{}, Version: r.Version}
 		idx[r.ID] = i
 	}
 	for _, s := range steps {
@@ -120,8 +123,9 @@ type stepInput struct {
 }
 
 type ruleInput struct {
-	DocType   string          `json:"doc_type" binding:"required"`
-	MinAmount decimal.Decimal `json:"min_amount"`
+	DocType      string          `json:"doc_type" binding:"required"`
+	MinAmount    decimal.Decimal `json:"min_amount"`
+	DepartmentID *int64          `json:"department_id"`
 	// Steps 各層設定;未提供時以 RoleIDs 代表「每層一個角色」(舊格式)
 	Steps   []stepInput `json:"steps"`
 	RoleIDs []int64     `json:"role_ids"`
@@ -149,6 +153,13 @@ func validate(c *gin.Context, q *db.Queries, companyID int64, in *ruleInput) err
 	}
 	if in.MinAmount.IsNegative() || in.MinAmount.Exponent() < -2 {
 		return fieldErr("min_amount", "金額須為 0 以上,最多 2 位小數")
+	}
+	if in.DepartmentID != nil {
+		if ok, err := q.DepartmentExists(ctx, db.DepartmentExistsParams{ID: *in.DepartmentID, CompanyID: companyID}); err != nil {
+			return err
+		} else if !ok {
+			return fieldErr("department_id", "部門不存在")
+		}
 	}
 	layers := in.layers()
 	if n := len(layers); n < 1 || n > 4 {
@@ -212,7 +223,7 @@ func saveSteps(c *gin.Context, q *db.Queries, ruleID int64, layers []stepInput) 
 	return nil
 }
 
-var errDuplicateRule = apperr.Conflict("APR-010", "此單據類型已有相同起始金額的規則")
+var errDuplicateRule = apperr.Conflict("APR-010", "此單據類型(與部門)已有相同起始金額的規則")
 
 func (m *Module) createRule(c *gin.Context) {
 	var in ruleInput
@@ -228,7 +239,7 @@ func (m *Module) createRule(c *gin.Context) {
 			return err
 		}
 		r, err := q.CreateApprovalRule(ctx, db.CreateApprovalRuleParams{
-			CompanyID: a.CompanyID, DocType: in.DocType, MinAmount: in.MinAmount, ActorID: &a.UserID,
+			CompanyID: a.CompanyID, DocType: in.DocType, DepartmentID: in.DepartmentID, MinAmount: in.MinAmount, ActorID: &a.UserID,
 		})
 		if database.IsUniqueViolation(err, "approval_rules_key") {
 			return errDuplicateRule
@@ -283,7 +294,7 @@ func (m *Module) updateRule(c *gin.Context) {
 		}
 		before, _ := loadRules(c, q, a.CompanyID)
 		_, err := q.UpdateApprovalRule(ctx, db.UpdateApprovalRuleParams{
-			ID: id, CompanyID: a.CompanyID, DocType: in.DocType, MinAmount: in.MinAmount, ActorID: &a.UserID, Version: in.Version,
+			ID: id, CompanyID: a.CompanyID, DocType: in.DocType, DepartmentID: in.DepartmentID, MinAmount: in.MinAmount, ActorID: &a.UserID, Version: in.Version,
 		})
 		if database.IsNoRows(err) {
 			return apperr.ErrVersionConflict

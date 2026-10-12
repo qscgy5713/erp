@@ -59,6 +59,30 @@ export interface StandardCost {
   has_bom: boolean
 }
 
+export interface MaterialVariance {
+  material_id: number
+  material_code: string
+  material_name: string
+  unit_name: string
+  standard_qty: Decimal
+  actual_qty: Decimal
+  /** 材料沒設標準成本為 null(以實際單價計,價格差異為 0) */
+  standard_price: Decimal | null
+  actual_price: Decimal | null
+  qty_variance: Decimal
+  price_variance: Decimal
+}
+
+/** 差異拆解:用量 + 價格 + 加工費 = 總差異 */
+export interface VarianceBreakdown {
+  materials: MaterialVariance[]
+  qty_variance: Decimal
+  price_variance: Decimal
+  processing_variance: Decimal
+  standard_processing: Decimal
+  actual_processing: Decimal
+}
+
 export interface VarianceRow {
   item_id: number
   item_code: string
@@ -73,6 +97,7 @@ export interface VarianceRow {
   variance: Decimal | null
   variance_pct: Decimal | null
   status: 'ok' | 'uncosted' | 'no_standard'
+  breakdown: VarianceBreakdown | null
 }
 
 export const costingApi = {

@@ -1,6 +1,6 @@
 // Package approval 多層簽核(D61)。
 //
-// 規則依單據類型與本位幣含稅金額決定:第 1 層永遠是「具該單據核准權限的人」(與原本相同),
+// 規則依單據類型、送審者部門(D96)與本位幣含稅金額決定:第 1 層永遠是「具該單據核准權限的人」(與原本相同),
 // 規則可再追加第 2 層以後要指定的角色。送審時依規則把流程快照到 document_approvals,
 // 之後修改規則不影響進行中的單據;沒有套用任何規則的單據沒有快照列,維持單層核准。
 package approval
@@ -77,7 +77,7 @@ func Intercept(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, doc
 	amount decimal.Decimal) (partial bool, msg string, err error) {
 	switch action {
 	case docstate.Submit:
-		if err := snapshot(ctx, q, a.CompanyID, docType, docID, amount); err != nil {
+		if err := snapshot(ctx, q, a.CompanyID, a.DepartmentID, docType, docID, amount); err != nil {
 			return false, "", err
 		}
 		return false, "", notifyApprovers(ctx, q, a, docType, nil)
@@ -201,12 +201,12 @@ func toSlots[T any](rows []T, conv func(T) slot) []slot {
 	return out
 }
 
-func snapshot(ctx authCtx, q *db.Queries, companyID int64, docType string, docID int64, amount decimal.Decimal) error {
+func snapshot(ctx authCtx, q *db.Queries, companyID int64, deptID *int64, docType string, docID int64, amount decimal.Decimal) error {
 	// 重新送審時重建,避免殘留舊流程
 	if err := q.DeleteDocumentApprovals(ctx, db.DeleteDocumentApprovalsParams{CompanyID: companyID, DocType: docType, DocID: docID}); err != nil {
 		return err
 	}
-	ruleID, err := q.MatchApprovalRule(ctx, db.MatchApprovalRuleParams{CompanyID: companyID, DocType: docType, Amount: amount})
+	ruleID, err := q.MatchApprovalRule(ctx, db.MatchApprovalRuleParams{CompanyID: companyID, DocType: docType, Amount: amount, DepartmentID: deptID})
 	if database.IsNoRows(err) {
 		return nil
 	}

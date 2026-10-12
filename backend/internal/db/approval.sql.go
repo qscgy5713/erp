@@ -215,21 +215,23 @@ func (q *Queries) CompleteDocumentApproval(ctx context.Context, arg CompleteDocu
 }
 
 const createApprovalRule = `-- name: CreateApprovalRule :one
-INSERT INTO approval_rules (company_id, doc_type, min_amount, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $4) RETURNING id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at
+INSERT INTO approval_rules (company_id, doc_type, department_id, min_amount, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at, department_id
 `
 
 type CreateApprovalRuleParams struct {
-	CompanyID int64
-	DocType   string
-	MinAmount decimal.Decimal
-	ActorID   *int64
+	CompanyID    int64
+	DocType      string
+	DepartmentID *int64
+	MinAmount    decimal.Decimal
+	ActorID      *int64
 }
 
 func (q *Queries) CreateApprovalRule(ctx context.Context, arg CreateApprovalRuleParams) (ApprovalRule, error) {
 	row := q.db.QueryRow(ctx, createApprovalRule,
 		arg.CompanyID,
 		arg.DocType,
+		arg.DepartmentID,
 		arg.MinAmount,
 		arg.ActorID,
 	)
@@ -244,6 +246,7 @@ func (q *Queries) CreateApprovalRule(ctx context.Context, arg CreateApprovalRule
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepartmentID,
 	)
 	return i, err
 }
@@ -346,6 +349,22 @@ func (q *Queries) DeleteDocumentApprovals(ctx context.Context, arg DeleteDocumen
 	return err
 }
 
+const departmentExists = `-- name: DepartmentExists :one
+SELECT EXISTS (SELECT 1 FROM departments WHERE id = $1 AND company_id = $2)
+`
+
+type DepartmentExistsParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) DepartmentExists(ctx context.Context, arg DepartmentExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, departmentExists, arg.ID, arg.CompanyID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const documentApprovalsForDocs = `-- name: DocumentApprovalsForDocs :many
 SELECT d.doc_type, d.doc_id, d.step_no, d.slot_no, d.mode, d.role_id, d.role_name, d.approver_id, d.acting_for
 FROM document_approvals d
@@ -403,7 +422,7 @@ func (q *Queries) DocumentApprovalsForDocs(ctx context.Context, arg DocumentAppr
 }
 
 const getApprovalRule = `-- name: GetApprovalRule :one
-SELECT id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at FROM approval_rules WHERE id = $1 AND company_id = $2
+SELECT id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at, department_id FROM approval_rules WHERE id = $1 AND company_id = $2
 `
 
 type GetApprovalRuleParams struct {
@@ -424,6 +443,7 @@ func (q *Queries) GetApprovalRule(ctx context.Context, arg GetApprovalRuleParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepartmentID,
 	)
 	return i, err
 }
@@ -548,19 +568,35 @@ func (q *Queries) ListApprovalRuleSteps(ctx context.Context, companyID int64) ([
 
 const listApprovalRules = `-- name: ListApprovalRules :many
 
-SELECT id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at FROM approval_rules WHERE company_id = $1 ORDER BY doc_type, min_amount
+SELECT r.id, r.company_id, r.doc_type, r.min_amount, r.created_by, r.updated_by, r.version, r.created_at, r.updated_at, r.department_id, COALESCE(d.name, '')::text AS department_name
+FROM approval_rules r LEFT JOIN departments d ON d.id = r.department_id
+WHERE r.company_id = $1 ORDER BY r.doc_type, d.code NULLS FIRST, r.min_amount
 `
 
+type ListApprovalRulesRow struct {
+	ID             int64
+	CompanyID      int64
+	DocType        string
+	MinAmount      decimal.Decimal
+	CreatedBy      *int64
+	UpdatedBy      *int64
+	Version        int32
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	DepartmentID   *int64
+	DepartmentName string
+}
+
 // ======== 多層簽核(D61) ========
-func (q *Queries) ListApprovalRules(ctx context.Context, companyID int64) ([]ApprovalRule, error) {
+func (q *Queries) ListApprovalRules(ctx context.Context, companyID int64) ([]ListApprovalRulesRow, error) {
 	rows, err := q.db.Query(ctx, listApprovalRules, companyID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ApprovalRule{}
+	items := []ListApprovalRulesRow{}
 	for rows.Next() {
-		var i ApprovalRule
+		var i ListApprovalRulesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.CompanyID,
@@ -571,6 +607,8 @@ func (q *Queries) ListApprovalRules(ctx context.Context, companyID int64) ([]App
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DepartmentID,
+			&i.DepartmentName,
 		); err != nil {
 			return nil, err
 		}
@@ -697,20 +735,32 @@ func (q *Queries) ListDocumentApprovals(ctx context.Context, arg ListDocumentApp
 }
 
 const matchApprovalRule = `-- name: MatchApprovalRule :one
-SELECT id FROM approval_rules
-WHERE company_id = $1 AND doc_type = $2 AND min_amount <= $3::numeric
-ORDER BY min_amount DESC LIMIT 1
+WITH RECURSIVE chain (dept_id, depth) AS (
+    SELECT dp.id, 0 FROM departments dp WHERE dp.id = $4::bigint
+  UNION ALL
+    SELECT dp.parent_id, chain.depth + 1 FROM departments dp JOIN chain ON dp.id = chain.dept_id WHERE dp.parent_id IS NOT NULL
+)
+SELECT r.id FROM approval_rules r LEFT JOIN chain c ON c.dept_id = r.department_id
+WHERE r.company_id = $1 AND r.doc_type = $2 AND r.min_amount <= $3::numeric
+  AND (r.department_id IS NULL OR c.dept_id IS NOT NULL)
+ORDER BY (r.department_id IS NULL), c.depth NULLS LAST, r.min_amount DESC LIMIT 1
 `
 
 type MatchApprovalRuleParams struct {
-	CompanyID int64
-	DocType   string
-	Amount    decimal.Decimal
+	CompanyID    int64
+	DocType      string
+	Amount       decimal.Decimal
+	DepartmentID *int64
 }
 
-// 同類型中 min_amount 最大且不超過單據金額的規則
+// 適用規則:先看送審者的部門與其上層部門(越近越優先),沒有適用的再看全公司規則;同一層級取 min_amount 最大且不超過單據金額者
 func (q *Queries) MatchApprovalRule(ctx context.Context, arg MatchApprovalRuleParams) (int64, error) {
-	row := q.db.QueryRow(ctx, matchApprovalRule, arg.CompanyID, arg.DocType, arg.Amount)
+	row := q.db.QueryRow(ctx, matchApprovalRule,
+		arg.CompanyID,
+		arg.DocType,
+		arg.Amount,
+		arg.DepartmentID,
+	)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
@@ -847,22 +897,24 @@ func (q *Queries) RoleCountInApprovalRules(ctx context.Context, roleID int64) (i
 }
 
 const updateApprovalRule = `-- name: UpdateApprovalRule :one
-UPDATE approval_rules SET doc_type = $1, min_amount = $2, updated_by = $3, version = version + 1
-WHERE id = $4 AND company_id = $5 AND version = $6 RETURNING id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at
+UPDATE approval_rules SET doc_type = $1, department_id = $2, min_amount = $3, updated_by = $4, version = version + 1
+WHERE id = $5 AND company_id = $6 AND version = $7 RETURNING id, company_id, doc_type, min_amount, created_by, updated_by, version, created_at, updated_at, department_id
 `
 
 type UpdateApprovalRuleParams struct {
-	DocType   string
-	MinAmount decimal.Decimal
-	ActorID   *int64
-	ID        int64
-	CompanyID int64
-	Version   int32
+	DocType      string
+	DepartmentID *int64
+	MinAmount    decimal.Decimal
+	ActorID      *int64
+	ID           int64
+	CompanyID    int64
+	Version      int32
 }
 
 func (q *Queries) UpdateApprovalRule(ctx context.Context, arg UpdateApprovalRuleParams) (ApprovalRule, error) {
 	row := q.db.QueryRow(ctx, updateApprovalRule,
 		arg.DocType,
+		arg.DepartmentID,
 		arg.MinAmount,
 		arg.ActorID,
 		arg.ID,
@@ -880,6 +932,7 @@ func (q *Queries) UpdateApprovalRule(ctx context.Context, arg UpdateApprovalRule
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DepartmentID,
 	)
 	return i, err
 }

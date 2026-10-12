@@ -283,6 +283,53 @@ func TestWorkOrderLifecycleAndCosting(t *testing.T) {
 	if v := variance("2026-10"); len(v) != 0 {
 		t.Fatalf("沒有完工的月份應為空,got %+v", v)
 	}
+	// 差異拆解(D97):材料標準價 RAW1 90、RAW2 210;9/30 起新 BOM 的 RAW1 標準用量 1.5(每 1 成品)
+	// 標準材料 = 15×90 + 10×210 = 3450 → 標準加工費 4000 − 3450 = 550
+	// 用量差異 = (20−15)×90 = 450;價格差異 = (2000−20×90) + (2000−10×210) = 200 − 100 = 100;加工費差異 = 500 − 550 = −50;合計 500
+	expect(t, c.do(http.MethodPut, "/costing/standard-costs/"+itoa(raw1), map[string]any{"standard_cost": "90"}), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodPut, "/costing/standard-costs/"+itoa(raw2), map[string]any{"standard_cost": "210"}), http.StatusNoContent, "")
+	nb := bomBody(fg, "1", bl(raw1, "1.5"), bl(raw2, "1"))
+	nb["effective_from"] = "2026-09-30"
+	expect(t, c.do(http.MethodPost, "/production/boms", nb), http.StatusCreated, "")
+	type bdRow struct {
+		Breakdown *struct {
+			QtyVariance        string `json:"qty_variance"`
+			PriceVariance      string `json:"price_variance"`
+			ProcessingVariance string `json:"processing_variance"`
+			StandardProcessing string `json:"standard_processing"`
+			ActualProcessing   string `json:"actual_processing"`
+			Materials          []struct {
+				MaterialID    int64   `json:"material_id"`
+				StandardQty   string  `json:"standard_qty"`
+				ActualQty     string  `json:"actual_qty"`
+				StandardPrice *string `json:"standard_price"`
+				ActualPrice   *string `json:"actual_price"`
+				QtyVariance   string  `json:"qty_variance"`
+				PriceVariance string  `json:"price_variance"`
+			} `json:"materials"`
+		} `json:"breakdown"`
+	}
+	bdRes := decode[struct {
+		Rows []bdRow `json:"rows"`
+	}](t, c.do(http.MethodGet, "/costing/variance?period=2026-09", nil).Data)
+	bd := bdRes.Rows[0].Breakdown
+	if bd == nil || bd.QtyVariance != "450" || bd.PriceVariance != "100" || bd.ProcessingVariance != "-50" || bd.StandardProcessing != "550" || bd.ActualProcessing != "500" || len(bd.Materials) != 2 {
+		t.Fatalf("差異拆解 = %+v", bd)
+	}
+	for _, m := range bd.Materials {
+		switch m.MaterialID {
+		case raw1:
+			if m.StandardQty != "15" || m.ActualQty != "20" || *m.StandardPrice != "90" || *m.ActualPrice != "100" || m.QtyVariance != "450" || m.PriceVariance != "200" {
+				t.Fatalf("RAW1 拆解 = %+v", m)
+			}
+		case raw2:
+			if m.StandardQty != "10" || m.ActualQty != "10" || m.QtyVariance != "0" || m.PriceVariance != "-100" {
+				t.Fatalf("RAW2 拆解 = %+v", m)
+			}
+		}
+	}
+	expect(t, c.do(http.MethodPut, "/costing/standard-costs/"+itoa(raw1), map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
+	expect(t, c.do(http.MethodPut, "/costing/standard-costs/"+itoa(raw2), map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
 	expect(t, c.do(http.MethodPut, stdPath, map[string]any{"standard_cost": nil}), http.StatusNoContent, "")
 	if v := variance("2026-09"); v[0].Status != "no_standard" {
 		t.Fatalf("清除後 = %+v", v)

@@ -98,15 +98,16 @@ type ApprovalDelegation struct {
 }
 
 type ApprovalRule struct {
-	ID        int64
-	CompanyID int64
-	DocType   string
-	MinAmount decimal.Decimal
-	CreatedBy *int64
-	UpdatedBy *int64
-	Version   int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           int64
+	CompanyID    int64
+	DocType      string
+	MinAmount    decimal.Decimal
+	CreatedBy    *int64
+	UpdatedBy    *int64
+	Version      int32
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DepartmentID *int64
 }
 
 type ApprovalRuleStep struct {

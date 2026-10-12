@@ -729,6 +729,40 @@ func (q *Queries) StandardCostVariance(ctx context.Context, arg StandardCostVari
 	return items, nil
 }
 
+const standardCostsOf = `-- name: StandardCostsOf :many
+SELECT item_id, standard_cost FROM item_standard_costs WHERE company_id = $1 AND item_id = ANY($2::bigint[])
+`
+
+type StandardCostsOfParams struct {
+	CompanyID int64
+	ItemIds   []int64
+}
+
+type StandardCostsOfRow struct {
+	ItemID       int64
+	StandardCost decimal.Decimal
+}
+
+func (q *Queries) StandardCostsOf(ctx context.Context, arg StandardCostsOfParams) ([]StandardCostsOfRow, error) {
+	rows, err := q.db.Query(ctx, standardCostsOf, arg.CompanyID, arg.ItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []StandardCostsOfRow{}
+	for rows.Next() {
+		var i StandardCostsOfRow
+		if err := rows.Scan(&i.ItemID, &i.StandardCost); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const unbalancedVouchers = `-- name: UnbalancedVouchers :one
 SELECT count(*) FROM (
     SELECT v.id FROM vouchers v JOIN voucher_lines l ON l.voucher_id = v.id
@@ -807,6 +841,146 @@ func (q *Queries) UpsertStandardCost(ctx context.Context, arg UpsertStandardCost
 		arg.ActorID,
 	)
 	return err
+}
+
+const varianceActualMaterials = `-- name: VarianceActualMaterials :many
+SELECT x.output_item_id, x.material_id, mi.code AS material_code, mi.name AS material_name, u.name AS unit_name,
+       (-SUM(x.qty))::numeric AS qty,
+       COALESCE(-SUM(x.qty * x.unit_cost) FILTER (WHERE x.unit_cost IS NOT NULL), 0)::numeric AS amount,
+       COALESCE(-SUM(x.qty) FILTER (WHERE x.unit_cost IS NULL), 0)::numeric AS uncosted_qty
+FROM (
+    SELECT w.item_id AS output_item_id, t.item_id AS material_id, t.qty, t.unit_cost
+    FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
+    WHERE t.company_id = $1 AND t.source_type = 'work_order_issue'
+      AND t.doc_date BETWEEN $2::date AND $3::date
+  UNION ALL
+    SELECT w.item_id, t.item_id, t.qty, t.unit_cost
+    FROM inventory_transactions t
+    JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
+    WHERE t.company_id = $1 AND t.source_type = 'wo_completion_issue'
+      AND t.doc_date BETWEEN $2::date AND $3::date
+) x
+JOIN items mi ON mi.id = x.material_id JOIN units u ON u.id = mi.base_unit_id
+WHERE x.output_item_id = ANY($4::bigint[])
+GROUP BY x.output_item_id, x.material_id, mi.code, mi.name, u.name
+HAVING SUM(x.qty) <> 0
+ORDER BY x.output_item_id, mi.code
+`
+
+type VarianceActualMaterialsParams struct {
+	CompanyID int64
+	StartDate time.Time
+	EndDate   time.Time
+	ItemIds   []int64
+}
+
+type VarianceActualMaterialsRow struct {
+	OutputItemID int64
+	MaterialID   int64
+	MaterialCode string
+	MaterialName string
+	UnitName     string
+	Qty          decimal.Decimal
+	Amount       decimal.Decimal
+	UncostedQty  decimal.Decimal
+}
+
+// 期間內工單實際領用的材料(含沖銷,淨額):數量(正數)與金額(月結寫回的材料平均成本 × 數量)
+func (q *Queries) VarianceActualMaterials(ctx context.Context, arg VarianceActualMaterialsParams) ([]VarianceActualMaterialsRow, error) {
+	rows, err := q.db.Query(ctx, varianceActualMaterials,
+		arg.CompanyID,
+		arg.StartDate,
+		arg.EndDate,
+		arg.ItemIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VarianceActualMaterialsRow{}
+	for rows.Next() {
+		var i VarianceActualMaterialsRow
+		if err := rows.Scan(
+			&i.OutputItemID,
+			&i.MaterialID,
+			&i.MaterialCode,
+			&i.MaterialName,
+			&i.UnitName,
+			&i.Qty,
+			&i.Amount,
+			&i.UncostedQty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const varianceBomLines = `-- name: VarianceBomLines :many
+
+SELECT b.item_id AS output_item_id, b.yield_qty, l.item_id AS material_id, l.qty, l.scrap_pct,
+       mi.code AS material_code, mi.name AS material_name, u.name AS unit_name
+FROM boms b
+JOIN bom_lines l ON l.bom_id = b.id
+JOIN items mi ON mi.id = l.item_id JOIN units u ON u.id = mi.base_unit_id
+WHERE b.company_id = $1 AND b.item_id = ANY($2::bigint[]) AND b.is_active
+  AND b.effective_from = (
+      SELECT max(b2.effective_from) FROM boms b2
+      WHERE b2.company_id = b.company_id AND b2.item_id = b.item_id AND b2.is_active
+        AND b2.effective_from <= $3::date)
+ORDER BY b.item_id, l.line_no
+`
+
+type VarianceBomLinesParams struct {
+	CompanyID int64
+	ItemIds   []int64
+	EndDate   time.Time
+}
+
+type VarianceBomLinesRow struct {
+	OutputItemID int64
+	YieldQty     decimal.Decimal
+	MaterialID   int64
+	Qty          decimal.Decimal
+	ScrapPct     decimal.Decimal
+	MaterialCode string
+	MaterialName string
+	UnitName     string
+}
+
+// ======== 成本差異拆解(D97) ========
+// 各成品在期間結束日適用的 BOM(已生效且啟用中、生效日最晚的一份)的材料明細,用來算標準用量
+func (q *Queries) VarianceBomLines(ctx context.Context, arg VarianceBomLinesParams) ([]VarianceBomLinesRow, error) {
+	rows, err := q.db.Query(ctx, varianceBomLines, arg.CompanyID, arg.ItemIds, arg.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VarianceBomLinesRow{}
+	for rows.Next() {
+		var i VarianceBomLinesRow
+		if err := rows.Scan(
+			&i.OutputItemID,
+			&i.YieldQty,
+			&i.MaterialID,
+			&i.Qty,
+			&i.ScrapPct,
+			&i.MaterialCode,
+			&i.MaterialName,
+			&i.UnitName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const writebackUnitCost = `-- name: WritebackUnitCost :exec

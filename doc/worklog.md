@@ -15,6 +15,18 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 成本差異拆解(D97)
+
+- `queries/costing.sql` 新增 `VarianceBomLines`、`VarianceActualMaterials`、`StandardCostsOf`;`internal/costing/variance.go` 計算用量 / 價格 / 加工費差異(加工費為殘差,三者恆等於總差異);`GET /costing/variance` 每列多一個 `breakdown`。
+- 前端「成本差異」加三欄與可展開的材料明細。
+- 測試:延伸成本月結情境(材料標準價 90 / 210、9/30 起新 BOM 用量 1.5):用量差異 450、價格差異 100、加工費差異 −50,合計 500。
+
+## 2026-10-12 簽核依部門分流(D96)
+
+- migration 000038:`approval_rules.department_id`,唯一鍵含部門(`NULLS NOT DISTINCT`)。`MatchApprovalRule` 以遞迴查出送審者的部門鏈,部門規則(近者優先)先於全公司規則。
+- API 規則輸入 / 回傳加 `department_id`、`department_name`;前端規則維護加「適用部門」欄與選單。
+- 測試 `TestApprovalRuleByDepartment`:上層部門規則涵蓋下層、其他部門走全公司規則、部門規則優先、重複與不存在的部門驗證。
+
 ## 2026-10-12 簽核會簽 / 或簽(D95)
 
 - 設計見 `doc/design-countersign.md`(已依確認的三項建議實作)與 `doc/plan.md` D95。

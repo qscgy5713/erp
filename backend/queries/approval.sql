@@ -1,7 +1,9 @@
 -- ======== 多層簽核(D61) ========
 
 -- name: ListApprovalRules :many
-SELECT * FROM approval_rules WHERE company_id = @company_id ORDER BY doc_type, min_amount;
+SELECT r.*, COALESCE(d.name, '')::text AS department_name
+FROM approval_rules r LEFT JOIN departments d ON d.id = r.department_id
+WHERE r.company_id = @company_id ORDER BY r.doc_type, d.code NULLS FIRST, r.min_amount;
 
 -- name: ListApprovalRuleSteps :many
 SELECT s.rule_id, s.step_no, s.mode, s.role_id, r.name AS role_name
@@ -13,11 +15,11 @@ WHERE ar.company_id = @company_id ORDER BY s.rule_id, s.step_no, s.role_id;
 SELECT * FROM approval_rules WHERE id = @id AND company_id = @company_id;
 
 -- name: CreateApprovalRule :one
-INSERT INTO approval_rules (company_id, doc_type, min_amount, created_by, updated_by)
-VALUES (@company_id, @doc_type, @min_amount, @actor_id, @actor_id) RETURNING *;
+INSERT INTO approval_rules (company_id, doc_type, department_id, min_amount, created_by, updated_by)
+VALUES (@company_id, @doc_type, sqlc.narg(department_id), @min_amount, @actor_id, @actor_id) RETURNING *;
 
 -- name: UpdateApprovalRule :one
-UPDATE approval_rules SET doc_type = @doc_type, min_amount = @min_amount, updated_by = @actor_id, version = version + 1
+UPDATE approval_rules SET doc_type = @doc_type, department_id = sqlc.narg(department_id), min_amount = @min_amount, updated_by = @actor_id, version = version + 1
 WHERE id = @id AND company_id = @company_id AND version = @version RETURNING *;
 
 -- name: DeleteApprovalRule :execrows
@@ -30,10 +32,16 @@ DELETE FROM approval_rule_steps WHERE rule_id = @rule_id;
 INSERT INTO approval_rule_steps (rule_id, step_no, mode, role_id) VALUES (@rule_id, @step_no, @mode, @role_id);
 
 -- name: MatchApprovalRule :one
--- 同類型中 min_amount 最大且不超過單據金額的規則
-SELECT id FROM approval_rules
-WHERE company_id = @company_id AND doc_type = @doc_type AND min_amount <= @amount::numeric
-ORDER BY min_amount DESC LIMIT 1;
+-- 適用規則:先看送審者的部門與其上層部門(越近越優先),沒有適用的再看全公司規則;同一層級取 min_amount 最大且不超過單據金額者
+WITH RECURSIVE chain (dept_id, depth) AS (
+    SELECT dp.id, 0 FROM departments dp WHERE dp.id = sqlc.narg(department_id)::bigint
+  UNION ALL
+    SELECT dp.parent_id, chain.depth + 1 FROM departments dp JOIN chain ON dp.id = chain.dept_id WHERE dp.parent_id IS NOT NULL
+)
+SELECT r.id FROM approval_rules r LEFT JOIN chain c ON c.dept_id = r.department_id
+WHERE r.company_id = @company_id AND r.doc_type = @doc_type AND r.min_amount <= @amount::numeric
+  AND (r.department_id IS NULL OR c.dept_id IS NOT NULL)
+ORDER BY (r.department_id IS NULL), c.depth NULLS LAST, r.min_amount DESC LIMIT 1;
 
 -- name: RoleCountInApprovalRules :one
 SELECT count(*) FROM approval_rule_steps WHERE role_id = @role_id;
@@ -194,3 +202,6 @@ SELECT EXISTS (SELECT 1 FROM users WHERE id = @id AND company_id = @company_id A
 -- 角色目前有幾位啟用中的使用者(排除指定使用者);會簽時用來優先填「別人較難填」的簽核格
 SELECT count(*) FROM user_roles ur JOIN users u ON u.id = ur.user_id AND u.is_active
 WHERE ur.role_id = @role_id AND ur.user_id <> @except_user_id;
+
+-- name: DepartmentExists :one
+SELECT EXISTS (SELECT 1 FROM departments WHERE id = @id AND company_id = @company_id);

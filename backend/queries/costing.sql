@@ -191,3 +191,46 @@ WHERE t.company_id = @company_id AND t.source_type IN ('work_order_receipt', 'wo
 GROUP BY t.item_id, i.code, i.name, u.name, sc.standard_cost
 HAVING SUM(t.qty) <> 0
 ORDER BY i.code;
+
+-- ======== 成本差異拆解(D97) ========
+
+-- name: VarianceBomLines :many
+-- 各成品在期間結束日適用的 BOM(已生效且啟用中、生效日最晚的一份)的材料明細,用來算標準用量
+SELECT b.item_id AS output_item_id, b.yield_qty, l.item_id AS material_id, l.qty, l.scrap_pct,
+       mi.code AS material_code, mi.name AS material_name, u.name AS unit_name
+FROM boms b
+JOIN bom_lines l ON l.bom_id = b.id
+JOIN items mi ON mi.id = l.item_id JOIN units u ON u.id = mi.base_unit_id
+WHERE b.company_id = @company_id AND b.item_id = ANY(@item_ids::bigint[]) AND b.is_active
+  AND b.effective_from = (
+      SELECT max(b2.effective_from) FROM boms b2
+      WHERE b2.company_id = b.company_id AND b2.item_id = b.item_id AND b2.is_active
+        AND b2.effective_from <= sqlc.arg(end_date)::date)
+ORDER BY b.item_id, l.line_no;
+
+-- name: VarianceActualMaterials :many
+-- 期間內工單實際領用的材料(含沖銷,淨額):數量(正數)與金額(月結寫回的材料平均成本 × 數量)
+SELECT x.output_item_id, x.material_id, mi.code AS material_code, mi.name AS material_name, u.name AS unit_name,
+       (-SUM(x.qty))::numeric AS qty,
+       COALESCE(-SUM(x.qty * x.unit_cost) FILTER (WHERE x.unit_cost IS NOT NULL), 0)::numeric AS amount,
+       COALESCE(-SUM(x.qty) FILTER (WHERE x.unit_cost IS NULL), 0)::numeric AS uncosted_qty
+FROM (
+    SELECT w.item_id AS output_item_id, t.item_id AS material_id, t.qty, t.unit_cost
+    FROM inventory_transactions t JOIN work_orders w ON w.id = t.source_id
+    WHERE t.company_id = @company_id AND t.source_type = 'work_order_issue'
+      AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+  UNION ALL
+    SELECT w.item_id, t.item_id, t.qty, t.unit_cost
+    FROM inventory_transactions t
+    JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
+    WHERE t.company_id = @company_id AND t.source_type = 'wo_completion_issue'
+      AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+) x
+JOIN items mi ON mi.id = x.material_id JOIN units u ON u.id = mi.base_unit_id
+WHERE x.output_item_id = ANY(@item_ids::bigint[])
+GROUP BY x.output_item_id, x.material_id, mi.code, mi.name, u.name
+HAVING SUM(x.qty) <> 0
+ORDER BY x.output_item_id, mi.code;
+
+-- name: StandardCostsOf :many
+SELECT item_id, standard_cost FROM item_standard_costs WHERE company_id = @company_id AND item_id = ANY(@item_ids::bigint[]);

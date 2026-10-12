@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -374,5 +375,78 @@ func TestCountersignApproval(t *testing.T) {
 	expect(t, mk.actPur(orders, &r, "submit"), http.StatusOK, "")
 	if pr := mk.progress("purchase_order", r.ID); pr.Current != 1 || pr.Steps[1].Done {
 		t.Fatalf("重新送審後流程應重建,got %+v", pr)
+	}
+}
+
+// 簽核規則依送審者部門分流(D96):部門(含上層部門)規則優先,沒有適用再看全公司規則
+func TestApprovalRuleByDepartment(t *testing.T) {
+	p := newPurCtx(t)
+	e, root := p.e, p.c
+	ctx := context.Background()
+	perms := []string{permission.PurchaseOrderRead, permission.PurchaseOrderApprove}
+	maker := e.seedRole("maker", "all", permission.PurchaseOrderRead, permission.PurchaseOrderWrite)
+	cfo := e.seedRole("cfo", "all", perms...)
+	fin := e.seedRole("fin", "all", perms...)
+	var companyID, hq, sales, other int64
+	if err := e.pool.QueryRow(ctx, "SELECT id FROM companies LIMIT 1").Scan(&companyID); err != nil {
+		t.Fatal(err)
+	}
+	mkDept := func(code string, parent *int64) int64 {
+		var id int64
+		if err := e.pool.QueryRow(ctx, "INSERT INTO departments (company_id, parent_id, code, name) VALUES ($1, $2, $3, $3) RETURNING id",
+			companyID, parent, code).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	hq = mkDept("hq", nil)
+	sales = mkDept("sales", &hq)
+	other = mkDept("other", nil)
+	seed := func(name string, dept int64) *client {
+		u := e.seedUser(name, pw, false, false, maker.ID)
+		if _, err := e.pool.Exec(ctx, "UPDATE users SET department_id = $1 WHERE id = $2", dept, u.ID); err != nil {
+			t.Fatal(err)
+		}
+		return e.loggedIn(name, pw)
+	}
+	inSales, inOther := seed("m_sales", sales), seed("m_other", other)
+
+	rule := func(body map[string]any) apiResp { return root.do(http.MethodPost, "/approval/rules", body) }
+	// 全公司:≥10000 要 CFO;總公司(含業務部):不論金額都要財務
+	expect(t, rule(map[string]any{"doc_type": "purchase_order", "min_amount": "10000", "role_ids": []int64{cfo.ID}}), http.StatusCreated, "")
+	res := rule(map[string]any{"doc_type": "purchase_order", "min_amount": "0", "department_id": hq, "role_ids": []int64{fin.ID}})
+	expect(t, res, http.StatusCreated, "")
+	if got := decode[struct {
+		DepartmentName string `json:"department_name"`
+	}](t, res.Data); got.DepartmentName != "hq" {
+		t.Fatalf("規則回傳部門 = %q", got.DepartmentName)
+	}
+	expect(t, rule(map[string]any{"doc_type": "purchase_order", "min_amount": "0", "department_id": hq, "role_ids": []int64{cfo.ID}}), http.StatusConflict, "APR-010")
+	expect(t, rule(map[string]any{"doc_type": "purchase_order", "min_amount": "0", "department_id": 99999, "role_ids": []int64{cfo.ID}}), http.StatusUnprocessableEntity, "SYS-422")
+
+	orders := "/purchase/orders"
+	submit := func(c *client, qty string) purDoc {
+		d, res := c.createPur(orders, p.header(map[string]any{"lines": []map[string]any{line(p.item, p.box, qty, "1200", nil)}}))
+		expect(t, res, http.StatusCreated, "")
+		expect(t, c.actPur(orders, &d, "submit"), http.StatusOK, "")
+		return d
+	}
+	// 業務部是總公司的下層部門 → 套用總公司規則(財務),小額也要兩層
+	s := submit(inSales, "1")
+	if pr := inSales.progress("purchase_order", s.ID); pr.Required != 2 || pr.Steps[1].RoleName != "fin" {
+		t.Fatalf("業務部小額應套用總公司規則,got %+v", pr)
+	}
+	// 其他部門:只適用全公司規則,小額單層,大額 CFO
+	if pr := inOther.progress("purchase_order", submit(inOther, "1").ID); pr.Required != 0 {
+		t.Fatalf("其他部門小額應單層,got %+v", pr)
+	}
+	big := submit(inOther, "10")
+	if pr := inOther.progress("purchase_order", big.ID); pr.Required != 2 || pr.Steps[1].RoleName != "cfo" {
+		t.Fatalf("其他部門大額應套用全公司規則,got %+v", pr)
+	}
+	// 業務部大額:部門規則(min 0)優先於全公司規則(min 10000),仍是財務
+	sb := submit(inSales, "10")
+	if pr := inSales.progress("purchase_order", sb.ID); pr.Required != 2 || pr.Steps[1].RoleName != "fin" {
+		t.Fatalf("部門規則應優先,got %+v", pr)
 	}
 }
