@@ -57,6 +57,7 @@ describe('HomeView', () => {
         month_count: 9,
         scope_label: '全公司',
         daily: [{ date: '2026-10-08', amount: '2000' }],
+        top_customers: [{ id: 1, code: 'C1', name: '甲公司', amount: '8888' }],
       },
       pending: [
         {
@@ -84,6 +85,8 @@ describe('HomeView', () => {
     await flushPromises()
     const text = wrapper.text()
     expect(text).toContain('12,345')
+    expect(text).toContain('甲公司')
+    expect(text).toContain('8,888')
     expect(text).toContain('全公司')
     expect(text).toContain('3 筆待審')
     expect(text).toContain('P1 筆')

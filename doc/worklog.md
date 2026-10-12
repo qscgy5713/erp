@@ -1,5 +1,9 @@
 # 工作日誌
 
+## 2026-10-12 儀表板:本月前 5 大客戶
+- `GET /dashboard` 的 `sales` 新增 `top_customers`(本月淨銷售額 = 出貨 − 退回,未稅本位幣,>0 才列出,最多 5 名),沿用銷售卡片的資料範圍;`DashboardTopCustomers` 查詢。首頁銷售卡片下方顯示排名。
+- 測試:擴充 `dashboard_test.go`(全公司 2 名、業務只看到自己的客戶)。
+
 ## 2026-10-12 異動明細截斷提示
 - `GET /inventory/items/{id}/ledger` 回傳新增 `truncated`(筆數達 1000 上限時為 true),前端料品異動抽屜顯示「請縮小期間」警示。常數 `ledgerMaxRows` 須與 SQL 的 LIMIT 一致。
 

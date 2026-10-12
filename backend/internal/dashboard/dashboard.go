@@ -32,8 +32,16 @@ type salesCard struct {
 	TodayCount int64           `json:"today_count"`
 	Month      decimal.Decimal `json:"month"`
 	MonthCount int64           `json:"month_count"`
-	Daily      []dailyDTO      `json:"daily"` // 近 7 天
+	Daily      []dailyDTO      `json:"daily"`         // 近 7 天
+	Top        []topDTO        `json:"top_customers"` // 本月淨銷售前 5 名客戶
 	ScopeLabel string          `json:"scope_label"`
+}
+
+type topDTO struct {
+	ID     int64           `json:"id"`
+	Code   string          `json:"code"`
+	Name   string          `json:"name"`
+	Amount decimal.Decimal `json:"amount"`
 }
 
 type dailyDTO struct {
@@ -130,13 +138,22 @@ func (m *Module) get(c *gin.Context) {
 			d := from.AddDate(0, 0, i).Format(time.DateOnly)
 			daily[i] = dailyDTO{Date: d, Amount: byDay[d]}
 		}
+		topRows, err := q.DashboardTopCustomers(ctx, db.DashboardTopCustomersParams{CompanyID: a.CompanyID, FromDate: ms, ToDate: today, ScopeUserID: userID, ScopeDeptID: deptID})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		top := make([]topDTO, len(topRows))
+		for i, r := range topRows {
+			top[i] = topDTO{ID: r.CustomerID, Code: r.CustomerCode, Name: r.CustomerName, Amount: r.Amount}
+		}
 		scope := "全公司"
 		if userID != nil {
 			scope = "僅本人負責的客戶"
 		} else if deptID != nil {
 			scope = "本部門負責的客戶"
 		}
-		out["sales"] = salesCard{Today: td.Amount, TodayCount: td.DeliveryCount, Month: mo.Amount, MonthCount: mo.DeliveryCount, Daily: daily, ScopeLabel: scope}
+		out["sales"] = salesCard{Today: td.Amount, TodayCount: td.DeliveryCount, Month: mo.Amount, MonthCount: mo.DeliveryCount, Daily: daily, Top: top, ScopeLabel: scope}
 	}
 
 	// 待審:只列使用者有核准權限、且數量大於 0 的項目

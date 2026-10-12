@@ -400,3 +400,66 @@ func (q *Queries) DashboardSalesDaily(ctx context.Context, arg DashboardSalesDai
 	}
 	return items, nil
 }
+
+const dashboardTopCustomers = `-- name: DashboardTopCustomers :many
+SELECT c.id AS customer_id, c.code AS customer_code, c.name AS customer_name,
+       SUM(CASE WHEN d.doc_type = 'delivery' THEN d.base_untaxed ELSE -d.base_untaxed END)::numeric AS amount
+FROM deliveries d
+JOIN customers c ON c.id = d.customer_id
+LEFT JOIN users su ON su.id = d.sales_user_id
+WHERE d.company_id = $1 AND d.status = 'posted'
+  AND d.doc_date BETWEEN $2::date AND $3::date
+  AND ($4::bigint IS NULL OR d.sales_user_id = $4)
+  AND ($5::bigint IS NULL OR su.department_id = $5)
+GROUP BY c.id, c.code, c.name
+HAVING SUM(CASE WHEN d.doc_type = 'delivery' THEN d.base_untaxed ELSE -d.base_untaxed END) > 0
+ORDER BY amount DESC, c.code
+LIMIT 5
+`
+
+type DashboardTopCustomersParams struct {
+	CompanyID   int64
+	FromDate    time.Time
+	ToDate      time.Time
+	ScopeUserID *int64
+	ScopeDeptID *int64
+}
+
+type DashboardTopCustomersRow struct {
+	CustomerID   int64
+	CustomerCode string
+	CustomerName string
+	Amount       decimal.Decimal
+}
+
+// 期間內淨銷售額(出貨 − 退回,未稅本位幣)前 5 名客戶
+func (q *Queries) DashboardTopCustomers(ctx context.Context, arg DashboardTopCustomersParams) ([]DashboardTopCustomersRow, error) {
+	rows, err := q.db.Query(ctx, dashboardTopCustomers,
+		arg.CompanyID,
+		arg.FromDate,
+		arg.ToDate,
+		arg.ScopeUserID,
+		arg.ScopeDeptID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DashboardTopCustomersRow{}
+	for rows.Next() {
+		var i DashboardTopCustomersRow
+		if err := rows.Scan(
+			&i.CustomerID,
+			&i.CustomerCode,
+			&i.CustomerName,
+			&i.Amount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

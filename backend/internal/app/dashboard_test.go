@@ -16,6 +16,10 @@ type dashboardDTO struct {
 			Date   string `json:"date"`
 			Amount string `json:"amount"`
 		} `json:"daily"`
+		Top []struct {
+			Code   string `json:"code"`
+			Amount string `json:"amount"`
+		} `json:"top_customers"`
 	} `json:"sales"`
 	Pending []struct {
 		Key   string `json:"key"`
@@ -101,10 +105,17 @@ func TestDashboardCardsAndScope(t *testing.T) {
 	if len(d.Sales.Daily) != 7 || d.Sales.Daily[6].Date != todayStr || d.Sales.Daily[6].Amount != "2000" || d.Sales.Daily[0].Amount != "0" {
 		t.Fatalf("daily = %+v", d.Sales.Daily)
 	}
+	// 前幾大客戶:淨額 > 0 才列出(依金額、代號排序);本人範圍只看到自己的客戶
+	if len(d.Sales.Top) != 2 || d.Sales.Top[0].Amount != "1000" || d.Sales.Top[1].Amount != "1000" {
+		t.Fatalf("root top = %+v", d.Sales.Top)
+	}
 	// 本人範圍:只看自己客戶的 1000;沒有庫存 / 應付 / 月結權限的卡片不出現
 	ad := e.loggedIn("amy", pw).dashboard()
 	if ad.Sales == nil || ad.Sales.Today != "1000" || ad.Sales.TodayCount != 1 || ad.Sales.ScopeLabel != "僅本人負責的客戶" {
 		t.Fatalf("amy sales = %+v", ad.Sales)
+	}
+	if len(ad.Sales.Top) != 1 || ad.Sales.Top[0].Code != "C-AMY" {
+		t.Fatalf("amy top = %+v", ad.Sales.Top)
 	}
 	if ad.LowStock != nil || ad.Payable != nil || ad.Costing != nil || ad.Receivable == nil {
 		t.Fatalf("amy 卡片 = %+v", ad)

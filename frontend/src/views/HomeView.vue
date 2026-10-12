@@ -125,6 +125,13 @@ const go = (path: string) => router.push(path)
               <div class="d">{{ b.label }}</div>
             </div>
           </div>
+          <div v-if="data.sales.top_customers.length" class="top">
+            <div class="top-title">本月前 {{ data.sales.top_customers.length }} 大客戶</div>
+            <div v-for="(t, i) in data.sales.top_customers" :key="t.id" class="row">
+              <span>{{ i + 1 }}. {{ t.code }} {{ t.name }}</span>
+              <strong>{{ money(t.amount) }}</strong>
+            </div>
+          </div>
         </el-card>
       </el-col>
 
@@ -341,5 +348,13 @@ const go = (path: string) => router.push(path)
   margin-top: 4px;
   font-size: 11px;
   color: var(--el-text-color-secondary);
+}
+.top {
+  margin-top: 12px;
+}
+.top-title {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 </style>

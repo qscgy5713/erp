@@ -9,6 +9,7 @@ export interface Dashboard {
     month: Decimal
     month_count: number
     daily: { date: string; amount: Decimal }[]
+    top_customers: { id: number; code: string; name: string; amount: Decimal }[]
     scope_label: string
   }
   pending: { key: string; label: string; count: number; path: string }[]

@@ -24,6 +24,22 @@ WHERE d.company_id = @company_id AND d.status = 'posted'
 GROUP BY d.doc_date
 ORDER BY d.doc_date;
 
+-- name: DashboardTopCustomers :many
+-- 期間內淨銷售額(出貨 − 退回,未稅本位幣)前 5 名客戶
+SELECT c.id AS customer_id, c.code AS customer_code, c.name AS customer_name,
+       SUM(CASE WHEN d.doc_type = 'delivery' THEN d.base_untaxed ELSE -d.base_untaxed END)::numeric AS amount
+FROM deliveries d
+JOIN customers c ON c.id = d.customer_id
+LEFT JOIN users su ON su.id = d.sales_user_id
+WHERE d.company_id = @company_id AND d.status = 'posted'
+  AND d.doc_date BETWEEN sqlc.arg(from_date)::date AND sqlc.arg(to_date)::date
+  AND (sqlc.narg(scope_user_id)::bigint IS NULL OR d.sales_user_id = sqlc.narg(scope_user_id))
+  AND (sqlc.narg(scope_dept_id)::bigint IS NULL OR su.department_id = sqlc.narg(scope_dept_id))
+GROUP BY c.id, c.code, c.name
+HAVING SUM(CASE WHEN d.doc_type = 'delivery' THEN d.base_untaxed ELSE -d.base_untaxed END) > 0
+ORDER BY amount DESC, c.code
+LIMIT 5;
+
 -- name: DashboardPendingSales :one
 -- 待審的報價 / 訂單、出貨 / 退回、收款單(依資料範圍)
 SELECT
