@@ -37,6 +37,8 @@ watch(
 async function onCommand(cmd: string) {
   if (cmd === 'password') {
     router.push({ name: 'change-password' })
+  } else if (cmd === 'notifications') {
+    router.push({ name: 'account-notifications' })
   } else if (cmd === 'security') {
     router.push({ name: 'account-security' })
   } else if (cmd === 'logout') {
@@ -98,6 +100,7 @@ async function onCommand(cmd: string) {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="password">變更密碼</el-dropdown-item>
+              <el-dropdown-item command="notifications">通知設定</el-dropdown-item>
               <el-dropdown-item command="security">帳號安全(雙因素驗證)</el-dropdown-item>
               <el-dropdown-item command="logout" divided>登出</el-dropdown-item>
             </el-dropdown-menu>

@@ -48,6 +48,12 @@ const router = createRouter({
       meta: { title: '帳號安全' },
     },
     {
+      path: '/account/notifications',
+      name: 'account-notifications',
+      component: () => import('@/views/NotificationPrefsView.vue'),
+      meta: { title: '通知設定' },
+    },
+    {
       path: '/change-password',
       name: 'change-password',
       component: () => import('@/views/ChangePasswordView.vue'),

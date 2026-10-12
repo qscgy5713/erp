@@ -15,6 +15,13 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 通知訂閱開關與週報事件(D93)
+
+- migration 000035 `notification_prefs`;排信查詢排除已關閉者;`GET/PUT /notifications/prefs`;前端「通知設定」頁(帳號選單)。
+- 新增事件:低庫存、批號效期、逾期應收三種每週摘要(`Worker.Scan`);逾期應收只寄資料範圍為「全部」者。
+- 踩雷:`EnqueueNotifications` 的 `@event` 同時用於插入與比較時 Postgres 推斷型別衝突(SQLSTATE 42P08),兩處都明確轉成 `::varchar`。
+- 測試:`TestNotificationDigestsAndPrefs`(收件人、關閉、資料範圍、重複掃描、無逾期不寄)、`TestEnqueueRespectsPrefs`;路由稽核登記兩條新路由;瀏覽器驗證切換與重新載入後持久化。
+
 ## 2026-10-12 窄螢幕版面與 MRP 替代料提示
 
 - 窄螢幕:`AppLayout.vue` 在 <768px 改抽屜選單(☰),換頁自動收起;主內容全寬、對話框不超出螢幕。以 390px iframe 驗證。

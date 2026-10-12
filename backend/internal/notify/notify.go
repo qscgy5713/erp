@@ -124,6 +124,8 @@ type Worker struct {
 	Sender Sender
 	// CheckDueDays 票據在幾天內到期就通知
 	CheckDueDays int
+	// ExpiryDays 批號在幾天內到期就列入效期預警摘要(預設 30)
+	ExpiryDays int
 	// Tenants 多租戶(D92):回傳要處理的租戶代碼,逐一以該租戶的 context 執行;nil = 單租戶(context 不帶租戶)
 	Tenants func(ctx context.Context) ([]string, error)
 }
@@ -173,13 +175,27 @@ func (w *Worker) Flush(ctx context.Context) (int, error) {
 	return sent, nil
 }
 
-// Scan 產生定期通知(目前:票據到期)並清除舊紀錄。
+// Scan 產生定期通知(票據到期;低庫存、批號效期、逾期應收每週摘要)並清除舊紀錄。
 func (w *Worker) Scan(ctx context.Context) error {
 	days := w.CheckDueDays
 	if days <= 0 {
 		days = 3
 	}
 	if _, err := w.Q.EnqueueCheckDueNotifications(ctx, db.EnqueueCheckDueNotificationsParams{Days: int32(days), BaseUrl: Link("")}); err != nil {
+		return err
+	}
+	base := Link("")
+	if _, err := w.Q.EnqueueLowStockDigest(ctx, base); err != nil {
+		return err
+	}
+	expiry := w.ExpiryDays
+	if expiry <= 0 {
+		expiry = 30
+	}
+	if _, err := w.Q.EnqueueLotExpiryDigest(ctx, db.EnqueueLotExpiryDigestParams{Days: int32(expiry), BaseUrl: base}); err != nil {
+		return err
+	}
+	if _, err := w.Q.EnqueueArOverdueDigest(ctx, base); err != nil {
 		return err
 	}
 	_, err := w.Q.PurgeOldNotifications(ctx)

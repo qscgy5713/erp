@@ -134,6 +134,38 @@ func (q *Queries) ClaimNotifications(ctx context.Context, batch int32) ([]Notifi
 	return items, nil
 }
 
+const enqueueArOverdueDigest = `-- name: EnqueueArOverdueDigest :execrows
+WITH od AS (
+    SELECT r.company_id, count(*) AS n, SUM(b.bal)::numeric AS amount
+    FROM accounts_receivable r
+    CROSS JOIN LATERAL (SELECT (CASE WHEN r.amount = 0 THEN 0 ELSE r.base_amount * (r.amount - r.paid_amount) / r.amount END)::numeric AS bal) b
+    WHERE r.amount <> r.paid_amount AND r.due_date < CURRENT_DATE
+    GROUP BY r.company_id
+)
+INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
+SELECT o.company_id, u.id, u.email, 'ar_overdue', '逾期應收帳款:' || o.n || ' 筆',
+       '逾期未收 ' || o.n || ' 筆,未沖金額(本位幣)' || o.amount::numeric(18,0)::text || E'。\n\n' || $1::text || '/finance/receivables',
+       'ar_overdue:' || to_char(CURRENT_DATE, 'IYYY-"W"IW')
+FROM od o
+JOIN users u ON u.company_id = o.company_id AND u.is_active AND COALESCE(u.email, '') <> ''
+WHERE o.amount > 0
+  AND (u.is_superadmin OR EXISTS (
+        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id AND r.is_active AND r.data_scope = 'all'
+        JOIN role_permissions rp ON rp.role_id = r.id
+        WHERE ur.user_id = u.id AND rp.permission = 'finance.collection.post'))
+  AND NOT EXISTS (SELECT 1 FROM notification_prefs np WHERE np.user_id = u.id AND np.event = 'ar_overdue' AND NOT np.enabled)
+ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+`
+
+// 每週一封摘要:逾期未收的應收筆數與本位幣金額;只給具收款過帳權限且資料範圍為「全部」的人與超級管理員(範圍受限者看不到全公司金額)
+func (q *Queries) EnqueueArOverdueDigest(ctx context.Context, baseUrl string) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueArOverdueDigest, baseUrl)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const enqueueCheckDueNotifications = `-- name: EnqueueCheckDueNotifications :execrows
 INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
 SELECT k.company_id, u.id, u.email, 'check_due',
@@ -144,6 +176,7 @@ SELECT k.company_id, u.id, u.email, 'check_due',
 FROM checks k
 JOIN users u ON u.company_id = k.company_id AND u.is_active AND COALESCE(u.email, '') <> ''
 WHERE k.status = 'pending' AND k.due_date <= CURRENT_DATE + $2::int
+  AND NOT EXISTS (SELECT 1 FROM notification_prefs np WHERE np.user_id = u.id AND np.event = 'check_due' AND NOT np.enabled)
   AND (u.is_superadmin OR EXISTS (
         SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id AND r.is_active
         JOIN role_permissions rp ON rp.role_id = r.id
@@ -166,13 +199,92 @@ func (q *Queries) EnqueueCheckDueNotifications(ctx context.Context, arg EnqueueC
 	return result.RowsAffected(), nil
 }
 
+const enqueueLotExpiryDigest = `-- name: EnqueueLotExpiryDigest :execrows
+WITH lots AS (
+    SELECT b.company_id, l.lot_no, l.expiry_date, i.code, i.name, SUM(b.qty)::numeric AS qty,
+           row_number() OVER (PARTITION BY b.company_id ORDER BY l.expiry_date, i.code, l.lot_no) AS rn
+    FROM inventory_lot_balances b
+    JOIN item_lots l ON l.id = b.lot_id
+    JOIN items i ON i.id = b.item_id
+    WHERE b.qty > 0 AND l.expiry_date IS NOT NULL AND l.expiry_date <= CURRENT_DATE + $2::int
+    GROUP BY b.company_id, l.id, i.code, i.name
+), agg AS (
+    SELECT company_id, count(*) AS n,
+           string_agg(code || ' ' || name || ' 批號 ' || lot_no || ',數量 ' || trim_scale(qty)::text || ',效期 ' || to_char(expiry_date, 'YYYY-MM-DD')
+                      || CASE WHEN expiry_date < CURRENT_DATE THEN '(已過期)' ELSE '' END, E'\n' ORDER BY rn) FILTER (WHERE rn <= 10) AS lines
+    FROM lots GROUP BY company_id
+)
+INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
+SELECT a.company_id, u.id, u.email, 'lot_expiry', '批號效期預警:' || a.n || ' 個批號',
+       a.lines || CASE WHEN a.n > 10 THEN E'\n…等共 ' || a.n || ' 個批號' ELSE '' END || E'\n\n' || $1::text || '/inventory/lots',
+       'lot_expiry:' || to_char(CURRENT_DATE, 'IYYY-"W"IW')
+FROM agg a
+JOIN users u ON u.company_id = a.company_id AND u.is_active AND COALESCE(u.email, '') <> ''
+WHERE (u.is_superadmin OR EXISTS (
+        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id AND r.is_active
+        JOIN role_permissions rp ON rp.role_id = r.id
+        WHERE ur.user_id = u.id AND rp.permission = 'inventory.stock.read'))
+  AND NOT EXISTS (SELECT 1 FROM notification_prefs np WHERE np.user_id = u.id AND np.event = 'lot_expiry' AND NOT np.enabled)
+ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+`
+
+type EnqueueLotExpiryDigestParams struct {
+	BaseUrl string
+	Days    int32
+}
+
+// 每週一封摘要:有庫存的批號已過期或 @days 天內到期;給具庫存檢視權限的人與超級管理員
+func (q *Queries) EnqueueLotExpiryDigest(ctx context.Context, arg EnqueueLotExpiryDigestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueLotExpiryDigest, arg.BaseUrl, arg.Days)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const enqueueLowStockDigest = `-- name: EnqueueLowStockDigest :execrows
+WITH low AS (
+    SELECT i.company_id, i.code, i.name, t.total, i.safety_stock,
+           row_number() OVER (PARTITION BY i.company_id ORDER BY (i.safety_stock - t.total) DESC, i.code) AS rn
+    FROM items i
+    JOIN LATERAL (SELECT COALESCE(SUM(b.qty), 0)::numeric AS total FROM inventory_balances b WHERE b.item_id = i.id) t ON TRUE
+    WHERE i.is_active AND i.item_type = 'goods' AND i.safety_stock > 0 AND t.total < i.safety_stock
+), agg AS (
+    SELECT company_id, count(*) AS n,
+           string_agg(code || ' ' || name || ':現有 ' || trim_scale(total)::text || ' / 安全庫存 ' || trim_scale(safety_stock)::text, E'\n' ORDER BY rn) FILTER (WHERE rn <= 10) AS lines
+    FROM low GROUP BY company_id
+)
+INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
+SELECT a.company_id, u.id, u.email, 'low_stock', '低於安全庫存:' || a.n || ' 項料品',
+       a.lines || CASE WHEN a.n > 10 THEN E'\n…等共 ' || a.n || ' 項' ELSE '' END || E'\n\n' || $1::text || '/inventory/stock',
+       'low_stock:' || to_char(CURRENT_DATE, 'IYYY-"W"IW')
+FROM agg a
+JOIN users u ON u.company_id = a.company_id AND u.is_active AND COALESCE(u.email, '') <> ''
+WHERE (u.is_superadmin OR EXISTS (
+        SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id AND r.is_active
+        JOIN role_permissions rp ON rp.role_id = r.id
+        WHERE ur.user_id = u.id AND rp.permission = 'inventory.stock.read'))
+  AND NOT EXISTS (SELECT 1 FROM notification_prefs np WHERE np.user_id = u.id AND np.event = 'low_stock' AND NOT np.enabled)
+ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+`
+
+// 每週一封摘要:低於安全庫存(所有倉庫合計)的料品數與缺口最大的 10 項;給具庫存檢視權限的人與超級管理員
+func (q *Queries) EnqueueLowStockDigest(ctx context.Context, baseUrl string) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueLowStockDigest, baseUrl)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const enqueueNotifications = `-- name: EnqueueNotifications :execrows
 
 INSERT INTO notifications (company_id, user_id, to_email, event, subject, body, dedupe_key)
-SELECT u.company_id, u.id, u.email, $1, $2, $3, $4
+SELECT u.company_id, u.id, u.email, $1::varchar, $2, $3, $4
 FROM users u
 WHERE u.company_id = $5 AND u.id = ANY($6::bigint[]) AND u.is_active
   AND COALESCE(u.email, '') <> ''
+  AND NOT EXISTS (SELECT 1 FROM notification_prefs np WHERE np.user_id = u.id AND np.event = $1::varchar AND NOT np.enabled)
 ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
 `
 
@@ -200,6 +312,35 @@ func (q *Queries) EnqueueNotifications(ctx context.Context, arg EnqueueNotificat
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listNotificationPrefs = `-- name: ListNotificationPrefs :many
+SELECT event, enabled FROM notification_prefs WHERE user_id = $1
+`
+
+type ListNotificationPrefsRow struct {
+	Event   string
+	Enabled bool
+}
+
+func (q *Queries) ListNotificationPrefs(ctx context.Context, userID int64) ([]ListNotificationPrefsRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationPrefs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNotificationPrefsRow{}
+	for rows.Next() {
+		var i ListNotificationPrefsRow
+		if err := rows.Scan(&i.Event, &i.Enabled); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markNotificationFailed = `-- name: MarkNotificationFailed :exec
@@ -238,4 +379,20 @@ func (q *Queries) PurgeOldNotifications(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertNotificationPref = `-- name: UpsertNotificationPref :exec
+INSERT INTO notification_prefs (user_id, event, enabled) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, event) DO UPDATE SET enabled = EXCLUDED.enabled
+`
+
+type UpsertNotificationPrefParams struct {
+	UserID  int64
+	Event   string
+	Enabled bool
+}
+
+func (q *Queries) UpsertNotificationPref(ctx context.Context, arg UpsertNotificationPrefParams) error {
+	_, err := q.db.Exec(ctx, upsertNotificationPref, arg.UserID, arg.Event, arg.Enabled)
+	return err
 }

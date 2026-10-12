@@ -607,6 +607,12 @@ type Notification struct {
 	SentAt        *time.Time
 }
 
+type NotificationPref struct {
+	UserID  int64
+	Event   string
+	Enabled bool
+}
+
 type PaymentTerm struct {
 	ID         int64
 	CompanyID  int64

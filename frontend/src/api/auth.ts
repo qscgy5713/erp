@@ -39,6 +39,13 @@ export interface TwoFactorSetup {
   otpauth_uri: string
 }
 
+export interface NotificationPref {
+  event: string
+  label: string
+  desc: string
+  enabled: boolean
+}
+
 export const authApi = {
   /** 登入頁需要的公開設定:多租戶時要顯示「公司代碼」欄位 */
   config: () => http.get<{ multi_tenant: boolean }>('/auth/config'),
@@ -57,6 +64,10 @@ export const authApi = {
   refresh: () => http.post<Session>('/auth/refresh'),
   logout: () => http.post<void>('/auth/logout'),
   me: () => http.get<Me>('/auth/me'),
+  notificationPrefs: () => http.get<NotificationPref[]>('/notifications/prefs'),
+  updateNotificationPrefs: (prefs: Record<string, boolean>) =>
+    http.put<NotificationPref[]>('/notifications/prefs', { prefs }),
+  testNotification: () => http.post<{ to: string }>('/notifications/test'),
   changePassword: (old_password: string, new_password: string) =>
     http.post<Session>('/auth/change-password', { old_password, new_password }),
 }

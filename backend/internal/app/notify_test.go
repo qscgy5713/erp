@@ -151,3 +151,119 @@ func TestCheckDueNotifications(t *testing.T) {
 		t.Fatal("重複掃描不應重複通知")
 	}
 }
+
+// TestNotificationDigestsAndPrefs 低庫存 / 批號效期 / 逾期應收週報:只寄給有權限的人、每週一封、
+// 可由個人關閉;逾期應收不寄給資料範圍受限者;訂閱設定 API 只改自己的。
+func TestNotificationDigestsAndPrefs(t *testing.T) {
+	e := newEnv(t)
+	enableNotify(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := e.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wh, item := e.seedWarehouse("A", false), e.seedItem("P1", "goods")
+	cust := e.seedCustomer("C1", "0", nil)
+	exec(`UPDATE items SET safety_stock = 10 WHERE id = $1`, item) // 沒有庫存 → 低於安全庫存
+	var lot int64
+	if err := e.pool.QueryRow(ctx, `INSERT INTO item_lots (company_id, item_id, lot_no, expiry_date) VALUES (1, $1, 'L1', CURRENT_DATE + 5) RETURNING id`, item).Scan(&lot); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO inventory_lot_balances (company_id, item_id, warehouse_id, lot_id, qty) VALUES (1, $1, $2, $3, 3)`, item, wh, lot)
+	exec(`INSERT INTO accounts_receivable (company_id, customer_id, source_type, source_id, source_no, doc_date, due_date, currency, exchange_rate, amount, base_amount)
+		VALUES (1, $1, 'delivery', 1, 'D1', CURRENT_DATE - 40, CURRENT_DATE - 10, 'TWD', 1, 500, 500)`, cust)
+
+	stockRole := e.seedRole("stock", "all", permission.InventoryRead)
+	arAll := e.seedRole("arall", "all", permission.CollectionPost)
+	arSelf := e.seedRole("arself", "self", permission.CollectionPost)
+	e.seedUser("root", pw, true, false)
+	e.seedUser("stocker", pw, false, false, stockRole.ID)
+	e.seedUser("quiet", pw, false, false, stockRole.ID)
+	e.seedUser("arall", pw, false, false, arAll.ID)
+	e.seedUser("arself", pw, false, false, arSelf.ID)
+	e.seedUser("nobody", pw, false, false)
+	exec(`UPDATE users SET email = username || '@x.test'`)
+
+	quiet := e.loggedIn("quiet", pw)
+	expect(t, quiet.do(http.MethodPut, "/notifications/prefs", map[string]any{"prefs": map[string]bool{"low_stock": false}}), http.StatusOK, "")
+	expect(t, quiet.do(http.MethodPut, "/notifications/prefs", map[string]any{"prefs": map[string]bool{"nope": false}}), http.StatusUnprocessableEntity, "SYS-422")
+	prefs := decode[[]struct {
+		Event   string `json:"event"`
+		Enabled bool   `json:"enabled"`
+	}](t, quiet.do(http.MethodGet, "/notifications/prefs", nil).Data)
+	off := map[string]bool{}
+	for _, p := range prefs {
+		off[p.Event] = !p.Enabled
+	}
+	if len(prefs) != len(notify.Events) || !off["low_stock"] || off["lot_expiry"] {
+		t.Fatalf("prefs = %+v", prefs)
+	}
+
+	w := &notify.Worker{Q: e.q, Sender: &fakeSender{}}
+	for i := 0; i < 2; i++ { // 重複掃描不重複寄
+		if err := w.Scan(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := func(event string) string {
+		rows, err := e.pool.Query(ctx, `SELECT string_agg(u.username, ',' ORDER BY u.username) FROM notifications n JOIN users u ON u.id = n.user_id WHERE n.event = $1`, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var s *string
+		for rows.Next() {
+			_ = rows.Scan(&s)
+		}
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
+	if g := got("low_stock"); g != "root,stocker" { // quiet 已關閉、其餘沒庫存權限
+		t.Fatalf("low_stock 收件人 = %q", g)
+	}
+	if g := got("lot_expiry"); g != "quiet,root,stocker" {
+		t.Fatalf("lot_expiry 收件人 = %q", g)
+	}
+	if g := got("ar_overdue"); g != "arall,root" { // arself 資料範圍受限不寄
+		t.Fatalf("ar_overdue 收件人 = %q", g)
+	}
+	// 已過期天數內沒有逾期時不寄:沖平帳款後新的一週不會有逾期可報
+	exec(`UPDATE accounts_receivable SET paid_amount = amount`)
+	exec(`DELETE FROM notifications WHERE event = 'ar_overdue'`)
+	if err := w.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got("ar_overdue") != "" {
+		t.Fatal("沒有逾期應收不該寄")
+	}
+}
+
+// TestEnqueueRespectsPrefs 關閉某事件的人不會被排入該事件的信,其他事件與其他人不受影響。
+func TestEnqueueRespectsPrefs(t *testing.T) {
+	e := newEnv(t)
+	enableNotify(t)
+	ctx := context.Background()
+	a := e.seedUser("user_a", pw, false, false)
+	b := e.seedUser("user_b", pw, false, false)
+	if _, err := e.pool.Exec(ctx, `UPDATE users SET email = username || '@x.test'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `INSERT INTO notification_prefs (user_id, event, enabled) VALUES ($1, 'approval_pending', false)`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []string{"approval_pending", "check_due"} {
+		if err := notify.Enqueue(ctx, e.q, 1, []int64{a.ID, b.ID}, ev, "s", "b", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.countNotif(`user_id = $1 AND event = 'approval_pending'`, a.ID); n != 0 {
+		t.Fatalf("已關閉的人仍收到 %d 封", n)
+	}
+	if e.countNotif(`user_id = $1 AND event = 'approval_pending'`, b.ID) != 1 || e.countNotif(`user_id = $1 AND event = 'check_due'`, a.ID) != 1 {
+		t.Fatal("其他人 / 其他事件不該受影響")
+	}
+}
