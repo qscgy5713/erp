@@ -17,13 +17,24 @@ import (
 
 // 專案(D80):傳票明細的輔助核算維度,用於專案別損益。
 
+type projectDTO struct {
+	ID       int64  `json:"id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"is_active"`
+}
+
 func (m *Module) listProjects(c *gin.Context) {
 	rows, err := m.store.ListProjects(c.Request.Context(), actor(c).CompanyID)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, rows)
+	out := make([]projectDTO, len(rows))
+	for i, r := range rows {
+		out[i] = projectDTO{r.ID, r.Code, r.Name, r.IsActive}
+	}
+	response.OK(c, out)
 }
 
 type projectInput struct {
@@ -58,7 +69,7 @@ func (m *Module) createProject(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.Created(c, out)
+	response.Created(c, projectDTO{out.ID, out.Code, out.Name, out.IsActive})
 }
 
 func (m *Module) updateProject(c *gin.Context) {
@@ -72,15 +83,11 @@ func (m *Module) updateProject(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	active := true
-	if in.IsActive != nil {
-		active = *in.IsActive
-	}
 	var out db.UpdateProjectRow
 	err = m.store.InTx(c.Request.Context(), func(q *db.Queries) error {
 		ctx := c.Request.Context()
 		var err error
-		out, err = q.UpdateProject(ctx, db.UpdateProjectParams{ID: id, CompanyID: actor(c).CompanyID, Name: strings.TrimSpace(in.Name), IsActive: active})
+		out, err = q.UpdateProject(ctx, db.UpdateProjectParams{ID: id, CompanyID: actor(c).CompanyID, Name: strings.TrimSpace(in.Name), IsActive: in.IsActive})
 		if database.IsNoRows(err) {
 			return apperr.ErrNotFound
 		}
@@ -93,7 +100,7 @@ func (m *Module) updateProject(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, out)
+	response.OK(c, projectDTO{out.ID, out.Code, out.Name, out.IsActive})
 }
 
 // projectPnl GET /gl/reports/project-pnl?from=&to= 專案別損益(同部門別損益,維度換成專案)。

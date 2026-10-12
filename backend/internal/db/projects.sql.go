@@ -139,14 +139,14 @@ func (q *Queries) ProjectPnl(ctx context.Context, arg ProjectPnlParams) ([]Proje
 }
 
 const updateProject = `-- name: UpdateProject :one
-UPDATE projects SET name = $1, is_active = $2
+UPDATE projects SET name = $1, is_active = COALESCE($2, is_active)
 WHERE id = $3 AND company_id = $4
 RETURNING id, code, name, is_active
 `
 
 type UpdateProjectParams struct {
 	Name      string
-	IsActive  bool
+	IsActive  *bool
 	ID        int64
 	CompanyID int64
 }

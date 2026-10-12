@@ -6,7 +6,7 @@ INSERT INTO projects (company_id, code, name, created_by) VALUES (@company_id, @
 RETURNING id, code, name, is_active;
 
 -- name: UpdateProject :one
-UPDATE projects SET name = @name, is_active = @is_active
+UPDATE projects SET name = @name, is_active = COALESCE(sqlc.narg(is_active), is_active)
 WHERE id = @id AND company_id = @company_id
 RETURNING id, code, name, is_active;
 

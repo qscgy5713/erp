@@ -1034,14 +1034,6 @@ autoClear(form)
           </el-col>
           <el-col :xs="24" :sm="12" :md="6">
             <el-form-item label="稅別" :error="fieldErrors.tax_type_id">
-              <template #label
-                >稅別
-                <el-tooltip content="勾選後單價欄以含稅金額輸入,系統自動換算成未稅儲存">
-                  <el-checkbox v-if="editable" v-model="taxIncluded" size="small"
-                    >含稅輸入</el-checkbox
-                  >
-                </el-tooltip>
-              </template>
               <el-select v-model="form.tax_type_id" style="width: 100%">
                 <el-option
                   v-for="t in taxTypes.filter((x) => x.is_active || x.id === form.tax_type_id)"
@@ -1103,6 +1095,9 @@ autoClear(form)
             明細({{ form.lines.filter((l) => l.item_id).length }} 筆)
             <span v-if="fieldErrors.lines" class="err">{{ fieldErrors.lines }}</span>
           </span>
+          <el-tooltip content="勾選後單價欄以含稅金額輸入,系統自動換算成未稅儲存">
+            <el-checkbox v-if="editable" v-model="taxIncluded" size="small">含稅輸入</el-checkbox>
+          </el-tooltip>
           <el-button v-if="editable && importer" size="small" @click="openImport">
             {{ importer.button }}
           </el-button>

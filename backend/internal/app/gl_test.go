@@ -759,6 +759,10 @@ func TestProjectPnl(t *testing.T) {
 		ID int64 `json:"id"`
 	}](t, res.Data).ID
 	expect(t, c.do(http.MethodPost, "/gl/projects", map[string]any{"code": "P1", "name": "重複"}), http.StatusConflict, "GL-060")
+	// 欄位名稱須為小寫 snake_case(曾因漏掉 json tag 而在畫面顯示空白)
+	if raw := string(c.do(http.MethodGet, "/gl/projects", nil).Data); !strings.Contains(raw, `"code":"P1"`) || !strings.Contains(raw, `"is_active":true`) {
+		t.Fatalf("專案列表欄位 %s", raw)
+	}
 
 	cash, sales := e.idByCode("accounts", "1101"), e.idByCode("accounts", "4101")
 	mk := func(project *int64, amt string) {
