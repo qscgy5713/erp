@@ -52,7 +52,11 @@ defineExpose({ reload: load })
         v-for="s in progress.steps"
         :key="s.step"
         :title="`第 ${s.step} 層 ${s.role_name}`"
-        :description="s.done ? `${s.approver_name} ${formatDateTime(s.approved_at)}` : '待核准'"
+        :description="
+          s.done
+            ? `${s.approver_name}${s.acting_for ? `(代 ${s.acting_for})` : ''} ${formatDateTime(s.approved_at)}`
+            : '待核准'
+        "
       />
     </el-steps>
   </el-card>

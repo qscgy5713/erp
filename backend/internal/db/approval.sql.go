@@ -12,10 +12,103 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const activeDelegatedPerms = `-- name: ActiveDelegatedPerms :many
+SELECT DISTINCT d.delegator_id, rp.permission
+FROM approval_delegations d
+JOIN users u ON u.id = d.delegator_id AND u.is_active
+JOIN user_roles ur ON ur.user_id = d.delegator_id
+JOIN roles r ON r.id = ur.role_id AND r.is_active
+JOIN role_permissions rp ON rp.role_id = r.id AND rp.permission LIKE '%.approve'
+WHERE d.company_id = $1 AND d.delegate_id = $2
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to
+`
+
+type ActiveDelegatedPermsParams struct {
+	CompanyID  int64
+	DelegateID int64
+}
+
+type ActiveDelegatedPermsRow struct {
+	DelegatorID int64
+	Permission  string
+}
+
+// 委託人的「核准」類權限(角色須啟用)
+func (q *Queries) ActiveDelegatedPerms(ctx context.Context, arg ActiveDelegatedPermsParams) ([]ActiveDelegatedPermsRow, error) {
+	rows, err := q.db.Query(ctx, activeDelegatedPerms, arg.CompanyID, arg.DelegateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ActiveDelegatedPermsRow{}
+	for rows.Next() {
+		var i ActiveDelegatedPermsRow
+		if err := rows.Scan(&i.DelegatorID, &i.Permission); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const activeDelegators = `-- name: ActiveDelegators :many
+
+SELECT DISTINCT d.delegator_id FROM approval_delegations d JOIN users u ON u.id = d.delegator_id AND u.is_active
+WHERE d.company_id = $1 AND d.delegate_id = $2
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to
+`
+
+type ActiveDelegatorsParams struct {
+	CompanyID  int64
+	DelegateID int64
+}
+
+// ======== 簽核代理人(D87) ========
+// 今天有效、委託我代理的人(委託人須仍啟用)
+func (q *Queries) ActiveDelegators(ctx context.Context, arg ActiveDelegatorsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, activeDelegators, arg.CompanyID, arg.DelegateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var delegator_id int64
+		if err := rows.Scan(&delegator_id); err != nil {
+			return nil, err
+		}
+		items = append(items, delegator_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const activeUserInCompany = `-- name: ActiveUserInCompany :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND company_id = $2 AND is_active)
+`
+
+type ActiveUserInCompanyParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) ActiveUserInCompany(ctx context.Context, arg ActiveUserInCompanyParams) (bool, error) {
+	row := q.db.QueryRow(ctx, activeUserInCompany, arg.ID, arg.CompanyID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const approvalDocVisible = `-- name: ApprovalDocVisible :one
 SELECT (
   ($1::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = $2 AND x.company_id = $3))
   OR ($1::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = $2 AND x.company_id = $3))
+  OR ($1::text = 'stock_document' AND EXISTS (SELECT 1 FROM stock_documents x WHERE x.id = $2 AND x.company_id = $3))
   OR ($1::text = 'work_order' AND EXISTS (SELECT 1 FROM work_orders x WHERE x.id = $2 AND x.company_id = $3))
   OR ($1::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = $2 AND x.company_id = $3 AND x.side = 'payment'))
   OR ($1::text = 'sales_order' AND EXISTS (
@@ -93,12 +186,13 @@ func (q *Queries) CompanyRolesByIDs(ctx context.Context, arg CompanyRolesByIDsPa
 }
 
 const completeDocumentApproval = `-- name: CompleteDocumentApproval :execrows
-UPDATE document_approvals SET approver_id = $1, approved_at = now()
-WHERE doc_type = $2 AND doc_id = $3 AND step_no = $4 AND approver_id IS NULL
+UPDATE document_approvals SET approver_id = $1, approved_at = now(), acting_for = $2
+WHERE doc_type = $3 AND doc_id = $4 AND step_no = $5 AND approver_id IS NULL
 `
 
 type CompleteDocumentApprovalParams struct {
 	ApproverID *int64
+	ActingFor  *int64
 	DocType    string
 	DocID      int64
 	StepNo     int32
@@ -107,6 +201,7 @@ type CompleteDocumentApprovalParams struct {
 func (q *Queries) CompleteDocumentApproval(ctx context.Context, arg CompleteDocumentApprovalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, completeDocumentApproval,
 		arg.ApproverID,
+		arg.ActingFor,
 		arg.DocType,
 		arg.DocID,
 		arg.StepNo,
@@ -151,6 +246,46 @@ func (q *Queries) CreateApprovalRule(ctx context.Context, arg CreateApprovalRule
 	return i, err
 }
 
+const createDelegation = `-- name: CreateDelegation :one
+INSERT INTO approval_delegations (company_id, delegator_id, delegate_id, valid_from, valid_to, note, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, company_id, delegator_id, delegate_id, valid_from, valid_to, note, created_by, created_at
+`
+
+type CreateDelegationParams struct {
+	CompanyID   int64
+	DelegatorID int64
+	DelegateID  int64
+	ValidFrom   time.Time
+	ValidTo     time.Time
+	Note        string
+	ActorID     *int64
+}
+
+func (q *Queries) CreateDelegation(ctx context.Context, arg CreateDelegationParams) (ApprovalDelegation, error) {
+	row := q.db.QueryRow(ctx, createDelegation,
+		arg.CompanyID,
+		arg.DelegatorID,
+		arg.DelegateID,
+		arg.ValidFrom,
+		arg.ValidTo,
+		arg.Note,
+		arg.ActorID,
+	)
+	var i ApprovalDelegation
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.DelegatorID,
+		&i.DelegateID,
+		&i.ValidFrom,
+		&i.ValidTo,
+		&i.Note,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const deleteApprovalRule = `-- name: DeleteApprovalRule :execrows
 DELETE FROM approval_rules WHERE id = $1 AND company_id = $2
 `
@@ -177,6 +312,23 @@ func (q *Queries) DeleteApprovalRuleSteps(ctx context.Context, ruleID int64) err
 	return err
 }
 
+const deleteDelegation = `-- name: DeleteDelegation :execrows
+DELETE FROM approval_delegations WHERE id = $1 AND company_id = $2
+`
+
+type DeleteDelegationParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) DeleteDelegation(ctx context.Context, arg DeleteDelegationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDelegation, arg.ID, arg.CompanyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDocumentApprovals = `-- name: DeleteDocumentApprovals :exec
 DELETE FROM document_approvals WHERE doc_type = $1 AND doc_id = $2 AND company_id = $3
 `
@@ -193,7 +345,7 @@ func (q *Queries) DeleteDocumentApprovals(ctx context.Context, arg DeleteDocumen
 }
 
 const documentApprovalsForDocs = `-- name: DocumentApprovalsForDocs :many
-SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id
+SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id, d.acting_for
 FROM document_approvals d
 WHERE d.company_id = $1
   AND d.doc_type = ANY($2::text[]) AND d.doc_id = ANY($3::bigint[]) -- 超集合,程式再依 (類型, id) 配對
@@ -213,6 +365,7 @@ type DocumentApprovalsForDocsRow struct {
 	RoleID     *int64
 	RoleName   string
 	ApproverID *int64
+	ActingFor  *int64
 }
 
 func (q *Queries) DocumentApprovalsForDocs(ctx context.Context, arg DocumentApprovalsForDocsParams) ([]DocumentApprovalsForDocsRow, error) {
@@ -231,6 +384,7 @@ func (q *Queries) DocumentApprovalsForDocs(ctx context.Context, arg DocumentAppr
 			&i.RoleID,
 			&i.RoleName,
 			&i.ApproverID,
+			&i.ActingFor,
 		); err != nil {
 			return nil, err
 		}
@@ -264,6 +418,32 @@ func (q *Queries) GetApprovalRule(ctx context.Context, arg GetApprovalRuleParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDelegation = `-- name: GetDelegation :one
+SELECT id, company_id, delegator_id, delegate_id, valid_from, valid_to, note, created_by, created_at FROM approval_delegations WHERE id = $1 AND company_id = $2
+`
+
+type GetDelegationParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) GetDelegation(ctx context.Context, arg GetDelegationParams) (ApprovalDelegation, error) {
+	row := q.db.QueryRow(ctx, getDelegation, arg.ID, arg.CompanyID)
+	var i ApprovalDelegation
+	err := row.Scan(
+		&i.ID,
+		&i.CompanyID,
+		&i.DelegatorID,
+		&i.DelegateID,
+		&i.ValidFrom,
+		&i.ValidTo,
+		&i.Note,
+		&i.CreatedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -384,9 +564,66 @@ func (q *Queries) ListApprovalRules(ctx context.Context, companyID int64) ([]App
 	return items, nil
 }
 
+const listDelegations = `-- name: ListDelegations :many
+SELECT d.id, d.delegator_id, du.name AS delegator_name, d.delegate_id, eu.name AS delegate_name,
+       d.valid_from, d.valid_to, d.note
+FROM approval_delegations d
+JOIN users du ON du.id = d.delegator_id JOIN users eu ON eu.id = d.delegate_id
+WHERE d.company_id = $1
+  AND d.valid_to >= CURRENT_DATE - 30
+  AND ($2::bigint IS NULL OR d.delegator_id = $2 OR d.delegate_id = $2)
+ORDER BY d.valid_from DESC, d.id DESC
+`
+
+type ListDelegationsParams struct {
+	CompanyID int64
+	UserID    *int64
+}
+
+type ListDelegationsRow struct {
+	ID            int64
+	DelegatorID   int64
+	DelegatorName string
+	DelegateID    int64
+	DelegateName  string
+	ValidFrom     time.Time
+	ValidTo       time.Time
+	Note          string
+}
+
+func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]ListDelegationsRow, error) {
+	rows, err := q.db.Query(ctx, listDelegations, arg.CompanyID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDelegationsRow{}
+	for rows.Next() {
+		var i ListDelegationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DelegatorID,
+			&i.DelegatorName,
+			&i.DelegateID,
+			&i.DelegateName,
+			&i.ValidFrom,
+			&i.ValidTo,
+			&i.Note,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocumentApprovals = `-- name: ListDocumentApprovals :many
-SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, COALESCE(u.name, '')::text AS approver_name
-FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id
+SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
+       COALESCE(af.name, '')::text AS acting_for_name
+FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id LEFT JOIN users af ON af.id = d.acting_for
 WHERE d.company_id = $1 AND d.doc_type = $2 AND d.doc_id = $3
 ORDER BY d.step_no
 `
@@ -398,12 +635,14 @@ type ListDocumentApprovalsParams struct {
 }
 
 type ListDocumentApprovalsRow struct {
-	StepNo       int32
-	RoleID       *int64
-	RoleName     string
-	ApproverID   *int64
-	ApprovedAt   *time.Time
-	ApproverName string
+	StepNo        int32
+	RoleID        *int64
+	RoleName      string
+	ApproverID    *int64
+	ApprovedAt    *time.Time
+	ActingFor     *int64
+	ApproverName  string
+	ActingForName string
 }
 
 func (q *Queries) ListDocumentApprovals(ctx context.Context, arg ListDocumentApprovalsParams) ([]ListDocumentApprovalsRow, error) {
@@ -421,7 +660,9 @@ func (q *Queries) ListDocumentApprovals(ctx context.Context, arg ListDocumentApp
 			&i.RoleName,
 			&i.ApproverID,
 			&i.ApprovedAt,
+			&i.ActingFor,
 			&i.ApproverName,
+			&i.ActingForName,
 		); err != nil {
 			return nil, err
 		}
@@ -489,6 +730,12 @@ SELECT doc_type, doc_id, doc_no, doc_date, partner_name, currency, amount, submi
     SELECT 'work_order', x.id, x.doc_no, x.doc_date, i.name, 'TWD', x.processing_cost, x.submitted_at
     FROM work_orders x JOIN items i ON i.id = x.item_id
     WHERE x.company_id = $1 AND x.status = 'pending' AND 'work_order' = ANY($2::text[])
+  UNION ALL
+    SELECT 'stock_document', x.id, x.doc_no, x.doc_date,
+           CASE x.doc_type WHEN 'adjustment' THEN '庫存調整' WHEN 'transfer' THEN '庫存調撥' ELSE '庫存盤點' END,
+           'TWD', 0::numeric, x.submitted_at
+    FROM stock_documents x
+    WHERE x.company_id = $1 AND x.status = 'pending' AND 'stock_document' = ANY($2::text[])
 ) t
 ORDER BY submitted_at NULLS LAST, doc_no
 LIMIT 300
@@ -619,6 +866,30 @@ SELECT role_id FROM user_roles WHERE user_id = $1
 
 func (q *Queries) UserRoleIDs(ctx context.Context, userID int64) ([]int64, error) {
 	rows, err := q.db.Query(ctx, userRoleIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var role_id int64
+		if err := rows.Scan(&role_id); err != nil {
+			return nil, err
+		}
+		items = append(items, role_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const userRoleIDsFor = `-- name: UserRoleIDsFor :many
+SELECT DISTINCT role_id FROM user_roles WHERE user_id = ANY($1::bigint[])
+`
+
+func (q *Queries) UserRoleIDsFor(ctx context.Context, userIds []int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, userRoleIDsFor, userIds)
 	if err != nil {
 		return nil, err
 	}

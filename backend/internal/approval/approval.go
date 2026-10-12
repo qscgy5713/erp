@@ -28,7 +28,8 @@ const (
 	Delivery      = "delivery"
 	Collection    = "collection"
 	Payment       = "payment"
-	WorkOrder     = "work_order" // 金額為加工費(完工成本在月結才確定)
+	WorkOrder     = "work_order"     // 金額為加工費(完工成本在月結才確定)
+	StockDocument = "stock_document" // 調整 / 調撥 / 盤點;沒有金額,一律以 0 比對規則
 )
 
 type docInfo struct {
@@ -45,10 +46,11 @@ var docTypes = map[string]docInfo{
 	Collection:    {"收款單", permission.CollectionApprove, permission.CollectionRead},
 	Payment:       {"付款單", permission.PaymentApprove, permission.PaymentRead},
 	WorkOrder:     {"工單(以加工費計)", permission.WorkOrderApprove, permission.WorkOrderRead},
+	StockDocument: {"庫存單據(調整 / 調撥 / 盤點)", permission.InventoryApprove, permission.InventoryRead},
 }
 
 // DocTypeOrder 固定的顯示順序。
-var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment, WorkOrder}
+var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment, WorkOrder, StockDocument}
 
 func Label(docType string) string { return docTypes[docType].Label }
 
@@ -130,7 +132,7 @@ func advance(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, docID
 			cur = i
 			break
 		}
-		if *r.ApproverID == a.UserID {
+		if a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor)) {
 			return false, "", errSamePerson
 		}
 	}
@@ -138,21 +140,29 @@ func advance(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, docID
 		return false, "", nil // 流程已走完(不應發生),交由呼叫端完成核准
 	}
 	step := rows[cur]
+	actingFor := int64(0) // 代理核准時的委託人
 	if step.RoleID != nil && !a.IsSuperadmin {
-		ok, err := q.UserHasRole(ctx, db.UserHasRoleParams{UserID: a.UserID, RoleID: *step.RoleID})
+		who, err := roleHolder(ctx, q, a, *step.RoleID)
 		if err != nil {
 			return false, "", err
 		}
-		if !ok {
+		if who < 0 {
 			return false, "", errNotThisRole(int(step.StepNo), step.RoleName)
 		}
+		actingFor = who
+	} else if step.RoleID == nil && step.StepNo == 1 {
+		actingFor = a.DelegatedPerms[docTypes[docType].Approve]
 	}
 	// 角色已被刪除(role_id 為 NULL 且不是第 1 層):只有超級管理員能核准
 	if step.RoleID == nil && step.StepNo > 1 && !a.IsSuperadmin {
 		return false, "", errNotThisRole(int(step.StepNo), step.RoleName+"(已刪除)")
 	}
+	var af *int64
+	if actingFor > 0 {
+		af = &actingFor
+	}
 	if n, err := q.CompleteDocumentApproval(ctx, db.CompleteDocumentApprovalParams{
-		ApproverID: &a.UserID, DocType: docType, DocID: docID, StepNo: step.StepNo,
+		ApproverID: &a.UserID, ActingFor: af, DocType: docType, DocID: docID, StepNo: step.StepNo,
 	}); err != nil {
 		return false, "", err
 	} else if n != 1 {
@@ -163,4 +173,21 @@ func advance(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, docID
 	}
 	next := rows[cur+1]
 	return true, fmt.Sprintf("第 %d/%d 層核准,等待第 %d 層(%s)", step.StepNo, len(rows), next.StepNo, next.RoleName), nil
+}
+
+// roleHolder 目前使用者能否負責某角色的簽核層:本人具該角色回傳 0;只有代理中的委託人具該角色回傳委託人 id;
+// 都沒有回傳 -1。
+func roleHolder(ctx authCtx, q *db.Queries, a *authctx.Actor, roleID int64) (int64, error) {
+	ok, err := q.UserHasRole(ctx, db.UserHasRoleParams{UserID: a.UserID, RoleID: roleID})
+	if err != nil || ok {
+		return 0, err
+	}
+	for _, d := range a.Delegators {
+		if ok, err := q.UserHasRole(ctx, db.UserHasRoleParams{UserID: d, RoleID: roleID}); err != nil {
+			return 0, err
+		} else if ok {
+			return d, nil
+		}
+	}
+	return -1, nil
 }

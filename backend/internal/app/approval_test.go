@@ -15,6 +15,7 @@ type apprProgress struct {
 		Step         int    `json:"step"`
 		RoleName     string `json:"role_name"`
 		ApproverName string `json:"approver_name"`
+		ActingFor    string `json:"acting_for"`
 		Done         bool   `json:"done"`
 	} `json:"steps"`
 }

@@ -17,6 +17,8 @@ import { useApiError } from '@/composables/useApiError'
 import { actionLabels, allowedActions, confirmActions } from '@/utils/docstate'
 import { formatDateTime } from '@/utils/format'
 import { buildTree } from '@/utils/tree'
+import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
+import ApprovalProgress from '@/components/ApprovalProgress.vue'
 import DocStatusTag from '@/components/DocStatusTag.vue'
 import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
@@ -239,6 +241,14 @@ async function save(): Promise<boolean> {
   }
 }
 
+// ---- 多層簽核(庫存單據沒有金額,規則以 0 比對) ----
+const approvalInfo = ref<ApprovalProgressData | null>(null)
+const progressRef = ref<InstanceType<typeof ApprovalProgress> | null>(null)
+/** 套用多層簽核的待審單據:只有輪到的人才顯示「核准」 */
+const approveBlocked = computed(
+  () => doc.value?.status === 'pending' && !!approvalInfo.value && !approvalInfo.value.can_approve,
+)
+
 // ---- 狀態動作 ----
 
 function canDo(action: DocAction): boolean {
@@ -247,6 +257,7 @@ function canDo(action: DocAction): boolean {
     case 'submit':
       return auth.can('inventory.stock.write')
     case 'approve':
+      return auth.can('inventory.stock.approve') && !approveBlocked.value
     case 'reject':
     case 'unapprove':
       return auth.can('inventory.stock.approve')
@@ -285,6 +296,7 @@ async function runAction(action: DocAction) {
   try {
     applyDoc(await inventoryApi.action(doc.value.id, action, doc.value.version))
     ElMessage.success(`已${actionLabels[action]}`)
+    progressRef.value?.reload()
   } catch (e) {
     handle(e)
   } finally {
@@ -347,6 +359,15 @@ autoClear(form)
         </el-button>
       </div>
     </div>
+
+    <ApprovalProgress
+      ref="progressRef"
+      doc-type="stock_document"
+      :doc-id="doc?.id"
+      :status="doc?.status"
+      :version="doc?.version"
+      @loaded="approvalInfo = $event"
+    />
 
     <el-alert
       v-if="docType === 'count' && doc && ['draft', 'pending', 'approved'].includes(doc.status)"

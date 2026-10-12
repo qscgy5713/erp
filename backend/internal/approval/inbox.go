@@ -70,7 +70,7 @@ func (m *Module) inbox(c *gin.Context) {
 		k := s.DocType + "/" + strconv.FormatInt(s.DocID, 10)
 		byDoc[k] = append(byDoc[k], s)
 	}
-	roles, err := m.store.UserRoleIDs(ctx, a.UserID)
+	roles, err := m.store.UserRoleIDsFor(ctx, append([]int64{a.UserID}, a.Delegators...))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -89,7 +89,7 @@ func (m *Module) inbox(c *gin.Context) {
 					cur = i
 					break
 				}
-				if *r.ApproverID == a.UserID {
+				if a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor)) {
 					mine = false // 同一人不可核准多層
 				}
 			}

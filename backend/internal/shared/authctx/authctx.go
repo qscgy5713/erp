@@ -34,6 +34,23 @@ type Actor struct {
 	MustChangePassword bool
 	// MustSetup2FA 公司要求雙因素驗證、但此使用者尚未啟用:只能存取設定雙因素驗證所需的少數 API
 	MustSetup2FA bool
+	// Delegators 目前有效的簽核代理關係中,委託我代理的人(D87)。
+	Delegators []int64
+	// DelegatedPerms 代理而來的核准權限 → 委託人;只含我自己沒有的權限,Permissions 已併入這些權限。
+	DelegatedPerms map[string]int64
+}
+
+// IsSelfOrDelegator 是否為本人,或正在代理我的委託人(簽核「同一人不可核准多層」用)。
+func (a *Actor) IsSelfOrDelegator(id int64) bool {
+	if id == a.UserID {
+		return true
+	}
+	for _, d := range a.Delegators {
+		if d == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Can 判斷是否具備權限;超級管理員擁有全部權限。

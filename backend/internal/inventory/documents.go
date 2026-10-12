@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/auth"
 	"erp/internal/db"
 	"erp/internal/platform/database"
@@ -870,6 +871,18 @@ func (m *Module) documentAction(c *gin.Context) {
 		before, err := m.loadDocument(ctx, q, a.CompanyID, id)
 		if err != nil {
 			return err
+		}
+		// 多層簽核(D87):庫存單據沒有金額,以 0 比對規則
+		if partial, msg, err := approval.Intercept(ctx, q, a, approval.StockDocument, id, action, decimal.Zero); err != nil {
+			return err
+		} else if partial {
+			if dto, err = m.loadDocument(ctx, q, a.CompanyID, id); err != nil {
+				return err
+			}
+			return audit.Record(ctx, q, audit.Entry{
+				Action: "approve_step", EntityType: "stock_document", EntityID: &id,
+				Summary: msg + " " + docTypes[cur.DocType].label + " " + cur.DocNo,
+			})
 		}
 		if err := m.applyAction(ctx, q, a, cur, before, action); err != nil {
 			return err

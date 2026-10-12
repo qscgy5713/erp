@@ -31,6 +31,9 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/rules", auth.Require(permission.ApprovalWrite), m.createRule)
 	g.PUT("/rules/:id", auth.Require(permission.ApprovalWrite), m.updateRule)
 	g.DELETE("/rules/:id", auth.Require(permission.ApprovalWrite), m.deleteRule)
+	g.GET("/delegations", m.listDelegations)   // 登入即可:自己管理自己的代理人
+	g.POST("/delegations", m.createDelegation) // 替他人設定需 system.approval.write
+	g.DELETE("/delegations/:id", m.deleteDelegation)
 	g.GET("/inbox", m.inbox)       // 登入即可,內容依核准權限過濾
 	g.GET("/progress", m.progress) // 權限依單據類型在內部檢查
 }
@@ -305,6 +308,7 @@ type progressStep struct {
 	Step         int        `json:"step"`
 	RoleName     string     `json:"role_name"`
 	ApproverName string     `json:"approver_name"`
+	ActingFor    string     `json:"acting_for"` // 代理核准時的委託人姓名
 	ApprovedAt   *time.Time `json:"approved_at"`
 	Done         bool       `json:"done"`
 }
@@ -350,7 +354,7 @@ func (m *Module) progress(c *gin.Context) {
 	out := progressDTO{Steps: []progressStep{}}
 	cur := -1
 	for i, r := range rows {
-		out.Steps = append(out.Steps, progressStep{Step: int(r.StepNo), RoleName: r.RoleName, ApproverName: r.ApproverName,
+		out.Steps = append(out.Steps, progressStep{Step: int(r.StepNo), RoleName: r.RoleName, ApproverName: r.ApproverName, ActingFor: r.ActingForName,
 			ApprovedAt: r.ApprovedAt, Done: r.ApproverID != nil})
 		if cur < 0 && r.ApproverID == nil {
 			cur = i
@@ -363,17 +367,17 @@ func (m *Module) progress(c *gin.Context) {
 		out.Current = int(rows[cur].StepNo)
 		can := a.Can(info.Approve)
 		for _, r := range rows[:cur] {
-			if r.ApproverID != nil && *r.ApproverID == a.UserID {
+			if r.ApproverID != nil && (a.IsSelfOrDelegator(*r.ApproverID) || (r.ActingFor != nil && a.IsSelfOrDelegator(*r.ActingFor))) {
 				can = false
 			}
 		}
 		if can && rows[cur].RoleID != nil && !a.IsSuperadmin {
-			has, err := m.store.UserHasRole(ctx, db.UserHasRoleParams{UserID: a.UserID, RoleID: *rows[cur].RoleID})
+			who, err := roleHolder(ctx, m.store.Queries, a, *rows[cur].RoleID)
 			if err != nil {
 				response.Error(c, err)
 				return
 			}
-			can = has
+			can = who >= 0
 		}
 		out.CanApprove = can
 	}

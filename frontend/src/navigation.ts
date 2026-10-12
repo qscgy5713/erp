@@ -61,8 +61,10 @@ export const navigation: NavItem[] = [
       'finance.collection.approve',
       'finance.payment.approve',
       'production.order.approve',
+      'inventory.stock.approve',
     ],
   },
+  { title: '簽核代理人', path: '/approval/delegations' },
   {
     title: '基本資料',
     children: [

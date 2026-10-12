@@ -72,8 +72,14 @@ const router = createRouter({
           'finance.collection.approve',
           'finance.payment.approve',
           'production.order.approve',
+          'inventory.stock.approve',
         ],
       },
+    },
+    {
+      path: '/approval/delegations',
+      component: () => import('@/views/approval/DelegationsView.vue'),
+      meta: { title: '簽核代理人' },
     },
     {
       path: '/masterdata/items',

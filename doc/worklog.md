@@ -1,5 +1,12 @@
 # 工作日誌
 
+## 2026-10-12 簽核代理人與庫存單據簽核(D87)
+- migration 31:`approval_delegations`、`document_approvals.acting_for`、規則單據類型加 `stock_document`。
+- 後端:`auth.actorFor` 併入代理期間內委託人的 `*.approve` 權限;`approval.advance` 的角色判斷、同一人規則、收件匣與進度都納入委託人;`approval/delegation.go` 提供 `GET/POST/DELETE /approval/delegations`(登入即可,內部檢查);庫存單據動作接上 `approval.Intercept`(金額 0)。
+- 前端:新頁「簽核代理人」、庫存單據頁顯示簽核流程並在未輪到時隱藏「核准」、收件匣與導覽加入庫存核准權限、進度顯示「(代 X)」。
+- 測試 `TestApprovalDelegationAndStockDocs`:庫存單據兩層簽核、未委託時 403、代理核准留紀錄、委託人不能續核第 2 層、終止與過期的代理無效、列表與刪除的可見範圍。
+- 已知限制:超級管理員當委託人無效果;庫存單據無法依金額分流。
+
 ## 2026-10-12 外幣期末重估(D86)
 - migration 30:科目 4903 / 7103、拋轉規則 `fx.unrealized_gain/loss`、`fx_revaluations` 紀錄表;`gl/revaluation.go`:`GET /gl/revaluation`(試算與紀錄)、`POST /gl/revaluation/:period`、`POST .../undo`。
 - 設計取捨:沖回不用「沖銷傳票」(同一張傳票只能被沖銷一次,撤銷後重做會撞唯一鍵),改成以相反分錄另開傳票,類型 `fx_reval_rev`,撤銷時各自沖銷。沖回沿用原科目,損益才會在同一個科目內抵銷(先前誤用淨額導致利益 / 損失科目各留一筆,測試抓到)。

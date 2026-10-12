@@ -32,6 +32,8 @@ export interface ProgressStep {
   step: number
   role_name: string
   approver_name: string
+  /** 代理核准時的委託人姓名;空字串 = 本人核准 */
+  acting_for: string
   approved_at: string | null
   done: boolean
 }
@@ -78,8 +80,34 @@ export const inboxRoutes: Record<string, string> = {
   collection: 'collection',
   payment: 'payment',
   work_order: 'work-order',
+  stock_document: 'inventory-document',
 }
 
 export const inboxApi = {
   list: () => http.get<InboxRow[]>('/approval/inbox'),
+}
+
+export interface Delegation {
+  id: number
+  delegator_id: number
+  delegator_name: string
+  delegate_id: number
+  delegate_name: string
+  valid_from: string
+  valid_to: string
+  note: string
+}
+
+export interface DelegationInput {
+  delegator_id?: number
+  delegate_id: number
+  valid_from: string
+  valid_to: string
+  note?: string
+}
+
+export const delegationApi = {
+  list: (all = false) => http.get<Delegation[]>(`/approval/delegations${all ? '?scope=all' : ''}`),
+  create: (input: DelegationInput) => http.post<Delegation>('/approval/delegations', input),
+  remove: (id: number) => http.delete(`/approval/delegations/${id}`),
 }

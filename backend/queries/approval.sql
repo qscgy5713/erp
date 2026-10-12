@@ -46,13 +46,14 @@ INSERT INTO document_approvals (company_id, doc_type, doc_id, step_no, role_id, 
 VALUES (@company_id, @doc_type, @doc_id, @step_no, sqlc.narg(role_id), @role_name);
 
 -- name: ListDocumentApprovals :many
-SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, COALESCE(u.name, '')::text AS approver_name
-FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id
+SELECT d.step_no, d.role_id, d.role_name, d.approver_id, d.approved_at, d.acting_for, COALESCE(u.name, '')::text AS approver_name,
+       COALESCE(af.name, '')::text AS acting_for_name
+FROM document_approvals d LEFT JOIN users u ON u.id = d.approver_id LEFT JOIN users af ON af.id = d.acting_for
 WHERE d.company_id = @company_id AND d.doc_type = @doc_type AND d.doc_id = @doc_id
 ORDER BY d.step_no;
 
 -- name: CompleteDocumentApproval :execrows
-UPDATE document_approvals SET approver_id = @approver_id, approved_at = now()
+UPDATE document_approvals SET approver_id = @approver_id, approved_at = now(), acting_for = sqlc.narg(acting_for)
 WHERE doc_type = @doc_type AND doc_id = @doc_id AND step_no = @step_no AND approver_id IS NULL;
 
 -- name: DeleteDocumentApprovals :exec
@@ -66,6 +67,7 @@ SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = @user_id AND role_id = @
 SELECT (
   (@doc_type::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = @doc_id AND x.company_id = @company_id))
+  OR (@doc_type::text = 'stock_document' AND EXISTS (SELECT 1 FROM stock_documents x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'work_order' AND EXISTS (SELECT 1 FROM work_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = @doc_id AND x.company_id = @company_id AND x.side = 'payment'))
   OR (@doc_type::text = 'sales_order' AND EXISTS (
@@ -123,12 +125,18 @@ SELECT doc_type, doc_id, doc_no, doc_date, partner_name, currency, amount, submi
     SELECT 'work_order', x.id, x.doc_no, x.doc_date, i.name, 'TWD', x.processing_cost, x.submitted_at
     FROM work_orders x JOIN items i ON i.id = x.item_id
     WHERE x.company_id = @company_id AND x.status = 'pending' AND 'work_order' = ANY(@types::text[])
+  UNION ALL
+    SELECT 'stock_document', x.id, x.doc_no, x.doc_date,
+           CASE x.doc_type WHEN 'adjustment' THEN '庫存調整' WHEN 'transfer' THEN '庫存調撥' ELSE '庫存盤點' END,
+           'TWD', 0::numeric, x.submitted_at
+    FROM stock_documents x
+    WHERE x.company_id = @company_id AND x.status = 'pending' AND 'stock_document' = ANY(@types::text[])
 ) t
 ORDER BY submitted_at NULLS LAST, doc_no
 LIMIT 300;
 
 -- name: DocumentApprovalsForDocs :many
-SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id
+SELECT d.doc_type, d.doc_id, d.step_no, d.role_id, d.role_name, d.approver_id, d.acting_for
 FROM document_approvals d
 WHERE d.company_id = @company_id
   AND d.doc_type = ANY(@types::text[]) AND d.doc_id = ANY(@ids::bigint[]) -- 超集合,程式再依 (類型, id) 配對
@@ -136,3 +144,48 @@ ORDER BY d.doc_type, d.doc_id, d.step_no;
 
 -- name: UserRoleIDs :many
 SELECT role_id FROM user_roles WHERE user_id = @user_id;
+
+-- name: UserRoleIDsFor :many
+SELECT DISTINCT role_id FROM user_roles WHERE user_id = ANY(@user_ids::bigint[]);
+
+-- ======== 簽核代理人(D87) ========
+
+-- name: ActiveDelegators :many
+-- 今天有效、委託我代理的人(委託人須仍啟用)
+SELECT DISTINCT d.delegator_id FROM approval_delegations d JOIN users u ON u.id = d.delegator_id AND u.is_active
+WHERE d.company_id = @company_id AND d.delegate_id = @delegate_id
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to;
+
+-- name: ActiveDelegatedPerms :many
+-- 委託人的「核准」類權限(角色須啟用)
+SELECT DISTINCT d.delegator_id, rp.permission
+FROM approval_delegations d
+JOIN users u ON u.id = d.delegator_id AND u.is_active
+JOIN user_roles ur ON ur.user_id = d.delegator_id
+JOIN roles r ON r.id = ur.role_id AND r.is_active
+JOIN role_permissions rp ON rp.role_id = r.id AND rp.permission LIKE '%.approve'
+WHERE d.company_id = @company_id AND d.delegate_id = @delegate_id
+  AND CURRENT_DATE BETWEEN d.valid_from AND d.valid_to;
+
+-- name: ListDelegations :many
+SELECT d.id, d.delegator_id, du.name AS delegator_name, d.delegate_id, eu.name AS delegate_name,
+       d.valid_from, d.valid_to, d.note
+FROM approval_delegations d
+JOIN users du ON du.id = d.delegator_id JOIN users eu ON eu.id = d.delegate_id
+WHERE d.company_id = @company_id
+  AND d.valid_to >= CURRENT_DATE - 30
+  AND (sqlc.narg(user_id)::bigint IS NULL OR d.delegator_id = sqlc.narg(user_id) OR d.delegate_id = sqlc.narg(user_id))
+ORDER BY d.valid_from DESC, d.id DESC;
+
+-- name: GetDelegation :one
+SELECT * FROM approval_delegations WHERE id = @id AND company_id = @company_id;
+
+-- name: CreateDelegation :one
+INSERT INTO approval_delegations (company_id, delegator_id, delegate_id, valid_from, valid_to, note, created_by)
+VALUES (@company_id, @delegator_id, @delegate_id, @valid_from, @valid_to, @note, @actor_id) RETURNING *;
+
+-- name: DeleteDelegation :execrows
+DELETE FROM approval_delegations WHERE id = @id AND company_id = @company_id;
+
+-- name: ActiveUserInCompany :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = @id AND company_id = @company_id AND is_active);

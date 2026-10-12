@@ -85,6 +85,18 @@ type AccountsReceivable struct {
 	ImportBatchID *int64
 }
 
+type ApprovalDelegation struct {
+	ID          int64
+	CompanyID   int64
+	DelegatorID int64
+	DelegateID  int64
+	ValidFrom   time.Time
+	ValidTo     time.Time
+	Note        string
+	CreatedBy   *int64
+	CreatedAt   time.Time
+}
+
 type ApprovalRule struct {
 	ID        int64
 	CompanyID int64
@@ -336,6 +348,7 @@ type DocumentApproval struct {
 	RoleName   string
 	ApproverID *int64
 	ApprovedAt *time.Time
+	ActingFor  *int64
 }
 
 type ExchangeRate struct {

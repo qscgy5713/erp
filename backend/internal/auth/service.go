@@ -628,5 +628,22 @@ func (s *Service) actorFor(ctx context.Context, u db.User) (*authctx.Actor, erro
 	if a.DataScope == "" {
 		a.DataScope = authctx.ScopeSelf
 	}
+	// 簽核代理人(D87):代理期間內併入委託人的「核准」權限;資料範圍仍以自己的角色為準
+	if a.Delegators, err = s.store.ActiveDelegators(ctx, db.ActiveDelegatorsParams{DelegateID: u.ID, CompanyID: u.CompanyID}); err != nil {
+		return nil, err
+	}
+	del, err := s.store.ActiveDelegatedPerms(ctx, db.ActiveDelegatedPermsParams{DelegateID: u.ID, CompanyID: u.CompanyID})
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range del {
+		if _, own := a.Permissions[d.Permission]; !own {
+			if a.DelegatedPerms == nil {
+				a.DelegatedPerms = map[string]int64{}
+			}
+			a.Permissions[d.Permission] = struct{}{}
+			a.DelegatedPerms[d.Permission] = d.DelegatorID
+		}
+	}
 	return a, nil
 }
