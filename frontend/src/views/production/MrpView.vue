@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 需求計算(MRP):由訂單未出貨、未完工工單領料、安全庫存,扣掉庫存與在途,算出該生產或採購多少;
-// 有 BOM 的建議「生產」並往下一階展開材料需求。只是建議,不會自動開單。
+// 有 BOM 的建議「生產」並往下一階展開材料需求。依交期分週計算(展開可看各週明細),
+// 建議量依料品的最小量與批量進位,並算出最晚下單日。只是建議,不會自動開單。
 import { onMounted, ref } from 'vue'
 import { productionApi, type MrpRow } from '@/api/production'
 import { useApiError } from '@/composables/useApiError'
@@ -9,12 +10,13 @@ const { handle } = useApiError()
 const rows = ref<MrpRow[]>([])
 const loading = ref(false)
 const shortageOnly = ref(true)
+const weeks = ref(8)
 const num = (v: string) => Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 4 })
 
 async function load() {
   loading.value = true
   try {
-    rows.value = await productionApi.mrp(shortageOnly.value)
+    rows.value = await productionApi.mrp(shortageOnly.value, weeks.value)
   } catch (e) {
     handle(e)
   } finally {
@@ -28,14 +30,43 @@ onMounted(load)
   <div>
     <div class="page-toolbar">
       <span class="hint">
-        淨需求 = 訂單未出貨 + 未完工工單領料 + 上層建議生產帶下來的需求 + 安全庫存 − 現有庫存 −
-        採購在途 − 工單在途。僅供參考,不會自動開單。
+        依預定交期(訂單出貨日、採購預定交貨日、工單預定完工日)分週計算;沒填日期或已逾期的算在第 1
+        週。預計庫存低於安全庫存就建議補貨。僅供參考,不會自動開單。
       </span>
       <span class="spacer" />
+      <span>計算</span>
+      <el-input-number v-model="weeks" :min="1" :max="26" size="small" @change="load" />
+      <span>週</span>
       <el-checkbox v-model="shortageOnly" @change="load">只看需補的料品</el-checkbox>
       <el-button @click="load">重新計算</el-button>
     </div>
     <el-table v-loading="loading" :data="rows" border empty-text="目前沒有需補的料品">
+      <el-table-column type="expand">
+        <template #default="{ row }">
+          <el-table :data="row.buckets" size="small" border class="detail">
+            <el-table-column label="週開始日" prop="start" width="120" />
+            <el-table-column label="毛需求" align="right">
+              <template #default="{ row: b }">{{ num(b.gross) }}</template>
+            </el-table-column>
+            <el-table-column label="預計入庫" align="right">
+              <template #default="{ row: b }">{{ num(b.receipts) }}</template>
+            </el-table-column>
+            <el-table-column label="建議補貨" align="right">
+              <template #default="{ row: b }">
+                <b v-if="Number(b.planned) > 0">{{ num(b.planned) }}</b>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="期末預計庫存" align="right">
+              <template #default="{ row: b }">{{ num(b.projected) }}</template>
+            </el-table-column>
+          </el-table>
+          <div class="muted">
+            前置時間 {{ row.lead_time_days }} 天、最小量 {{ num(row.min_order_qty) }}、批量倍數
+            {{ num(row.order_multiple) }}(到「MRP 計畫參數」設定)
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="item_code" label="料號" width="130" fixed />
       <el-table-column prop="item_name" label="品名" min-width="160" />
       <el-table-column prop="unit_name" label="單位" width="70" />
@@ -64,6 +95,17 @@ onMounted(load)
       <el-table-column label="淨需求" width="100" align="right">
         <template #default="{ row }">{{ num(row.net) }}</template>
       </el-table-column>
+      <el-table-column label="最晚下單日" width="130">
+        <template #default="{ row }">
+          <template v-if="row.release_by">
+            {{ row.release_by }}
+            <el-tooltip content="前置時間來不及:即使今天下單也會晚" :disabled="!row.late">
+              <el-tag v-if="row.late" type="danger" size="small">來不及</el-tag>
+            </el-tooltip>
+          </template>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="建議" width="190" fixed="right">
         <template #default="{ row }">
           <el-tag v-if="row.action === 'make'" type="warning"
@@ -90,6 +132,15 @@ onMounted(load)
 </template>
 
 <style scoped>
+.detail {
+  margin: 8px 16px;
+  width: calc(100% - 32px);
+}
+.muted {
+  margin: 0 16px 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
 .sub-tag {
   margin-left: 6px;
 }

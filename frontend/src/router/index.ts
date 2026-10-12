@@ -146,6 +146,11 @@ const router = createRouter({
       meta: { title: 'BOM', perm: ['production.bom.read', 'production.bom.write'] },
     },
     {
+      path: '/production/mrp-params',
+      component: () => import('@/views/production/MrpParamsView.vue'),
+      meta: { title: 'MRP 計畫參數', perm: ['production.bom.read', 'production.bom.write'] },
+    },
+    {
       path: '/production/mrp',
       component: () => import('@/views/production/MrpView.vue'),
       meta: { title: '需求計算(MRP)', perm: WORK_ORDER_ANY },

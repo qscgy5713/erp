@@ -639,6 +639,59 @@ func TestMrp(t *testing.T) {
 	if r := list("?shortage_only=false")[fg]; r.IncomingWO != "10" {
 		t.Fatalf("成品在途 = %+v", r)
 	}
+	// 計畫參數(D98):材料缺 8,最小量 10、批量 6 → 10 → 進位到 12;前置 5 天
+	expect(t, c.do(http.MethodGet, "/production/mrp?weeks=0", nil), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, c.do(http.MethodGet, "/production/mrp?weeks=27", nil), http.StatusUnprocessableEntity, "SYS-422")
+	pp := "/production/mrp-params/" + itoa(p.item)
+	expect(t, c.do(http.MethodPut, pp, map[string]any{"lead_time_days": 400, "min_order_qty": "10", "order_multiple": "6"}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, c.do(http.MethodPut, pp, map[string]any{"lead_time_days": 5, "min_order_qty": "-1", "order_multiple": "6"}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, c.do(http.MethodPut, "/production/mrp-params/99999", map[string]any{"lead_time_days": 1, "min_order_qty": "0", "order_multiple": "0"}), http.StatusNotFound, "SYS-404")
+	expect(t, c.do(http.MethodPut, pp, map[string]any{"lead_time_days": 5, "min_order_qty": "10", "order_multiple": "6"}), http.StatusNoContent, "")
+	var mr mrpResult
+	for _, r := range decode[[]mrpResult](t, c.do(http.MethodGet, "/production/mrp", nil).Data) {
+		if r.ItemID == p.item {
+			mr = r
+		}
+	}
+	// 工單沒填預定完工日,以工單日期計(已逾期 → 第 0 期),前置 5 天來不及 → late,今天下單
+	if mr.SuggestedQty != "12" || mr.Net != "8" || !mr.Late || mr.ReleaseBy == nil || len(mr.Buckets) != 8 || mr.Buckets[0].Planned != "12" {
+		t.Fatalf("套用批量後 = %+v", mr)
+	}
+	pl := decode[[]struct {
+		ItemID       int64  `json:"item_id"`
+		LeadTimeDays int    `json:"lead_time_days"`
+		MinOrderQty  string `json:"min_order_qty"`
+	}](t, c.do(http.MethodGet, "/production/mrp-params", nil).Data)
+	found := false
+	for _, x := range pl {
+		if x.ItemID == p.item {
+			found = x.LeadTimeDays == 5 && x.MinOrderQty == "10"
+		}
+	}
+	if !found {
+		t.Fatalf("參數列表 = %+v", pl)
+	}
+	expect(t, c.do(http.MethodPut, pp, map[string]any{"lead_time_days": 0, "min_order_qty": "0", "order_multiple": "0"}), http.StatusNoContent, "") // 全 0 = 清除
+	if mr2 := list("")[p.item]; mr2.SuggestedQty != "8" {
+		t.Fatalf("清除參數後 = %+v", mr2)
+	}
+	// 只有 BOM 檢視權限者:可看不可改
+	rd := e.seedRole("bomread", "all", permission.BomRead)
+	e.seedUser("bomreader", pw, false, false, rd.ID)
+	r := e.loggedIn("bomreader", pw)
+	expect(t, r.do(http.MethodGet, "/production/mrp-params", nil), http.StatusOK, "")
+	expect(t, r.do(http.MethodPut, pp, map[string]any{"lead_time_days": 1, "min_order_qty": "0", "order_multiple": "0"}), http.StatusForbidden, "SYS-403")
+}
+
+type mrpResult struct {
+	ItemID       int64   `json:"item_id"`
+	SuggestedQty string  `json:"suggested_qty"`
+	Net          string  `json:"net"`
+	Late         bool    `json:"late"`
+	ReleaseBy    *string `json:"release_by"`
+	Buckets      []struct {
+		Planned string `json:"planned"`
+	} `json:"buckets"`
 }
 
 // TestBomSubstitutes 替代料:驗證、展開時依比例換算、修改時整批取代、納入循環檢查。

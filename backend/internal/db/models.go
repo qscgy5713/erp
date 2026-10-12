@@ -579,6 +579,16 @@ type ItemLot struct {
 	CreatedAt  time.Time
 }
 
+type ItemMrpParam struct {
+	ItemID        int64
+	CompanyID     int64
+	LeadTimeDays  int32
+	MinOrderQty   decimal.Decimal
+	OrderMultiple decimal.Decimal
+	UpdatedBy     *int64
+	UpdatedAt     time.Time
+}
+
 type ItemStandardCost struct {
 	ItemID       int64
 	CompanyID    int64

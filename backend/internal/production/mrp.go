@@ -3,6 +3,7 @@ package production
 import (
 	"context"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -10,17 +11,34 @@ import (
 
 	"erp/internal/db"
 	"erp/internal/platform/database"
+	"erp/internal/shared/apperr"
 	"erp/internal/shared/money"
 	"erp/internal/shared/response"
 )
 
-// MRP 需求計算(D89):唯讀的建議,不產生任何單據。
+// MRP 需求計算(D89、D98):唯讀的建議,不產生任何單據。
 //
-//	淨需求 = 銷售未出貨 + 未完工工單的領料 + 上層建議生產帶下來的需求 + 安全庫存
-//	         − 現有庫存 − 採購在途 − 工單在途
-//
-// 淨需求 > 0 時:有 BOM 的料品建議「生產」(並依 BOM 展開到下一階的需求),沒有 BOM 的建議「採購」。
-// 由上層(成品)往下層(材料)逐階計算。
+// 依交期分成週期(第 0 期 = 今天起第一週,含沒填日期與已逾期的;最後一期含更晚的),由上層(成品)往下層(材料)逐階計算,
+// 每一期:預計庫存 = 上期預計庫存 + 該期預計入庫(採購單、未完工工單)− 該期毛需求(訂單未出貨、未完工工單領料、上層建議生產帶下來的需求);
+// 預計庫存低於安全庫存就在該期建議補貨:數量依最小訂購 / 生產量與批量倍數進位。
+// 有 BOM 的料品建議「生產」(並在「最晚下單日」把材料需求帶到下一階),沒有 BOM 的建議「採購」。
+// 最晚下單日 = 該期開始日 − 前置時間;已經來不及(早於今天)的標示為 late,材料需求從今天算起。
+
+// mrpParam 料品的計畫參數(沒設定全為 0)。
+type mrpParam struct {
+	LeadDays int
+	MinQty   decimal.Decimal
+	Multiple decimal.Decimal
+}
+
+// mrpBucket 單一料品在一個週期的計算結果。
+type mrpBucket struct {
+	Start     string          `json:"start"`     // 該期開始日
+	Gross     decimal.Decimal `json:"gross"`     // 毛需求
+	Receipts  decimal.Decimal `json:"receipts"`  // 預計入庫(採購單 + 工單)
+	Planned   decimal.Decimal `json:"planned"`   // 建議補貨量(計畫入庫)
+	Projected decimal.Decimal `json:"projected"` // 期末預計庫存(含建議補貨)
+}
 
 type mrpRow struct {
 	ItemID       int64           `json:"item_id"`
@@ -37,7 +55,15 @@ type mrpRow struct {
 	IncomingWO   decimal.Decimal `json:"incoming_wo"`   // 工單在途
 	Net          decimal.Decimal `json:"net"`           // 淨需求(≤ 0 代表夠用)
 	Action       string          `json:"action"`        // make 生產 / buy 採購 / none 夠用
-	SuggestedQty decimal.Decimal `json:"suggested_qty"` // 建議數量(= max(淨需求, 0))
+	SuggestedQty decimal.Decimal `json:"suggested_qty"` // 建議數量(各期建議補貨合計,已依批量進位)
+	// 計畫參數與時程
+	LeadTimeDays  int             `json:"lead_time_days"`
+	MinOrderQty   decimal.Decimal `json:"min_order_qty"`
+	OrderMultiple decimal.Decimal `json:"order_multiple"`
+	FirstNeed     *string         `json:"first_need"` // 最早需要補貨的週期開始日
+	ReleaseBy     *string         `json:"release_by"` // 最晚下單日(最早的一筆)
+	Late          bool            `json:"late"`       // 前置時間來不及:即使今天下單也趕不上
+	Buckets       []mrpBucket     `json:"buckets"`
 	// 缺料時的替代料提示(只供參考,不影響淨需求與建議量)
 	Substitutes []mrpSubstitute `json:"substitutes"`
 }
@@ -84,13 +110,75 @@ type bomChild struct {
 	qty    func(parentQty decimal.Decimal) decimal.Decimal
 }
 
-// mrpCompute 純計算,方便測試:bom 為「成品 → 材料」;不在 bom 內的料品視為採購件。
-func mrpCompute(items []db.MrpItemsRow, sales, wo, po, woIn, onHand map[int64]decimal.Decimal, bom map[int64][]bomChild) []mrpRow {
+// mrpInput 計算輸入;各需求 / 供給為「料品 → 每期數量」(長度 Buckets)。
+type mrpInput struct {
+	Today   time.Time // 今天(當地日期,UTC 午夜表示)
+	Buckets int       // 週期數,每期 7 天
+	Sales   map[int64][]decimal.Decimal
+	Wo      map[int64][]decimal.Decimal
+	Po      map[int64][]decimal.Decimal
+	WoIn    map[int64][]decimal.Decimal
+	OnHand  map[int64]decimal.Decimal
+	Params  map[int64]mrpParam
+	Bom     map[int64][]bomChild // 成品 → 材料;不在 bom 內的料品視為採購件
+}
+
+// bucketOf 日期落在第幾期:今天以前(逾期)與沒填日期為 0,超過範圍的併入最後一期。
+func bucketOf(d, today time.Time, n int) int {
+	days := int(d.Sub(today).Hours() / 24)
+	if days < 0 {
+		return 0
+	}
+	return min(days/7, n-1)
+}
+
+func bucketStart(today time.Time, t int) time.Time {
+	if t == 0 {
+		return today
+	}
+	return today.AddDate(0, 0, 7*t)
+}
+
+// lotSize 把需求量進位成實際可下單的量:不足最小量補到最小量,再進位到批量的整數倍。
+func lotSize(need decimal.Decimal, p mrpParam) decimal.Decimal {
+	q := need.Round(money.QuantityPlaces)
+	if p.MinQty.IsPositive() && q.LessThan(p.MinQty) {
+		q = p.MinQty
+	}
+	if p.Multiple.IsPositive() {
+		q = q.Div(p.Multiple).Ceil().Mul(p.Multiple)
+	}
+	return q
+}
+
+func sumQ(xs []decimal.Decimal) decimal.Decimal {
+	t := decimal.Zero
+	for _, x := range xs {
+		t = t.Add(x)
+	}
+	return t
+}
+
+func bucketsOr(m map[int64][]decimal.Decimal, id int64, n int) []decimal.Decimal {
+	if v, ok := m[id]; ok && len(v) == n {
+		return v
+	}
+	return make([]decimal.Decimal, n)
+}
+
+// mrpCompute 純計算,方便測試。
+func mrpCompute(items []db.MrpItemsRow, in mrpInput) []mrpRow {
+	n := max(in.Buckets, 1)
 	byID := map[int64]*mrpRow{}
+	plan := map[int64][]decimal.Decimal{} // 上層建議生產帶下來的各期需求
 	for _, it := range items {
+		sales, wo, po, woIn := bucketsOr(in.Sales, it.ID, n), bucketsOr(in.Wo, it.ID, n), bucketsOr(in.Po, it.ID, n), bucketsOr(in.WoIn, it.ID, n)
+		p := in.Params[it.ID]
 		byID[it.ID] = &mrpRow{ItemID: it.ID, ItemCode: it.Code, ItemName: it.Name, UnitName: it.UnitName,
-			SalesDemand: sales[it.ID], WoDemand: wo[it.ID], SafetyStock: it.SafetyStock, OnHand: onHand[it.ID],
-			IncomingPO: po[it.ID], IncomingWO: woIn[it.ID]}
+			SalesDemand: sumQ(sales), WoDemand: sumQ(wo), SafetyStock: it.SafetyStock, OnHand: in.OnHand[it.ID],
+			IncomingPO: sumQ(po), IncomingWO: sumQ(woIn),
+			LeadTimeDays: p.LeadDays, MinOrderQty: p.MinQty, OrderMultiple: p.Multiple}
+		plan[it.ID] = make([]decimal.Decimal, n)
 	}
 	// 低階碼:料品在所有 BOM 路徑中的最深層數,才能確定「所有上層都算完」才輪到它
 	level := map[int64]int{}
@@ -105,13 +193,13 @@ func mrpCompute(items []db.MrpItemsRow, sales, wo, po, woIn, onHand map[int64]de
 			return
 		}
 		path[id] = true
-		for _, ch := range bom[id] {
+		for _, ch := range in.Bom[id] {
 			depth(ch.itemID, d+1, path)
 		}
 		delete(path, id)
 	}
 	hasParent := map[int64]bool{}
-	for _, chs := range bom {
+	for _, chs := range in.Bom {
 		for _, ch := range chs {
 			hasParent[ch.itemID] = true
 		}
@@ -139,19 +227,61 @@ func mrpCompute(items []db.MrpItemsRow, sales, wo, po, woIn, onHand map[int64]de
 		return 0
 	})
 	for _, r := range order {
-		gross := r.SalesDemand.Add(r.WoDemand).Add(r.PlanDemand).Add(r.SafetyStock)
-		r.Net = gross.Sub(r.OnHand).Sub(r.IncomingPO).Sub(r.IncomingWO)
+		sales, wo, po, woIn := bucketsOr(in.Sales, r.ItemID, n), bucketsOr(in.Wo, r.ItemID, n), bucketsOr(in.Po, r.ItemID, n), bucketsOr(in.WoIn, r.ItemID, n)
+		p := in.Params[r.ItemID]
+		r.PlanDemand = sumQ(plan[r.ItemID])
 		r.Action, r.SuggestedQty = "none", decimal.Zero
-		if r.Net.IsPositive() {
-			r.SuggestedQty = r.Net.Round(money.QuantityPlaces)
-			r.Action = "buy"
-			if chs, ok := bom[r.ItemID]; ok {
-				r.Action = "make"
-				for _, ch := range chs {
-					if c, ok := byID[ch.itemID]; ok {
-						c.PlanDemand = c.PlanDemand.Add(ch.qty(r.SuggestedQty))
+		r.Buckets = make([]mrpBucket, n)
+		proj, totalNeed := r.OnHand, decimal.Zero
+		var relMin *time.Time
+		for t := range n {
+			gross := sales[t].Add(wo[t]).Add(plan[r.ItemID][t])
+			rec := po[t].Add(woIn[t])
+			avail := proj.Add(rec).Sub(gross)
+			planned := decimal.Zero
+			if avail.LessThan(r.SafetyStock) {
+				need := r.SafetyStock.Sub(avail)
+				planned = lotSize(need, p)
+				totalNeed = totalNeed.Add(need)
+				avail = avail.Add(planned)
+				// 最晚下單日;來不及就從今天算起,並標示 late
+				start := bucketStart(in.Today, t)
+				rel := start.AddDate(0, 0, -p.LeadDays)
+				if rel.Before(in.Today) {
+					rel, r.Late = in.Today, true
+				}
+				if relMin == nil || rel.Before(*relMin) {
+					rm := rel
+					relMin = &rm
+				}
+				if r.FirstNeed == nil {
+					fs := start.Format(time.DateOnly)
+					r.FirstNeed = &fs
+				}
+				r.SuggestedQty = r.SuggestedQty.Add(planned)
+				if chs, ok := in.Bom[r.ItemID]; ok {
+					rb := bucketOf(rel, in.Today, n)
+					for _, ch := range chs {
+						if _, ok := byID[ch.itemID]; ok {
+							plan[ch.itemID][rb] = plan[ch.itemID][rb].Add(ch.qty(planned))
+						}
 					}
 				}
+			}
+			proj = avail
+			r.Buckets[t] = mrpBucket{Start: bucketStart(in.Today, t).Format(time.DateOnly), Gross: gross, Receipts: rec, Planned: planned, Projected: avail}
+		}
+		if relMin != nil {
+			rs := relMin.Format(time.DateOnly)
+			r.ReleaseBy = &rs
+		}
+		// 淨需求:有補貨需求時為各期缺口合計;否則為總量淨額(負數 = 有剩餘)
+		r.Net = r.SalesDemand.Add(r.WoDemand).Add(r.PlanDemand).Add(r.SafetyStock).Sub(r.OnHand).Sub(r.IncomingPO).Sub(r.IncomingWO)
+		if totalNeed.IsPositive() {
+			r.Net = totalNeed
+			r.Action = "buy"
+			if _, ok := in.Bom[r.ItemID]; ok {
+				r.Action = "make"
 			}
 		}
 	}
@@ -166,6 +296,20 @@ func order2rows(order []*mrpRow) []mrpRow {
 	return out
 }
 
+// phased 把 (料品, 日期, 數量) 依日期分到各期。
+func phased[T any](rows []T, today time.Time, n int, get func(T) (int64, time.Time, decimal.Decimal)) map[int64][]decimal.Decimal {
+	m := map[int64][]decimal.Decimal{}
+	for _, r := range rows {
+		id, due, q := get(r)
+		if m[id] == nil {
+			m[id] = make([]decimal.Decimal, n)
+		}
+		b := bucketOf(due, today, n)
+		m[id][b] = m[id][b].Add(q)
+	}
+	return m
+}
+
 func qtyMap[T any](rows []T, get func(T) (int64, decimal.Decimal)) map[int64]decimal.Decimal {
 	m := map[int64]decimal.Decimal{}
 	for _, r := range rows {
@@ -175,17 +319,28 @@ func qtyMap[T any](rows []T, get func(T) (int64, decimal.Decimal)) map[int64]dec
 	return m
 }
 
-// mrp GET /production/mrp?shortage_only=true 需求計算;預設只列需補的料品;shortage_only=false 列出所有有需求、庫存或在途的料品。
+// mrp GET /production/mrp?shortage_only=true&weeks=8 需求計算;預設只列需補的料品;shortage_only=false 列出所有有需求、庫存或在途的料品。
 func (m *Module) mrp(c *gin.Context) {
 	ctx := c.Request.Context()
 	companyID := actor(c).CompanyID
 	q := m.store.Queries
+	weeks := 8
+	if w := c.Query("weeks"); w != "" {
+		v, err := strconv.Atoi(w)
+		if err != nil || v < 1 || v > 26 {
+			response.Error(c, apperr.Validation(map[string]string{"weeks": "週數須為 1 到 26"}))
+			return
+		}
+		weeks = v
+	}
+	now := time.Now().In(time.FixedZone("TST", 8*3600))
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	items, err := q.MrpItems(ctx, companyID)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	sales, err := q.MrpSalesDemand(ctx, companyID)
+	sales, err := q.MrpSalesDemand(ctx, db.MrpSalesDemandParams{CompanyID: companyID, Today: today})
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -195,7 +350,7 @@ func (m *Module) mrp(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	po, err := q.MrpPurchaseSupply(ctx, companyID)
+	po, err := q.MrpPurchaseSupply(ctx, db.MrpPurchaseSupplyParams{CompanyID: companyID, Today: today})
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -210,18 +365,29 @@ func (m *Module) mrp(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	bom, bomIDs, err := loadBomGraph(ctx, q, companyID, time.Now().In(time.FixedZone("TST", 8*3600)))
+	params, err := q.MrpParams(ctx, companyID)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	rows := mrpCompute(items,
-		qtyMap(sales, func(r db.MrpSalesDemandRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
-		qtyMap(woD, func(r db.MrpWorkOrderDemandRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
-		qtyMap(po, func(r db.MrpPurchaseSupplyRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
-		qtyMap(woS, func(r db.MrpWorkOrderSupplyRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
-		qtyMap(onHand, func(r db.MrpOnHandRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
-		bom)
+	pm := map[int64]mrpParam{}
+	for _, p := range params {
+		pm[p.ItemID] = mrpParam{LeadDays: int(p.LeadTimeDays), MinQty: p.MinOrderQty, Multiple: p.OrderMultiple}
+	}
+	bom, bomIDs, err := loadBomGraph(ctx, q, companyID, now)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	rows := mrpCompute(items, mrpInput{
+		Today: today, Buckets: weeks,
+		Sales:  phased(sales, today, weeks, func(r db.MrpSalesDemandRow) (int64, time.Time, decimal.Decimal) { return r.ItemID, r.Due, r.Qty }),
+		Wo:     phased(woD, today, weeks, func(r db.MrpWorkOrderDemandRow) (int64, time.Time, decimal.Decimal) { return r.ItemID, r.Due, r.Qty }),
+		Po:     phased(po, today, weeks, func(r db.MrpPurchaseSupplyRow) (int64, time.Time, decimal.Decimal) { return r.ItemID, r.Due, r.Qty }),
+		WoIn:   phased(woS, today, weeks, func(r db.MrpWorkOrderSupplyRow) (int64, time.Time, decimal.Decimal) { return r.ItemID, r.Due, r.Qty }),
+		OnHand: qtyMap(onHand, func(r db.MrpOnHandRow) (int64, decimal.Decimal) { return r.ItemID, r.Qty }),
+		Params: pm, Bom: bom,
+	})
 	subRows, err := q.MrpSubstituteEdges(ctx, bomIDs)
 	if err != nil {
 		response.Error(c, err)

@@ -34,6 +34,9 @@ func (m *Module) Register(r *gin.RouterGroup) {
 
 	orderRead := auth.Require(permission.WorkOrderRead, permission.WorkOrderWrite, permission.WorkOrderApprove, permission.WorkOrderPost)
 	g.GET("/mrp", orderRead, m.mrp)
+	// MRP 計畫參數(D98):前置時間、最小訂購量、批量倍數
+	g.GET("/mrp-params", bomRead, m.listMrpParams)
+	g.PUT("/mrp-params/:item_id", auth.Require(permission.BomWrite), m.setMrpParams)
 	g.GET("/work-orders", orderRead, m.listOrders)
 	g.GET("/work-orders/explode", auth.Require(permission.WorkOrderWrite, permission.WorkOrderRead), m.explode)
 	g.GET("/work-orders/:id", orderRead, m.getOrder)

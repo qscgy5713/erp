@@ -241,6 +241,24 @@ func (q *Queries) CountCompletionsOfOrder(ctx context.Context, workOrderID int64
 	return count, err
 }
 
+const countMrpParams = `-- name: CountMrpParams :one
+SELECT count(*) FROM items i
+WHERE i.company_id = $1 AND i.is_active AND i.item_type = 'goods'
+  AND ($2::text IS NULL OR i.code ILIKE '%' || $2 || '%' OR i.name ILIKE '%' || $2 || '%')
+`
+
+type CountMrpParamsParams struct {
+	CompanyID int64
+	Keyword   *string
+}
+
+func (q *Queries) CountMrpParams(ctx context.Context, arg CountMrpParamsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMrpParams, arg.CompanyID, arg.Keyword)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countWorkOrders = `-- name: CountWorkOrders :one
 SELECT count(*) FROM work_orders w JOIN items i ON i.id = w.item_id
 WHERE w.company_id = $1
@@ -475,6 +493,20 @@ DELETE FROM bom_lines WHERE bom_id = $1
 
 func (q *Queries) DeleteBomLines(ctx context.Context, bomID int64) error {
 	_, err := q.db.Exec(ctx, deleteBomLines, bomID)
+	return err
+}
+
+const deleteMrpParams = `-- name: DeleteMrpParams :exec
+DELETE FROM item_mrp_params WHERE item_id = $1 AND company_id = $2
+`
+
+type DeleteMrpParamsParams struct {
+	ItemID    int64
+	CompanyID int64
+}
+
+func (q *Queries) DeleteMrpParams(ctx context.Context, arg DeleteMrpParamsParams) error {
+	_, err := q.db.Exec(ctx, deleteMrpParams, arg.ItemID, arg.CompanyID)
 	return err
 }
 
@@ -1020,6 +1052,73 @@ func (q *Queries) ListCompletions(ctx context.Context, workOrderID int64) ([]Lis
 	return items, nil
 }
 
+const listMrpParams = `-- name: ListMrpParams :many
+SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+       COALESCE(p.lead_time_days, 0)::int AS lead_time_days,
+       COALESCE(p.min_order_qty, 0)::numeric AS min_order_qty,
+       COALESCE(p.order_multiple, 0)::numeric AS order_multiple,
+       EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active) AS has_bom
+FROM items i JOIN units u ON u.id = i.base_unit_id
+LEFT JOIN item_mrp_params p ON p.item_id = i.id
+WHERE i.company_id = $1 AND i.is_active AND i.item_type = 'goods'
+  AND ($2::text IS NULL OR i.code ILIKE '%' || $2 || '%' OR i.name ILIKE '%' || $2 || '%')
+ORDER BY i.code
+LIMIT $4 OFFSET $3
+`
+
+type ListMrpParamsParams struct {
+	CompanyID int64
+	Keyword   *string
+	Off       int32
+	Lim       int32
+}
+
+type ListMrpParamsRow struct {
+	ItemID        int64
+	ItemCode      string
+	ItemName      string
+	UnitName      string
+	LeadTimeDays  int32
+	MinOrderQty   decimal.Decimal
+	OrderMultiple decimal.Decimal
+	HasBom        bool
+}
+
+// 啟用中的商品類料品與其 MRP 參數(沒設定的參數為 0)
+func (q *Queries) ListMrpParams(ctx context.Context, arg ListMrpParamsParams) ([]ListMrpParamsRow, error) {
+	rows, err := q.db.Query(ctx, listMrpParams,
+		arg.CompanyID,
+		arg.Keyword,
+		arg.Off,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMrpParamsRow{}
+	for rows.Next() {
+		var i ListMrpParamsRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.ItemCode,
+			&i.ItemName,
+			&i.UnitName,
+			&i.LeadTimeDays,
+			&i.MinOrderQty,
+			&i.OrderMultiple,
+			&i.HasBom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProductionItems = `-- name: ListProductionItems :many
 SELECT id, code, name, item_type, is_active, lot_control FROM items
 WHERE company_id = $1 AND id = ANY($2::bigint[])
@@ -1453,8 +1552,63 @@ func (q *Queries) MrpOnHand(ctx context.Context, companyID int64) ([]MrpOnHandRo
 	return items, nil
 }
 
+const mrpParams = `-- name: MrpParams :many
+
+SELECT item_id, lead_time_days, min_order_qty, order_multiple FROM item_mrp_params WHERE company_id = $1
+`
+
+type MrpParamsRow struct {
+	ItemID        int64
+	LeadTimeDays  int32
+	MinOrderQty   decimal.Decimal
+	OrderMultiple decimal.Decimal
+}
+
+// ======== MRP 計畫參數(D98) ========
+func (q *Queries) MrpParams(ctx context.Context, companyID int64) ([]MrpParamsRow, error) {
+	rows, err := q.db.Query(ctx, mrpParams, companyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MrpParamsRow{}
+	for rows.Next() {
+		var i MrpParamsRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.LeadTimeDays,
+			&i.MinOrderQty,
+			&i.OrderMultiple,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mrpParamsItemOK = `-- name: MrpParamsItemOK :one
+SELECT EXISTS (SELECT 1 FROM items WHERE id = $1 AND company_id = $2 AND item_type = 'goods')
+`
+
+type MrpParamsItemOKParams struct {
+	ID        int64
+	CompanyID int64
+}
+
+func (q *Queries) MrpParamsItemOK(ctx context.Context, arg MrpParamsItemOKParams) (bool, error) {
+	row := q.db.QueryRow(ctx, mrpParamsItemOK, arg.ID, arg.CompanyID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const mrpPurchaseSupply = `-- name: MrpPurchaseSupply :many
-SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
+SELECT l.item_id, COALESCE(o.expected_date, $1::date)::date AS due,
+       COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
 FROM purchase_order_lines l
 JOIN purchase_orders o ON o.id = l.order_id
 CROSS JOIN LATERAL (
@@ -1462,18 +1616,24 @@ CROSS JOIN LATERAL (
     JOIN goods_receipts r ON r.id = rl.receipt_id
     WHERE rl.po_line_id = l.id AND r.status = 'posted'
 ) rec
-WHERE o.company_id = $1 AND o.status = 'approved' AND l.qty > rec.received_qty
-GROUP BY l.item_id
+WHERE o.company_id = $2 AND o.status = 'approved' AND l.qty > rec.received_qty
+GROUP BY l.item_id, due
 `
+
+type MrpPurchaseSupplyParams struct {
+	Today     time.Time
+	CompanyID int64
+}
 
 type MrpPurchaseSupplyRow struct {
 	ItemID int64
+	Due    time.Time
 	Qty    decimal.Decimal
 }
 
 // 已核准採購單尚未進貨的量(基本單位)
-func (q *Queries) MrpPurchaseSupply(ctx context.Context, companyID int64) ([]MrpPurchaseSupplyRow, error) {
-	rows, err := q.db.Query(ctx, mrpPurchaseSupply, companyID)
+func (q *Queries) MrpPurchaseSupply(ctx context.Context, arg MrpPurchaseSupplyParams) ([]MrpPurchaseSupplyRow, error) {
+	rows, err := q.db.Query(ctx, mrpPurchaseSupply, arg.Today, arg.CompanyID)
 	if err != nil {
 		return nil, err
 	}
@@ -1481,7 +1641,7 @@ func (q *Queries) MrpPurchaseSupply(ctx context.Context, companyID int64) ([]Mrp
 	items := []MrpPurchaseSupplyRow{}
 	for rows.Next() {
 		var i MrpPurchaseSupplyRow
-		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+		if err := rows.Scan(&i.ItemID, &i.Due, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1493,7 +1653,8 @@ func (q *Queries) MrpPurchaseSupply(ctx context.Context, companyID int64) ([]Mrp
 }
 
 const mrpSalesDemand = `-- name: MrpSalesDemand :many
-SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
+SELECT l.item_id, COALESCE(o.delivery_date, $1::date)::date AS due,
+       COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
 FROM sales_order_lines l
 JOIN sales_orders o ON o.id = l.order_id
 CROSS JOIN LATERAL (
@@ -1501,18 +1662,24 @@ CROSS JOIN LATERAL (
     JOIN deliveries d ON d.id = dl.delivery_id
     WHERE dl.so_line_id = l.id AND d.status = 'posted'
 ) dlv
-WHERE o.company_id = $1 AND o.doc_type = 'order' AND o.status = 'approved' AND l.qty > dlv.delivered_qty
-GROUP BY l.item_id
+WHERE o.company_id = $2 AND o.doc_type = 'order' AND o.status = 'approved' AND l.qty > dlv.delivered_qty
+GROUP BY l.item_id, due
 `
+
+type MrpSalesDemandParams struct {
+	Today     time.Time
+	CompanyID int64
+}
 
 type MrpSalesDemandRow struct {
 	ItemID int64
+	Due    time.Time
 	Qty    decimal.Decimal
 }
 
 // 已核准訂單尚未出貨的量(基本單位)
-func (q *Queries) MrpSalesDemand(ctx context.Context, companyID int64) ([]MrpSalesDemandRow, error) {
-	rows, err := q.db.Query(ctx, mrpSalesDemand, companyID)
+func (q *Queries) MrpSalesDemand(ctx context.Context, arg MrpSalesDemandParams) ([]MrpSalesDemandRow, error) {
+	rows, err := q.db.Query(ctx, mrpSalesDemand, arg.Today, arg.CompanyID)
 	if err != nil {
 		return nil, err
 	}
@@ -1520,7 +1687,7 @@ func (q *Queries) MrpSalesDemand(ctx context.Context, companyID int64) ([]MrpSal
 	items := []MrpSalesDemandRow{}
 	for rows.Next() {
 		var i MrpSalesDemandRow
-		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+		if err := rows.Scan(&i.ItemID, &i.Due, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1566,14 +1733,16 @@ func (q *Queries) MrpSubstituteEdges(ctx context.Context, bomIds []int64) ([]Mrp
 }
 
 const mrpWorkOrderDemand = `-- name: MrpWorkOrderDemand :many
-SELECT l.item_id, SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
+SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
+       SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
 FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
 LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY l.item_id
+WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY l.item_id, due
 `
 
 type MrpWorkOrderDemandRow struct {
 	ItemID int64
+	Due    time.Time
 	Qty    decimal.Decimal
 }
 
@@ -1587,7 +1756,7 @@ func (q *Queries) MrpWorkOrderDemand(ctx context.Context, companyID int64) ([]Mr
 	items := []MrpWorkOrderDemandRow{}
 	for rows.Next() {
 		var i MrpWorkOrderDemandRow
-		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+		if err := rows.Scan(&i.ItemID, &i.Due, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1599,13 +1768,15 @@ func (q *Queries) MrpWorkOrderDemand(ctx context.Context, companyID int64) ([]Mr
 }
 
 const mrpWorkOrderSupply = `-- name: MrpWorkOrderSupply :many
-SELECT w.item_id, SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
+SELECT w.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
+       SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
 LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY w.item_id
+WHERE w.company_id = $1 AND w.status IN ('pending', 'approved') GROUP BY w.item_id, due
 `
 
 type MrpWorkOrderSupplyRow struct {
 	ItemID int64
+	Due    time.Time
 	Qty    decimal.Decimal
 }
 
@@ -1619,7 +1790,7 @@ func (q *Queries) MrpWorkOrderSupply(ctx context.Context, companyID int64) ([]Mr
 	items := []MrpWorkOrderSupplyRow{}
 	for rows.Next() {
 		var i MrpWorkOrderSupplyRow
-		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
+		if err := rows.Scan(&i.ItemID, &i.Due, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1918,6 +2089,34 @@ func (q *Queries) UpdateWorkOrderHeader(ctx context.Context, arg UpdateWorkOrder
 		&i.OutputBinCode,
 	)
 	return i, err
+}
+
+const upsertMrpParams = `-- name: UpsertMrpParams :exec
+INSERT INTO item_mrp_params (item_id, company_id, lead_time_days, min_order_qty, order_multiple, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (item_id) DO UPDATE SET lead_time_days = EXCLUDED.lead_time_days, min_order_qty = EXCLUDED.min_order_qty,
+    order_multiple = EXCLUDED.order_multiple, updated_by = EXCLUDED.updated_by, updated_at = now()
+`
+
+type UpsertMrpParamsParams struct {
+	ItemID        int64
+	CompanyID     int64
+	LeadTimeDays  int32
+	MinOrderQty   decimal.Decimal
+	OrderMultiple decimal.Decimal
+	ActorID       *int64
+}
+
+func (q *Queries) UpsertMrpParams(ctx context.Context, arg UpsertMrpParamsParams) error {
+	_, err := q.db.Exec(ctx, upsertMrpParams,
+		arg.ItemID,
+		arg.CompanyID,
+		arg.LeadTimeDays,
+		arg.MinOrderQty,
+		arg.OrderMultiple,
+		arg.ActorID,
+	)
+	return err
 }
 
 const voidCompletion = `-- name: VoidCompletion :exec

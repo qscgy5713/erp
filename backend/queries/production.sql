@@ -228,7 +228,8 @@ WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods';
 
 -- name: MrpSalesDemand :many
 -- 已核准訂單尚未出貨的量(基本單位)
-SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
+SELECT l.item_id, COALESCE(o.delivery_date, @today::date)::date AS due,
+       COALESCE(SUM(l.base_qty * (l.qty - dlv.delivered_qty) / l.qty), 0)::numeric AS qty
 FROM sales_order_lines l
 JOIN sales_orders o ON o.id = l.order_id
 CROSS JOIN LATERAL (
@@ -237,11 +238,12 @@ CROSS JOIN LATERAL (
     WHERE dl.so_line_id = l.id AND d.status = 'posted'
 ) dlv
 WHERE o.company_id = @company_id AND o.doc_type = 'order' AND o.status = 'approved' AND l.qty > dlv.delivered_qty
-GROUP BY l.item_id;
+GROUP BY l.item_id, due;
 
 -- name: MrpPurchaseSupply :many
 -- 已核准採購單尚未進貨的量(基本單位)
-SELECT l.item_id, COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
+SELECT l.item_id, COALESCE(o.expected_date, @today::date)::date AS due,
+       COALESCE(SUM(l.base_qty * (l.qty - rec.received_qty) / l.qty), 0)::numeric AS qty
 FROM purchase_order_lines l
 JOIN purchase_orders o ON o.id = l.order_id
 CROSS JOIN LATERAL (
@@ -250,20 +252,22 @@ CROSS JOIN LATERAL (
     WHERE rl.po_line_id = l.id AND r.status = 'posted'
 ) rec
 WHERE o.company_id = @company_id AND o.status = 'approved' AND l.qty > rec.received_qty
-GROUP BY l.item_id;
+GROUP BY l.item_id, due;
 
 -- name: MrpWorkOrderSupply :many
 -- 尚未完工(待審 / 已核准)的工單預計入庫量(扣掉已分批完工的部分)
-SELECT w.item_id, SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
+SELECT w.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
+       SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
 LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY w.item_id;
+WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY w.item_id, due;
 
 -- name: MrpWorkOrderDemand :many
 -- 尚未完工(待審 / 已核准)的工單領料量(依剩餘未完工比例;分批完工的工單只算還沒做的部分)
-SELECT l.item_id, SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
+SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
+       SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
 FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
 LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY l.item_id;
+WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY l.item_id, due;
 
 -- name: MrpOnHand :many
 SELECT item_id, SUM(qty)::numeric AS qty FROM inventory_balances WHERE company_id = @company_id GROUP BY item_id;
@@ -326,3 +330,39 @@ FROM inventory_transactions t JOIN item_lots l ON l.id = t.lot_id
 WHERE t.source_type IN ('wo_completion_issue', 'wo_completion_receipt') AND t.source_id = @completion_id
   AND t.reversal_of IS NULL AND NOT EXISTS (SELECT 1 FROM inventory_transactions r WHERE r.reversal_of = t.id)
 ORDER BY t.id;
+
+-- ======== MRP 計畫參數(D98) ========
+
+-- name: MrpParams :many
+SELECT item_id, lead_time_days, min_order_qty, order_multiple FROM item_mrp_params WHERE company_id = @company_id;
+
+-- name: ListMrpParams :many
+-- 啟用中的商品類料品與其 MRP 參數(沒設定的參數為 0)
+SELECT i.id AS item_id, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+       COALESCE(p.lead_time_days, 0)::int AS lead_time_days,
+       COALESCE(p.min_order_qty, 0)::numeric AS min_order_qty,
+       COALESCE(p.order_multiple, 0)::numeric AS order_multiple,
+       EXISTS (SELECT 1 FROM boms b WHERE b.item_id = i.id AND b.is_active) AS has_bom
+FROM items i JOIN units u ON u.id = i.base_unit_id
+LEFT JOIN item_mrp_params p ON p.item_id = i.id
+WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
+  AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%')
+ORDER BY i.code
+LIMIT @lim OFFSET @off;
+
+-- name: CountMrpParams :one
+SELECT count(*) FROM items i
+WHERE i.company_id = @company_id AND i.is_active AND i.item_type = 'goods'
+  AND (sqlc.narg(keyword)::text IS NULL OR i.code ILIKE '%' || sqlc.narg(keyword) || '%' OR i.name ILIKE '%' || sqlc.narg(keyword) || '%');
+
+-- name: UpsertMrpParams :exec
+INSERT INTO item_mrp_params (item_id, company_id, lead_time_days, min_order_qty, order_multiple, updated_by)
+VALUES (@item_id, @company_id, @lead_time_days, @min_order_qty, @order_multiple, @actor_id)
+ON CONFLICT (item_id) DO UPDATE SET lead_time_days = EXCLUDED.lead_time_days, min_order_qty = EXCLUDED.min_order_qty,
+    order_multiple = EXCLUDED.order_multiple, updated_by = EXCLUDED.updated_by, updated_at = now();
+
+-- name: DeleteMrpParams :exec
+DELETE FROM item_mrp_params WHERE item_id = @item_id AND company_id = @company_id;
+
+-- name: MrpParamsItemOK :one
+SELECT EXISTS (SELECT 1 FROM items WHERE id = @id AND company_id = @company_id AND item_type = 'goods');

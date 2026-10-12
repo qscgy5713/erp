@@ -15,6 +15,13 @@
 - Email 通知:dev DB `notifications` 有 approval_pending 33 筆皆 `sent`、test 1 筆 `sent`,實際簽核流程有觸發並寄出。
 - 窄螢幕(390px,用 iframe 模擬,因 Chrome 視窗無法縮):無橫向溢出,但側欄固定 200px 無收合,內容區僅剩約 190px,標題被擠成直排、表格難用。已修:<768px 時側欄改為抽屜(標題列 ☰ 開啟,換頁自動收起),內容區全寬、對話框不超出螢幕(`AppLayout.vue`);寬螢幕行為不變。
 
+## 2026-10-12 MRP 進階:前置時間、批量、分期需求(D98)
+
+- migration 000039 `item_mrp_params`;`queries/production.sql` 的 MRP 需求 / 供給改為依日期分組(今天由程式傳入,以台灣時區),新增 `MrpParams` 與參數維護查詢。
+- `internal/production/mrp.go` 重寫為分週計算:`mrpInput`、`bucketOf`、`lotSize`;依階層由上往下,建議生產的材料需求放在「最晚下單週」。新增 `mrp_params.go`(列表 / 設定)。
+- 前端:需求計算可選週數、列出最晚下單日與「來不及」,展開看各週明細;新增「MRP 計畫參數」頁(生產選單)。
+- 測試:單元測試補時程、批量進位、前置時間來不及、邊界;`TestMrp` 補週數驗證、參數驗證 / 權限、套用批量與清除。瀏覽器看了需求計算頁與展開明細。
+
 ## 2026-10-12 成本差異拆解(D97)
 
 - `queries/costing.sql` 新增 `VarianceBomLines`、`VarianceActualMaterials`、`StandardCostsOf`;`internal/costing/variance.go` 計算用量 / 價格 / 加工費差異(加工費為殘差,三者恆等於總差異);`GET /costing/variance` 每列多一個 `breakdown`。

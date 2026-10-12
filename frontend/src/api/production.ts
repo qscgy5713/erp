@@ -227,6 +227,16 @@ export interface MrpRow {
   net: Decimal
   action: 'make' | 'buy' | 'none'
   suggested_qty: Decimal
+  lead_time_days: number
+  min_order_qty: Decimal
+  order_multiple: Decimal
+  /** 最早需要補貨的週期開始日 */
+  first_need: string | null
+  /** 最晚下單日(最早的一筆) */
+  release_by: string | null
+  /** 前置時間來不及:即使今天下單也趕不上 */
+  late: boolean
+  buckets: MrpBucket[]
   substitutes: {
     item_id: number
     item_code: string
@@ -237,9 +247,37 @@ export interface MrpRow {
   }[]
 }
 
+export interface MrpBucket {
+  start: string
+  gross: Decimal
+  receipts: Decimal
+  planned: Decimal
+  projected: Decimal
+}
+
+export interface MrpParam {
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  lead_time_days: number
+  min_order_qty: Decimal
+  order_multiple: Decimal
+  has_bom: boolean
+}
+
+export interface MrpParamInput {
+  lead_time_days: number
+  min_order_qty: string
+  order_multiple: string
+}
+
 export const productionApi = {
-  mrp: (shortageOnly = true) =>
-    http.get<MrpRow[]>(`/production/mrp${shortageOnly ? '' : '?shortage_only=false'}`),
+  mrp: (shortageOnly = true, weeks = 8) =>
+    http.get<MrpRow[]>(`/production/mrp${qs({ shortage_only: shortageOnly, weeks })}`),
+  mrpParams: (q: Q) => requestPage<MrpParam>(`/production/mrp-params${qs(q)}`),
+  setMrpParams: (item_id: number, input: MrpParamInput) =>
+    http.put<unknown>(`/production/mrp-params/${item_id}`, input),
   boms: (q: Q) => requestPage<BomRow>(`/production/boms${qs(q)}`),
   bom: (id: number) => http.get<Bom>(`/production/boms/${id}`),
   createBom: (input: BomInput) => http.post<Bom>('/production/boms', input),
