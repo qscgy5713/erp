@@ -832,7 +832,7 @@ onMounted(async () => {
   loading.value = true
   try {
     ;[warehouses.value, currencies.value, taxTypes.value, paymentTerms.value] = await Promise.all([
-      masterdataApi.warehouses(),
+      masterdataApi.normalWarehouses(),
       masterdataApi.currencies(),
       masterdataApi.taxTypes(),
       masterdataApi.paymentTerms(),

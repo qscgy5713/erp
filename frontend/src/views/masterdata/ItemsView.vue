@@ -168,7 +168,7 @@ onMounted(async () => {
       masterdataApi.units(),
       masterdataApi.categories(),
       masterdataApi.taxTypes(),
-      masterdataApi.warehouses(),
+      masterdataApi.normalWarehouses(),
     ])
   } catch (e) {
     dlg.handleError(e)

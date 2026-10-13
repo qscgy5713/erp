@@ -243,12 +243,14 @@ type warehouseDTO struct {
 	AllowNegative bool   `json:"allow_negative"`
 	UseBins       bool   `json:"use_bins"`
 	IsActive      bool   `json:"is_active"`
+	Kind          string `json:"kind"`        // normal / subcontract(加工廠的委外倉,D100)
+	SupplierID    *int64 `json:"supplier_id"` // 委外倉對應的加工廠
 	Version       int32  `json:"version"`
 }
 
 func toWarehouseDTO(w db.Warehouse) warehouseDTO {
 	return warehouseDTO{ID: w.ID, Code: w.Code, Name: w.Name, Address: w.Address, AllowNegative: w.AllowNegative,
-		UseBins: w.UseBins, IsActive: w.IsActive, Version: w.Version}
+		UseBins: w.UseBins, IsActive: w.IsActive, Kind: w.Kind, SupplierID: w.SupplierID, Version: w.Version}
 }
 
 func (m *Module) listWarehouses(c *gin.Context) {

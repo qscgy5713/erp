@@ -876,6 +876,65 @@ type StockDocumentLine struct {
 	ToBinCode  string
 }
 
+type SubcontractOrder struct {
+	ID                 int64
+	CompanyID          int64
+	DocNo              string
+	DocDate            time.Time
+	SupplierID         int64
+	ItemID             int64
+	PlanQty            decimal.Decimal
+	UnitFee            decimal.Decimal
+	IssueWarehouseID   int64
+	ReceiveWarehouseID int64
+	ScWarehouseID      int64
+	DueDate            *time.Time
+	Status             string
+	Note               string
+	CreatedBy          *int64
+	UpdatedBy          *int64
+	Version            int32
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type SubcontractOrderLine struct {
+	OrderID int64
+	LineNo  int32
+	ItemID  int64
+	Qty     decimal.Decimal
+	Note    string
+}
+
+type SubcontractTxn struct {
+	ID            int64
+	CompanyID     int64
+	OrderID       int64
+	Kind          string
+	DocNo         string
+	DocDate       time.Time
+	Qty           decimal.Decimal
+	ProcessingFee decimal.Decimal
+	OutputLotNo   string
+	OutputExpiry  *time.Time
+	OutputBinCode string
+	Note          string
+	Status        string
+	CreatedBy     *int64
+	CreatedAt     time.Time
+	VoidedBy      *int64
+	VoidedAt      *time.Time
+}
+
+type SubcontractTxnLine struct {
+	TxnID   int64
+	LineNo  int32
+	ItemID  int64
+	Qty     decimal.Decimal
+	LotNo   string
+	BinCode string
+}
+
 type Supplier struct {
 	ID            int64
 	CompanyID     int64
@@ -1041,6 +1100,8 @@ type Warehouse struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	UseBins       bool
+	Kind          string
+	SupplierID    *int64
 }
 
 type WorkOrder struct {

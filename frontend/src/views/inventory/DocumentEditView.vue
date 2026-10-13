@@ -307,7 +307,7 @@ async function runAction(action: DocAction) {
 onMounted(async () => {
   try {
     ;[warehouses.value, categories.value] = await Promise.all([
-      masterdataApi.warehouses(),
+      masterdataApi.normalWarehouses(),
       masterdataApi.categories(),
     ])
   } catch (e) {

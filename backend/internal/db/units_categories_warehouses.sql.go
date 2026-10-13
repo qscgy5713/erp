@@ -107,7 +107,7 @@ func (q *Queries) CreateUnit(ctx context.Context, arg CreateUnitParams) (Unit, e
 const createWarehouse = `-- name: CreateWarehouse :one
 INSERT INTO warehouses (company_id, code, name, address, allow_negative, use_bins, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins
+RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins, kind, supplier_id
 `
 
 type CreateWarehouseParams struct {
@@ -145,6 +145,8 @@ func (q *Queries) CreateWarehouse(ctx context.Context, arg CreateWarehouseParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UseBins,
+		&i.Kind,
+		&i.SupplierID,
 	)
 	return i, err
 }
@@ -206,7 +208,7 @@ func (q *Queries) GetUnit(ctx context.Context, arg GetUnitParams) (Unit, error) 
 }
 
 const getWarehouse = `-- name: GetWarehouse :one
-SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins FROM warehouses WHERE id = $1 AND company_id = $2
+SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins, kind, supplier_id FROM warehouses WHERE id = $1 AND company_id = $2
 `
 
 type GetWarehouseParams struct {
@@ -231,6 +233,8 @@ func (q *Queries) GetWarehouse(ctx context.Context, arg GetWarehouseParams) (War
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UseBins,
+		&i.Kind,
+		&i.SupplierID,
 	)
 	return i, err
 }
@@ -349,7 +353,7 @@ func (q *Queries) ListUnits(ctx context.Context, companyID int64) ([]Unit, error
 }
 
 const listWarehouses = `-- name: ListWarehouses :many
-SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins FROM warehouses WHERE company_id = $1 ORDER BY code
+SELECT id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins, kind, supplier_id FROM warehouses WHERE company_id = $1 ORDER BY code
 `
 
 func (q *Queries) ListWarehouses(ctx context.Context, companyID int64) ([]Warehouse, error) {
@@ -375,6 +379,8 @@ func (q *Queries) ListWarehouses(ctx context.Context, companyID int64) ([]Wareho
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.UseBins,
+			&i.Kind,
+			&i.SupplierID,
 		); err != nil {
 			return nil, err
 		}
@@ -484,7 +490,7 @@ UPDATE warehouses
 SET code = $1, name = $2, address = $3, allow_negative = $4, use_bins = $5,
     is_active = $6, version = version + 1, updated_by = $7
 WHERE id = $8 AND company_id = $9 AND version = $10
-RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins
+RETURNING id, company_id, code, name, address, allow_negative, is_active, created_by, updated_by, version, created_at, updated_at, use_bins, kind, supplier_id
 `
 
 type UpdateWarehouseParams struct {
@@ -528,6 +534,8 @@ func (q *Queries) UpdateWarehouse(ctx context.Context, arg UpdateWarehouseParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UseBins,
+		&i.Kind,
+		&i.SupplierID,
 	)
 	return i, err
 }

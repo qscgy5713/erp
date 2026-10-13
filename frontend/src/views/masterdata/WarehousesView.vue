@@ -133,7 +133,12 @@ onMounted(load)
     </div>
     <el-table v-loading="loading" :data="rows" border>
       <el-table-column prop="code" label="代碼" width="140" />
-      <el-table-column prop="name" label="名稱" min-width="140" />
+      <el-table-column prop="name" label="名稱" min-width="140">
+        <template #default="{ row }"
+          >{{ row.name }}
+          <el-tag v-if="row.kind === 'subcontract'" size="small" type="warning">委外倉</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="address" label="地址" min-width="220" show-overflow-tooltip />
       <el-table-column label="允許負庫存" width="110">
         <template #default="{ row }">

@@ -395,7 +395,7 @@ const short = (row: LineRow) =>
 
 onMounted(async () => {
   try {
-    warehouses.value = await masterdataApi.warehouses()
+    warehouses.value = await masterdataApi.normalWarehouses()
   } catch (e) {
     handle(e)
   }

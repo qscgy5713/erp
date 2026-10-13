@@ -14,6 +14,12 @@ export const WORK_ORDER_ANY = [
   'production.order.post',
 ]
 
+export const SUBCONTRACT_ANY = [
+  'production.subcontract.read',
+  'production.subcontract.write',
+  'production.subcontract.post',
+]
+
 export const INVENTORY_ANY = [
   'inventory.stock.read',
   'inventory.stock.write',
@@ -117,6 +123,7 @@ export const navigation: NavItem[] = [
         perm: ['production.bom.read', 'production.bom.write'],
       },
       { title: '工單', path: '/production/work-orders', perm: WORK_ORDER_ANY },
+      { title: '委外加工', path: '/production/subcontracts', perm: SUBCONTRACT_ANY },
       { title: '需求計算(MRP)', path: '/production/mrp', perm: WORK_ORDER_ANY },
       {
         title: 'MRP 計畫參數',

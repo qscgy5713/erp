@@ -1,5 +1,17 @@
 # 工作日誌
 
+## 2026-10-13 委外加工(D100)
+
+- 設計見 `doc/design-wip-outsourcing.md`(使用者同意 A 階段與全部建議;實作時簡化兩點:委外單不走簽核、權限獨立為 `production.subcontract.*`)。
+- migration 000041:`warehouses.kind/supplier_id`(委外倉,每廠一個)、`subcontract_orders/_order_lines/_txns/_txn_lines`、單號規則 SC/SI/SR/SB。
+- 後端 `internal/production/subcontract.go`:開單 / 修改 / 發料 / 退料 / 收回 / 作廢異動 / 結案 / 作廢整張;發料退料用庫存調撥(`TransferTo`);收回同交易扣耗料、成品入庫、產生應付與傳票;一人一單序列化(鎖委外單);作廢後加工廠材料不可變負。
+- 成本:`CostPeriodAggregates`、`ProductionConsumption`、`ProductionProcessing`、`VarianceActualMaterials`、`WritebackProduceCost`/`WritebackUnitCost` 都納入 `sc_*` 來源;MRP 供給 / 需求納入委外單。
+- 前端:委外加工清單、單據頁、發料 / 收回 / 退料對話框;倉庫維護頁標示委外倉;庫存單據、一般單據、工單、料品頁的倉庫下拉改用 `normalWarehouses()`(不含委外倉);流水帳來源標籤。
+- 測試 `subcontract_test.go`:開單展開 BOM、委外倉建立、發料轉倉、超量 / 超耗被擋、收回產生應付、已耗用發料不能作廢、結案條件、自動結案與作廢重開、短交退料結案、MRP、月結成本(成品單位成本 450、5103 貸 200、對帳檢查全 ok)、權限。
+- 瀏覽器實測:清單 / 新增頁正常;單據頁發料(預設 = 預計用量,送出後「在加工廠」20、作廢鈕消失、倉庫鎖定)、收回(成品儲位必填、預設耗料與加工費 50)→ 自動結案、紀錄表顯示;應付 50 與傳票各 1 筆;再以 API 作廢收回、發料與整張單,測試資料已清(測試帳號已停用)。
+- 補強:`inventory.apply` 擋下非 `sc_*` 來源進出委外倉(INV-021;盤點 / 調整 / 沖銷除外),測試補調撥單被擋。
+- Code review 修正:單價小數位檢查與欄位(4 位)一致;預計用量不可移除還在加工廠的材料。
+
 ## 2026-10-12 續測:Excel 匯入、帳號安全、專案/售價表
 
 - Excel 匯入(手工組 xlsx 打 API):有錯誤時整批不寫入且列號/欄位正確;無錯誤可匯入;重複代號需 `mode=update`,更新時空白欄位保留原值;壞檔 IMP-001、錯誤表頭 IMP-003;期初應收日期晚於期初日被擋,匯入後可 `undo` 還原應收。

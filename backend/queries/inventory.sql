@@ -48,7 +48,7 @@ UNION ALL
 SELECT iu.item_id, iu.unit_id, iu.factor FROM item_units iu WHERE iu.item_id = ANY(@item_ids::bigint[]);
 
 -- name: ListWarehouseFlags :many
-SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins
+SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins, w.kind
 FROM warehouses w
 WHERE w.company_id = @company_id AND w.id = ANY(@ids::bigint[]);
 

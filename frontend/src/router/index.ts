@@ -5,6 +5,7 @@ import {
   DELIVERY_ANY,
   INVENTORY_ANY,
   WORK_ORDER_ANY,
+  SUBCONTRACT_ANY,
   ORDER_ANY,
   PAYMENT_ANY,
   RECEIPT_ANY,
@@ -172,6 +173,24 @@ const router = createRouter({
       name: 'work-order',
       component: () => import('@/views/production/WorkOrderEditView.vue'),
       meta: { title: '工單', perm: WORK_ORDER_ANY },
+    },
+    {
+      path: '/production/subcontracts',
+      name: 'subcontracts',
+      component: () => import('@/views/production/SubcontractsView.vue'),
+      meta: { title: '委外加工', perm: SUBCONTRACT_ANY },
+    },
+    {
+      path: '/production/subcontracts/new',
+      name: 'subcontract-new',
+      component: () => import('@/views/production/SubcontractEditView.vue'),
+      meta: { title: '新增委外加工單', perm: ['production.subcontract.write'] },
+    },
+    {
+      path: '/production/subcontracts/:id(\\d+)',
+      name: 'subcontract',
+      component: () => import('@/views/production/SubcontractEditView.vue'),
+      meta: { title: '委外加工單', perm: SUBCONTRACT_ANY },
     },
     {
       path: '/inventory/movement-summary',

@@ -76,6 +76,10 @@ const sourceLabels: Record<string, string> = {
   work_order_receipt: '完工入庫',
   wo_completion_issue: '完工領料',
   wo_completion_receipt: '完工入庫',
+  sc_issue: '委外發料',
+  sc_return: '委外退料',
+  sc_receive_issue: '委外耗料',
+  sc_receive_receipt: '委外收回入庫',
 }
 
 async function openTrace(row: LotBalance) {

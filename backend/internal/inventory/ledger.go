@@ -173,6 +173,9 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 	if len(whByID) != len(whIDs) {
 		return errBadWarehouse
 	}
+	if err := checkSubcontractWarehouses(src, moves, whByID); err != nil {
+		return err
+	}
 
 	// 盤點凍結:倉庫有進行中的盤點單時不可異動
 	countNo, err := q.OpenCountDocNo(ctx, db.OpenCountDocNoParams{
@@ -265,4 +268,25 @@ func keys(m map[int64]bool) []int64 {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// errSubcontractWarehouse 委外倉(加工廠的倉庫,D100)只有委外加工的發料 / 收回 / 退料可以進出,
+// 一般單據(進銷貨、工單、調撥…)不可使用,否則委外單上的「在加工廠」數量會與帳不一致。
+// 盤點與庫存調整(修正帳差)與沖銷分錄不受限。
+var errSubcontractWarehouse = apperr.New(http.StatusUnprocessableEntity, "INV-021", "委外倉只能用於委外加工的發料、收回與退料")
+
+func checkSubcontractWarehouses(src Source, moves []Movement, whs map[int64]db.ListWarehouseFlagsRow) error {
+	switch {
+	case strings.HasPrefix(src.Type, "sc_"), src.Type == "stock_count", src.Type == "stock_adjustment":
+		return nil
+	}
+	for _, m := range moves {
+		if m.reversalOf != nil {
+			continue
+		}
+		if whs[m.WarehouseID].Kind == "subcontract" || (m.TransferTo != nil && whs[*m.TransferTo].Kind == "subcontract") {
+			return errSubcontractWarehouse
+		}
+	}
+	return nil
 }

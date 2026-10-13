@@ -272,6 +272,151 @@ export interface MrpParamInput {
   order_multiple: string
 }
 
+// ---- 委外加工(D100) ----
+
+export type ScStatus = 'open' | 'closed' | 'voided'
+export type ScKind = 'issue' | 'receive' | 'return'
+
+export interface ScLine {
+  line_no?: number
+  item_id: number | null
+  item_code?: string
+  item_name?: string
+  unit_name?: string
+  item_lot_control?: LotControl
+  /** 預計用量 */
+  qty: Decimal
+  issued_qty?: Decimal
+  consumed_qty?: Decimal
+  /** 目前還在加工廠 */
+  held_qty?: Decimal
+  note: string
+}
+
+export interface ScTxnLine {
+  line_no: number
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  qty: Decimal
+  lot_no: string
+  bin_code: string
+  lots: LotUsed[]
+}
+
+export interface ScTxn {
+  id: number
+  kind: ScKind
+  doc_no: string
+  doc_date: string
+  qty: Decimal
+  processing_fee: Decimal
+  output_lot_no: string
+  output_expiry_date: string | null
+  output_bin_code: string
+  note: string
+  status: 'posted' | 'voided'
+  created_by_name: string | null
+  created_at: string
+  voided_by_name: string | null
+  voided_at: string | null
+  lines: ScTxnLine[]
+  output_lots: LotUsed[]
+}
+
+export interface SubcontractOrder {
+  id: number
+  doc_no: string
+  doc_date: string
+  status: ScStatus
+  supplier_id: number
+  supplier_code: string
+  supplier_name: string
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  item_lot_control: LotControl
+  plan_qty: Decimal
+  received_qty: Decimal
+  unit_fee: Decimal
+  issue_warehouse_id: number
+  issue_warehouse_name: string
+  receive_warehouse_id: number
+  receive_warehouse_name: string
+  sc_warehouse_id: number
+  sc_warehouse_name: string
+  due_date: string | null
+  note: string
+  created_by_name: string | null
+  lines: ScLine[]
+  txns: ScTxn[]
+  can_close: boolean
+  version: number
+}
+
+export interface SubcontractRow {
+  id: number
+  doc_no: string
+  doc_date: string
+  status: ScStatus
+  supplier_code: string
+  supplier_name: string
+  item_code: string
+  item_name: string
+  unit_name: string
+  plan_qty: Decimal
+  received_qty: Decimal
+  unit_fee: Decimal
+  due_date: string | null
+}
+
+export interface SubcontractInput {
+  doc_date: string
+  supplier_id: number
+  item_id: number
+  plan_qty: Decimal
+  unit_fee: Decimal
+  issue_warehouse_id: number
+  receive_warehouse_id: number
+  due_date: string | null
+  note: string
+  lines: { item_id: number; qty: Decimal; note: string }[]
+  version?: number
+}
+
+export interface ScMaterialInput {
+  doc_date: string
+  note: string
+  lines: { item_id: number; qty: Decimal; lot_no: string; bin_code: string }[]
+}
+
+export interface ScReceiveInput {
+  doc_date: string
+  qty: Decimal
+  processing_fee: Decimal
+  output_lot_no: string
+  output_bin_code: string
+  output_expiry_date: string | null
+  note: string
+  lines: { item_id: number; qty: Decimal; lot_no: string }[]
+}
+
+export interface ScReceivePreview {
+  qty: Decimal
+  remaining: Decimal
+  processing_fee: Decimal
+  lines: {
+    item_id: number
+    item_code: string
+    item_name: string
+    unit_name: string
+    qty: Decimal
+    held_qty: Decimal
+  }[]
+}
+
 export const productionApi = {
   mrp: (shortageOnly = true, weeks = 8) =>
     http.get<MrpRow[]>(`/production/mrp${qs({ shortage_only: shortageOnly, weeks })}`),
@@ -301,4 +446,22 @@ export const productionApi = {
     http.post<WorkOrder>(`/production/work-orders/${id}/close`, { version }),
   explode: (item_id: number, qty: string, date?: string) =>
     http.get<ExplodeLine[]>(`/production/work-orders/explode${qs({ item_id, qty, date })}`),
+  subcontracts: (q: Q) => requestPage<SubcontractRow>(`/production/subcontracts${qs(q)}`),
+  subcontract: (id: number) => http.get<SubcontractOrder>(`/production/subcontracts/${id}`),
+  createSubcontract: (input: SubcontractInput) =>
+    http.post<SubcontractOrder>('/production/subcontracts', input),
+  updateSubcontract: (id: number, input: SubcontractInput) =>
+    http.put<SubcontractOrder>(`/production/subcontracts/${id}`, input),
+  scMaterial: (id: number, kind: 'issue' | 'return', input: ScMaterialInput) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/${kind}`, input),
+  scReceivePreview: (id: number, qty?: string) =>
+    http.get<ScReceivePreview>(`/production/subcontracts/${id}/receive-preview${qs({ qty })}`),
+  scReceive: (id: number, input: ScReceiveInput) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/receive`, input),
+  scVoidTxn: (id: number, txnId: number) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/txns/${txnId}/void`),
+  scClose: (id: number, version: number) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/close`, { version }),
+  scVoid: (id: number, version: number) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/void`, { version }),
 }

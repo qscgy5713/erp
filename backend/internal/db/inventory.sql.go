@@ -492,7 +492,7 @@ func (q *Queries) ListStockItems(ctx context.Context, arg ListStockItemsParams) 
 }
 
 const listWarehouseFlags = `-- name: ListWarehouseFlags :many
-SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins
+SELECT w.id, w.code, w.name, w.allow_negative, w.is_active, w.use_bins, w.kind
 FROM warehouses w
 WHERE w.company_id = $1 AND w.id = ANY($2::bigint[])
 `
@@ -509,6 +509,7 @@ type ListWarehouseFlagsRow struct {
 	AllowNegative bool
 	IsActive      bool
 	UseBins       bool
+	Kind          string
 }
 
 func (q *Queries) ListWarehouseFlags(ctx context.Context, arg ListWarehouseFlagsParams) ([]ListWarehouseFlagsRow, error) {
@@ -527,6 +528,7 @@ func (q *Queries) ListWarehouseFlags(ctx context.Context, arg ListWarehouseFlags
 			&i.AllowNegative,
 			&i.IsActive,
 			&i.UseBins,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}

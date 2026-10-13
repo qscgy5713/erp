@@ -188,6 +188,12 @@ SELECT x.output_item_id, x.material_id, SUM(x.qty)::numeric AS qty FROM (
     JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
     WHERE t.company_id = @company_id AND t.source_type = 'wo_completion_issue'
       AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+    UNION ALL
+    SELECT o.item_id, t.item_id, t.qty
+    FROM inventory_transactions t
+    JOIN subcontract_txns c ON c.id = t.source_id JOIN subcontract_orders o ON o.id = c.order_id
+    WHERE t.company_id = @company_id AND t.source_type = 'sc_receive_issue'
+      AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 ) x
 GROUP BY x.output_item_id, x.material_id
 HAVING SUM(x.qty) <> 0;
@@ -206,13 +212,18 @@ SELECT x.item_id, SUM(x.processing)::numeric AS processing FROM (
     FROM work_order_completions c JOIN work_orders w ON w.id = c.work_order_id
     WHERE c.company_id = @company_id AND c.status = 'posted'
       AND c.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
+    UNION ALL
+    SELECT o.item_id, c.processing_fee
+    FROM subcontract_txns c JOIN subcontract_orders o ON o.id = c.order_id
+    WHERE c.company_id = @company_id AND c.kind = 'receive' AND c.status = 'posted'
+      AND c.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 ) x
 GROUP BY x.item_id;
 
 -- name: WritebackProduceCost :exec
 -- 完工入庫的單位成本 = 該成品當月的完工成本 ÷ 完工數量
 UPDATE inventory_transactions SET unit_cost = @unit_cost
-WHERE company_id = @company_id AND item_id = @item_id AND source_type IN ('work_order_receipt', 'wo_completion_receipt')
+WHERE company_id = @company_id AND item_id = @item_id AND source_type IN ('work_order_receipt', 'wo_completion_receipt', 'sc_receive_receipt')
   AND doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date;
 
 -- name: ItemHasWorkOrders :one
@@ -255,19 +266,35 @@ WHERE o.company_id = @company_id AND o.status = 'approved' AND l.qty > rec.recei
 GROUP BY l.item_id, due;
 
 -- name: MrpWorkOrderSupply :many
--- 尚未完工(待審 / 已核准)的工單預計入庫量(扣掉已分批完工的部分)
-SELECT w.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
-       SUM(GREATEST(w.plan_qty - COALESCE(c.done, 0), 0))::numeric AS qty FROM work_orders w
-LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY w.item_id, due;
+-- 尚未完工的工單(待審 / 已核准)與進行中的委外單預計入庫量(扣掉已分批完工 / 已收回的部分)
+SELECT x.item_id, x.due, SUM(x.qty)::numeric AS qty FROM (
+    SELECT w.item_id, COALESCE(w.due_date, w.doc_date)::date AS due, GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) AS qty
+    FROM work_orders w
+    LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
+    WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved')
+  UNION ALL
+    SELECT o.item_id, COALESCE(o.due_date, o.doc_date)::date,
+           GREATEST(o.plan_qty - COALESCE((SELECT SUM(t.qty) FROM subcontract_txns t WHERE t.order_id = o.id AND t.kind = 'receive' AND t.status = 'posted'), 0), 0)
+    FROM subcontract_orders o WHERE o.company_id = @company_id AND o.status = 'open'
+) x GROUP BY x.item_id, x.due;
 
 -- name: MrpWorkOrderDemand :many
--- 尚未完工(待審 / 已核准)的工單領料量(依剩餘未完工比例;分批完工的工單只算還沒做的部分)
-SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
-       SUM(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty)::numeric AS qty
-FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
-LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
-WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved') GROUP BY l.item_id, due;
+-- 尚未完工工單的領料量(依剩餘未完工比例),加上委外單還沒發給加工廠的材料量(依剩餘未收回比例,扣掉已在加工廠的)
+SELECT x.item_id, x.due, SUM(x.qty)::numeric AS qty FROM (
+    SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
+           l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty AS qty
+    FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
+    LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
+    WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved')
+  UNION ALL
+    SELECT l.item_id, COALESCE(o.due_date, o.doc_date)::date,
+           GREATEST(l.qty * GREATEST(o.plan_qty - COALESCE((SELECT SUM(t.qty) FROM subcontract_txns t WHERE t.order_id = o.id AND t.kind = 'receive' AND t.status = 'posted'), 0), 0) / o.plan_qty
+                    - COALESCE((SELECT SUM(x2.qty * CASE WHEN t.kind = 'issue' THEN 1 ELSE -1 END)
+                                FROM subcontract_txn_lines x2 JOIN subcontract_txns t ON t.id = x2.txn_id
+                                WHERE t.order_id = o.id AND t.status = 'posted' AND x2.item_id = l.item_id), 0), 0)
+    FROM subcontract_order_lines l JOIN subcontract_orders o ON o.id = l.order_id
+    WHERE o.company_id = @company_id AND o.status = 'open'
+) x GROUP BY x.item_id, x.due;
 
 -- name: MrpOnHand :many
 SELECT item_id, SUM(qty)::numeric AS qty FROM inventory_balances WHERE company_id = @company_id GROUP BY item_id;

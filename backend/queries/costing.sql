@@ -34,11 +34,12 @@ SELECT t.item_id,
        COALESCE(SUM(t.qty * COALESCE(t.unit_cost, 0)) FILTER (WHERE t.source_type IN ('goods_receipt', 'purchase_return', 'opening_stock')), 0)::numeric AS purchase_value,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('delivery', 'sales_return')), 0)::numeric AS sales_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('stock_adjustment', 'stock_count')), 0)::numeric AS adjust_qty,
-       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('work_order_issue', 'wo_completion_issue')), 0)::numeric AS consume_qty,
-       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('work_order_receipt', 'wo_completion_receipt')), 0)::numeric AS produce_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('work_order_issue', 'wo_completion_issue', 'sc_receive_issue')), 0)::numeric AS consume_qty,
+       COALESCE(SUM(t.qty) FILTER (WHERE t.source_type IN ('work_order_receipt', 'wo_completion_receipt', 'sc_receive_receipt')), 0)::numeric AS produce_qty,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type NOT IN ('goods_receipt', 'purchase_return', 'delivery',
                                    'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock',
-                                   'work_order_issue', 'work_order_receipt', 'wo_completion_issue', 'wo_completion_receipt')), 0)::numeric AS other_qty
+                                   'work_order_issue', 'work_order_receipt', 'wo_completion_issue', 'wo_completion_receipt',
+                                   'sc_issue', 'sc_return', 'sc_receive_issue', 'sc_receive_receipt')), 0)::numeric AS other_qty
 FROM inventory_transactions t
 WHERE t.company_id = @company_id AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 GROUP BY t.item_id
@@ -81,7 +82,7 @@ DELETE FROM cost_closings WHERE id = @id;
 UPDATE inventory_transactions SET unit_cost = @avg_cost
 WHERE company_id = @company_id AND item_id = @item_id
   AND doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
-  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock', 'work_order_receipt', 'wo_completion_receipt');
+  AND source_type NOT IN ('goods_receipt', 'purchase_return', 'opening_stock', 'work_order_receipt', 'wo_completion_receipt', 'sc_receive_receipt');
 
 -- ======== 對帳檢查 ========
 
@@ -201,7 +202,7 @@ LEFT JOIN LATERAL (
     SELECT s.standard_cost FROM item_standard_costs s
     WHERE s.item_id = t.item_id AND s.effective_from <= t.doc_date ORDER BY s.effective_from DESC LIMIT 1
 ) sc ON TRUE
-WHERE t.company_id = @company_id AND t.source_type IN ('work_order_receipt', 'wo_completion_receipt')
+WHERE t.company_id = @company_id AND t.source_type IN ('work_order_receipt', 'wo_completion_receipt', 'sc_receive_receipt')
   AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 GROUP BY t.item_id, i.code, i.name, u.name
 HAVING SUM(t.qty) <> 0
@@ -239,6 +240,11 @@ FROM (
     FROM inventory_transactions t
     JOIN work_order_completions c ON c.id = t.source_id JOIN work_orders w ON w.id = c.work_order_id
     WHERE t.company_id = @company_id AND t.source_type = 'wo_completion_issue'
+  UNION ALL
+    SELECT o.item_id, t.item_id, t.qty, t.unit_cost
+    FROM inventory_transactions t
+    JOIN subcontract_txns c ON c.id = t.source_id JOIN subcontract_orders o ON o.id = c.order_id
+    WHERE t.company_id = @company_id AND t.source_type = 'sc_receive_issue'
       AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 ) x
 JOIN items mi ON mi.id = x.material_id JOIN units u ON u.id = mi.base_unit_id
