@@ -246,13 +246,34 @@ func (m *Module) createCompletion(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		moves := make([]inventory.Movement, 0, len(p.lines))
-		for i, l := range p.lines {
-			if err := q.AddCompletionLine(ctx, db.AddCompletionLineParams{CompletionID: comp.ID, LineNo: int32(i + 1), ItemID: l.ItemID,
-				Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode}); err != nil {
+		// 在製品倉(D101)裡這張工單已領的材料優先使用,不足的部分才從領料倉扣
+		held, err := wipHeld(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		var wip int64
+		if !allZero(held) {
+			if wip, err = wipWarehouseID(ctx, q, a.CompanyID, a.UserID); err != nil {
 				return err
 			}
-			moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.MaterialWarehouseID, Qty: l.Qty.Neg(), LotNo: l.LotNo, BinCode: l.BinCode})
+		}
+		moves := make([]inventory.Movement, 0, len(p.lines))
+		for i, l := range p.lines {
+			fromWip := decimal.Zero
+			if h := held[l.ItemID]; h.IsPositive() {
+				fromWip = decimal.Min(h, l.Qty)
+				held[l.ItemID] = h.Sub(fromWip)
+			}
+			if err := q.AddCompletionLine(ctx, db.AddCompletionLineParams{CompletionID: comp.ID, LineNo: int32(i + 1), ItemID: l.ItemID,
+				Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode, FromWip: fromWip}); err != nil {
+				return err
+			}
+			if fromWip.IsPositive() {
+				moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: wip, Qty: fromWip.Neg(), LotNo: l.LotNo})
+			}
+			if rest := l.Qty.Sub(fromWip); rest.IsPositive() {
+				moves = append(moves, inventory.Movement{ItemID: l.ItemID, WarehouseID: cur.MaterialWarehouseID, Qty: rest.Neg(), LotNo: l.LotNo, BinCode: l.BinCode})
+			}
 		}
 		opt := inventory.Options{CompanyID: a.CompanyID, ActorID: &a.UserID}
 		if err := inventory.Post(ctx, q, opt, inventory.Source{Type: srcCompIssue, ID: comp.ID, No: comp.DocNo, DocDate: comp.DocDate}, moves); err != nil {
@@ -263,11 +284,9 @@ func (m *Module) createCompletion(c *gin.Context) {
 		}}); err != nil {
 			return err
 		}
-		if !in.Qty.LessThan(remaining) { // 累計達計畫數量 → 自動結案
-			if _, err := q.SetWorkOrderStatus(ctx, db.SetWorkOrderStatusParams{ID: id, CompanyID: a.CompanyID, Status: "posted", Action: "post",
-				ActorID: a.UserID, Version: cur.Version}); err != nil {
-				return err
-			}
+		// 累計達計畫數量且在製品倉的材料都用完或退回 → 自動結案
+		if err := closeIfDone(ctx, q, cur, a.UserID); err != nil {
+			return err
 		}
 		if out, err = loadOrder(ctx, q, a.CompanyID, id); err != nil {
 			return err
@@ -380,6 +399,11 @@ func (m *Module) closeOrder(c *gin.Context) {
 		}
 		if !done.IsPositive() {
 			return errNothingDone
+		}
+		if held, err := wipHeld(ctx, q, id); err != nil {
+			return err
+		} else if !allZero(held) {
+			return errWipLeft
 		}
 		if _, err := q.SetWorkOrderStatus(ctx, db.SetWorkOrderStatusParams{ID: id, CompanyID: a.CompanyID, Status: "posted", Action: "post",
 			ActorID: a.UserID, Version: cur.Version}); err != nil {

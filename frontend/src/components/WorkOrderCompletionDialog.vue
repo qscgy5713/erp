@@ -98,7 +98,8 @@ async function submit() {
   <el-dialog v-model="visible" title="完工回報" width="820px" top="6vh">
     <p class="hint">
       工單 {{ doc.doc_no }}:計畫 {{ doc.plan_qty }} {{ doc.unit_name }},已完工
-      {{ doc.completed_qty }},尚未完工 {{ remaining }}。送出後立即領料並把成品入庫。
+      {{ doc.completed_qty }},尚未完工
+      {{ remaining }}。送出後立即領料並把成品入庫(已領到在製品倉的材料優先使用,不足才從領料倉扣)。
     </p>
     <el-form label-width="100px">
       <el-row :gutter="16">
@@ -172,6 +173,11 @@ async function submit() {
           <el-input v-model="row.qty" size="small" />
           <span class="muted"> {{ row.unit_name }}</span>
         </template>
+      </el-table-column>
+      <el-table-column v-if="doc.wip.held.length" label="在製品可用" width="100" align="right">
+        <template #default="{ row }">{{
+          doc.wip.held.find((h) => h.item_id === row.item_id)?.qty ?? '0'
+        }}</template>
       </el-table-column>
       <el-table-column v-if="materialBin()" label="儲位" width="150">
         <template #default="{ row }">

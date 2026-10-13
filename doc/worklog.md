@@ -1,5 +1,14 @@
 # 工作日誌
 
+## 2026-10-13 在製品(WIP,D101)
+
+- migration 000042:`warehouses.kind` 加 `wip`(每公司唯一)、`work_order_wip_txns/_lines`、`work_order_completion_lines.from_wip`、單號 WI / WT。
+- 後端 `internal/production/wip.go`:領料 / 退料(調撥)、作廢、在製品清單;`completions.go` 完工回報優先從在製品扣並記 `from_wip`、改用 `closeIfDone`(達計畫且在製品為 0 才結案);`closeOrder` 要求在製品為 0;一次完工等動作在有領料紀錄時被擋;MRP 工單需求扣掉在製品量;庫存過帳守衛泛化為 `checkSpecialWarehouses`(委外倉 + 在製品倉,INV-021)。
+- 前端:工單頁「在製品」區塊與領料 / 退料對話框、完工視窗「在製品可用」欄、在製品清單頁、倉庫維護標示在製品倉、流水帳來源標籤。
+- 測試 `wip_test.go`:領料轉倉、有在製品不能一次完工、調撥進在製品倉被擋、超退被擋、完工優先扣在製品(不足由領料倉補)、剩料時不結案、作廢完工還原在製品、已耗用領料不能作廢、退料後結案、月結成本與對帳、清單、權限。
+- 瀏覽器實測:工單頁「在製品」區塊領料(預設 10)→ 完工視窗顯示「在製品可用 10」→ 完工回報 5/5 自動結案、在製品變無;測試資料已作廢清除。
+- Code review 修正:工單的領料倉 / 入庫倉不可選委外倉或在製品倉(prepareOrder 檢查 kind = normal)。
+
 ## 2026-10-13 委外加工(D100)
 
 - 設計見 `doc/design-wip-outsourcing.md`(使用者同意 A 階段與全部建議;實作時簡化兩點:委外單不走簽核、權限獨立為 `production.subcontract.*`)。

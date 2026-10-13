@@ -59,8 +59,8 @@ func (q *Queries) AddBomSubstitute(ctx context.Context, arg AddBomSubstitutePara
 }
 
 const addCompletionLine = `-- name: AddCompletionLine :exec
-INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code, from_wip)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type AddCompletionLineParams struct {
@@ -70,6 +70,7 @@ type AddCompletionLineParams struct {
 	Qty          decimal.Decimal
 	LotNo        string
 	BinCode      string
+	FromWip      decimal.Decimal
 }
 
 func (q *Queries) AddCompletionLine(ctx context.Context, arg AddCompletionLineParams) error {
@@ -80,6 +81,7 @@ func (q *Queries) AddCompletionLine(ctx context.Context, arg AddCompletionLinePa
 		arg.Qty,
 		arg.LotNo,
 		arg.BinCode,
+		arg.FromWip,
 	)
 	return err
 }
@@ -895,7 +897,7 @@ func (q *Queries) ListBoms(ctx context.Context, arg ListBomsParams) ([]ListBomsR
 }
 
 const listCompletionLines = `-- name: ListCompletionLines :many
-SELECT l.completion_id, l.line_no, l.item_id, l.qty, l.lot_no, l.bin_code, i.code AS item_code, i.name AS item_name, u.name AS unit_name
+SELECT l.completion_id, l.line_no, l.item_id, l.qty, l.lot_no, l.bin_code, l.from_wip, i.code AS item_code, i.name AS item_name, u.name AS unit_name
 FROM work_order_completion_lines l JOIN items i ON i.id = l.item_id JOIN units u ON u.id = i.base_unit_id
 WHERE l.completion_id = $1 ORDER BY l.line_no
 `
@@ -907,6 +909,7 @@ type ListCompletionLinesRow struct {
 	Qty          decimal.Decimal
 	LotNo        string
 	BinCode      string
+	FromWip      decimal.Decimal
 	ItemCode     string
 	ItemName     string
 	UnitName     string
@@ -928,6 +931,7 @@ func (q *Queries) ListCompletionLines(ctx context.Context, completionID int64) (
 			&i.Qty,
 			&i.LotNo,
 			&i.BinCode,
+			&i.FromWip,
 			&i.ItemCode,
 			&i.ItemName,
 			&i.UnitName,
@@ -1735,7 +1739,14 @@ func (q *Queries) MrpSubstituteEdges(ctx context.Context, bomIds []int64) ([]Mrp
 const mrpWorkOrderDemand = `-- name: MrpWorkOrderDemand :many
 SELECT x.item_id, x.due, SUM(x.qty)::numeric AS qty FROM (
     SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
-           l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty AS qty
+           GREATEST(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty
+                    - COALESCE((SELECT SUM(x.qty) FROM (
+                          SELECT wl.qty * CASE WHEN t.kind = 'issue' THEN 1 ELSE -1 END AS qty
+                          FROM work_order_wip_txn_lines wl JOIN work_order_wip_txns t ON t.id = wl.txn_id
+                          WHERE t.work_order_id = w.id AND t.status = 'posted' AND wl.item_id = l.item_id
+                        UNION ALL
+                          SELECT -cl.from_wip FROM work_order_completion_lines cl JOIN work_order_completions cc ON cc.id = cl.completion_id
+                          WHERE cc.work_order_id = w.id AND cc.status = 'posted' AND cl.item_id = l.item_id) x), 0), 0) AS qty
     FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
     LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
     WHERE w.company_id = $1 AND w.status IN ('pending', 'approved')

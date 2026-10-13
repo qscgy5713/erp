@@ -90,6 +90,7 @@ type woDTO struct {
 	OutputLots          []lotUsedDTO    `json:"output_lots"`   // 已完工:成品實際入庫的批號
 	CompletedQty        decimal.Decimal `json:"completed_qty"` // 分批完工的累計有效完工量(D94)
 	Completions         []completionDTO `json:"completions"`
+	Wip                 wipDTO          `json:"wip"` // 在製品:還在在製品倉的材料與領料 / 退料紀錄(D101)
 	Version             int32           `json:"version"`
 	UpdatedAt           time.Time       `json:"updated_at"`
 }
@@ -123,6 +124,9 @@ func loadOrder(ctx context.Context, q *db.Queries, companyID, id int64) (woDTO, 
 			Qty: l.Qty, LotNo: l.LotNo, BinCode: l.BinCode, Note: l.Note, ItemLotControl: l.ItemLotControl, OnHand: l.OnHand, Lots: []lotUsedDTO{}}
 	}
 	if out.Completions, out.CompletedQty, err = loadCompletions(ctx, q, id); err != nil {
+		return woDTO{}, err
+	}
+	if out.Wip, err = loadWip(ctx, q, id); err != nil {
 		return woDTO{}, err
 	}
 	if w.Status == "posted" && len(out.Completions) == 0 {
@@ -374,7 +378,7 @@ func prepareOrder(ctx context.Context, q *db.Queries, companyID int64, in *woInp
 	}
 	active := map[int64]bool{}
 	for _, w := range whs {
-		active[w.ID] = w.IsActive
+		active[w.ID] = w.IsActive && w.Kind == "normal" // 委外倉、在製品倉不能當工單的領料倉 / 入庫倉
 	}
 	if !active[in.WarehouseID] {
 		return p, fieldErr("warehouse_id", "成品入庫倉不存在或已停用")
@@ -667,6 +671,11 @@ func (m *Module) orderAction(c *gin.Context) {
 			}
 			if n > 0 {
 				return errHasCompletions
+			}
+			if w, err := q.CountWipTxnsOfOrder(ctx, id); err != nil {
+				return err
+			} else if w > 0 {
+				return errHasWipTxns
 			}
 		}
 		doc, err := loadOrder(ctx, q, a.CompanyID, id)

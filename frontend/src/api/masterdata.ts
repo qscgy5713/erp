@@ -69,8 +69,8 @@ export interface Warehouse {
   /** 啟用儲位:所有庫存異動都須指定儲位(出庫可留空自動分配) */
   use_bins: boolean
   is_active: boolean
-  /** normal 一般倉 / subcontract 加工廠的委外倉(自動建立,不可當一般單據的倉庫) */
-  kind?: 'normal' | 'subcontract'
+  /** normal 一般倉 / subcontract 加工廠的委外倉 / wip 在製品倉(皆自動建立,不可當一般單據的倉庫) */
+  kind?: 'normal' | 'subcontract' | 'wip'
   supplier_id?: number | null
   version: number
 }
@@ -236,7 +236,7 @@ export const masterdataApi = {
   normalWarehouses: () =>
     http
       .get<Warehouse[]>('/masterdata/warehouses')
-      .then((ws) => ws.filter((w) => w.kind !== 'subcontract')),
+      .then((ws) => ws.filter((w) => !w.kind || w.kind === 'normal')),
   warehouse: crud<Warehouse>('/masterdata/warehouses'),
   bins: (warehouse_id?: number | null) =>
     http.get<Bin[]>(`/masterdata/bins${qs({ warehouse_id })}`),

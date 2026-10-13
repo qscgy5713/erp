@@ -175,6 +175,11 @@ const router = createRouter({
       meta: { title: '工單', perm: WORK_ORDER_ANY },
     },
     {
+      path: '/production/wip',
+      component: () => import('@/views/production/WipReportView.vue'),
+      meta: { title: '在製品', perm: WORK_ORDER_ANY },
+    },
+    {
       path: '/production/subcontracts',
       name: 'subcontracts',
       component: () => import('@/views/production/SubcontractsView.vue'),

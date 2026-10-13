@@ -123,6 +123,7 @@ export const navigation: NavItem[] = [
         perm: ['production.bom.read', 'production.bom.write'],
       },
       { title: '工單', path: '/production/work-orders', perm: WORK_ORDER_ANY },
+      { title: '在製品', path: '/production/wip', perm: WORK_ORDER_ANY },
       { title: '委外加工', path: '/production/subcontracts', perm: SUBCONTRACT_ANY },
       { title: '需求計算(MRP)', path: '/production/mrp', perm: WORK_ORDER_ANY },
       {

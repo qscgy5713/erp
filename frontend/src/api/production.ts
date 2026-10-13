@@ -115,7 +115,59 @@ export interface WorkOrder {
   /** 分批完工的累計有效完工量與各次完工回報(D94) */
   completed_qty: Decimal
   completions: Completion[]
+  /** 在製品:還在在製品倉的材料與領料 / 退料紀錄(D101) */
+  wip: WorkOrderWip
   version: number
+}
+
+export interface WipTxnLine {
+  line_no: number
+  item_id: number
+  item_code: string
+  item_name: string
+  unit_name: string
+  qty: Decimal
+  lot_no: string
+  bin_code: string
+}
+
+export interface WipTxn {
+  id: number
+  kind: 'issue' | 'return'
+  doc_no: string
+  doc_date: string
+  note: string
+  status: 'posted' | 'voided'
+  created_by_name: string | null
+  created_at: string
+  voided_by_name: string | null
+  voided_at: string | null
+  lines: WipTxnLine[]
+}
+
+export interface WorkOrderWip {
+  held: { item_id: number; item_code: string; item_name: string; unit_name: string; qty: Decimal }[]
+  txns: WipTxn[]
+}
+
+export interface WipReportRow {
+  work_order_id: number
+  doc_no: string
+  doc_date: string
+  item_code: string
+  item_name: string
+  material_code: string
+  material_name: string
+  unit_name: string
+  qty: Decimal
+  avg_cost: Decimal
+  amount: Decimal
+}
+
+export interface WipInput {
+  doc_date: string
+  note: string
+  lines: { item_id: number; qty: Decimal; lot_no: string; bin_code: string }[]
 }
 
 export interface CompletionLine {
@@ -444,6 +496,11 @@ export const productionApi = {
     http.post<WorkOrder>(`/production/work-orders/${id}/completions/${completionId}/void`),
   closeOrder: (id: number, version: number) =>
     http.post<WorkOrder>(`/production/work-orders/${id}/close`, { version }),
+  wipReport: () => http.get<WipReportRow[]>('/production/wip'),
+  wipTxn: (id: number, kind: 'issue' | 'return', input: WipInput) =>
+    http.post<WorkOrder>(`/production/work-orders/${id}/wip-${kind}`, input),
+  voidWipTxn: (id: number, txnId: number) =>
+    http.post<WorkOrder>(`/production/work-orders/${id}/wip-txns/${txnId}/void`),
   explode: (item_id: number, qty: string, date?: string) =>
     http.get<ExplodeLine[]>(`/production/work-orders/explode${qs({ item_id, qty, date })}`),
   subcontracts: (q: Q) => requestPage<SubcontractRow>(`/production/subcontracts${qs(q)}`),

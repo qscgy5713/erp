@@ -1159,6 +1159,7 @@ type WorkOrderCompletionLine struct {
 	Qty          decimal.Decimal
 	LotNo        string
 	BinCode      string
+	FromWip      decimal.Decimal
 }
 
 type WorkOrderLine struct {
@@ -1169,4 +1170,28 @@ type WorkOrderLine struct {
 	LotNo       string
 	Note        string
 	BinCode     string
+}
+
+type WorkOrderWipTxn struct {
+	ID          int64
+	CompanyID   int64
+	WorkOrderID int64
+	Kind        string
+	DocNo       string
+	DocDate     time.Time
+	Note        string
+	Status      string
+	CreatedBy   *int64
+	CreatedAt   time.Time
+	VoidedBy    *int64
+	VoidedAt    *time.Time
+}
+
+type WorkOrderWipTxnLine struct {
+	TxnID   int64
+	LineNo  int32
+	ItemID  int64
+	Qty     decimal.Decimal
+	LotNo   string
+	BinCode string
 }

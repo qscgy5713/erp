@@ -137,6 +137,7 @@ onMounted(load)
         <template #default="{ row }"
           >{{ row.name }}
           <el-tag v-if="row.kind === 'subcontract'" size="small" type="warning">委外倉</el-tag>
+          <el-tag v-else-if="row.kind === 'wip'" size="small" type="warning">在製品倉</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="address" label="地址" min-width="220" show-overflow-tooltip />

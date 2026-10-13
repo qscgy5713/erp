@@ -32,6 +32,8 @@ const sourceLabels: Record<string, string> = {
   work_order_receipt: '完工入庫',
   wo_completion_issue: '完工領料',
   wo_completion_receipt: '完工入庫',
+  wo_wip_issue: '工單領料(在製品)',
+  wo_wip_return: '工單退料(在製品)',
   sc_issue: '委外發料',
   sc_return: '委外退料',
   sc_receive_issue: '委外耗料',

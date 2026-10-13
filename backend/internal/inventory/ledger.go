@@ -173,7 +173,7 @@ func apply(ctx context.Context, q *db.Queries, opt Options, src Source, moves []
 	if len(whByID) != len(whIDs) {
 		return errBadWarehouse
 	}
-	if err := checkSubcontractWarehouses(src, moves, whByID); err != nil {
+	if err := checkSpecialWarehouses(src, moves, whByID); err != nil {
 		return err
 	}
 
@@ -270,22 +270,31 @@ func keys(m map[int64]bool) []int64 {
 	return out
 }
 
-// errSubcontractWarehouse 委外倉(加工廠的倉庫,D100)只有委外加工的發料 / 收回 / 退料可以進出,
-// 一般單據(進銷貨、工單、調撥…)不可使用,否則委外單上的「在加工廠」數量會與帳不一致。
+// errSpecialWarehouse 委外倉(加工廠的倉庫,D100)與在製品倉(D101)只有對應的單據可以進出:
+// 一般單據(進銷貨、調撥…)使用它們會讓委外單 / 工單上的「在加工廠 / 在製品」數量與帳不一致。
 // 盤點與庫存調整(修正帳差)與沖銷分錄不受限。
-var errSubcontractWarehouse = apperr.New(http.StatusUnprocessableEntity, "INV-021", "委外倉只能用於委外加工的發料、收回與退料")
+var errSpecialWarehouse = apperr.New(http.StatusUnprocessableEntity, "INV-021", "委外倉與在製品倉只能由委外加工、工單領料與完工回報使用")
 
-func checkSubcontractWarehouses(src Source, moves []Movement, whs map[int64]db.ListWarehouseFlagsRow) error {
-	switch {
-	case strings.HasPrefix(src.Type, "sc_"), src.Type == "stock_count", src.Type == "stock_adjustment":
+func checkSpecialWarehouses(src Source, moves []Movement, whs map[int64]db.ListWarehouseFlagsRow) error {
+	switch src.Type {
+	case "stock_count", "stock_adjustment":
 		return nil
+	}
+	allowed := func(kind string) bool {
+		switch kind {
+		case "subcontract":
+			return strings.HasPrefix(src.Type, "sc_")
+		case "wip":
+			return src.Type == "wo_wip_issue" || src.Type == "wo_wip_return" || src.Type == "wo_completion_issue"
+		}
+		return true
 	}
 	for _, m := range moves {
 		if m.reversalOf != nil {
 			continue
 		}
-		if whs[m.WarehouseID].Kind == "subcontract" || (m.TransferTo != nil && whs[*m.TransferTo].Kind == "subcontract") {
-			return errSubcontractWarehouse
+		if !allowed(whs[m.WarehouseID].Kind) || (m.TransferTo != nil && !allowed(whs[*m.TransferTo].Kind)) {
+			return errSpecialWarehouse
 		}
 	}
 	return nil

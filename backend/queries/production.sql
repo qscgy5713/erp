@@ -282,7 +282,14 @@ SELECT x.item_id, x.due, SUM(x.qty)::numeric AS qty FROM (
 -- 尚未完工工單的領料量(依剩餘未完工比例),加上委外單還沒發給加工廠的材料量(依剩餘未收回比例,扣掉已在加工廠的)
 SELECT x.item_id, x.due, SUM(x.qty)::numeric AS qty FROM (
     SELECT l.item_id, COALESCE(w.due_date, w.doc_date)::date AS due,
-           l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty AS qty
+           GREATEST(l.qty * GREATEST(w.plan_qty - COALESCE(c.done, 0), 0) / w.plan_qty
+                    - COALESCE((SELECT SUM(x.qty) FROM (
+                          SELECT wl.qty * CASE WHEN t.kind = 'issue' THEN 1 ELSE -1 END AS qty
+                          FROM work_order_wip_txn_lines wl JOIN work_order_wip_txns t ON t.id = wl.txn_id
+                          WHERE t.work_order_id = w.id AND t.status = 'posted' AND wl.item_id = l.item_id
+                        UNION ALL
+                          SELECT -cl.from_wip FROM work_order_completion_lines cl JOIN work_order_completions cc ON cc.id = cl.completion_id
+                          WHERE cc.work_order_id = w.id AND cc.status = 'posted' AND cl.item_id = l.item_id) x), 0), 0) AS qty
     FROM work_order_lines l JOIN work_orders w ON w.id = l.work_order_id
     LEFT JOIN LATERAL (SELECT SUM(qty) AS done FROM work_order_completions WHERE work_order_id = w.id AND status = 'posted') c ON TRUE
     WHERE w.company_id = @company_id AND w.status IN ('pending', 'approved')
@@ -322,8 +329,8 @@ VALUES (@company_id, @work_order_id, @doc_no, @doc_date, @qty, @processing_cost,
 RETURNING *;
 
 -- name: AddCompletionLine :exec
-INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code)
-VALUES (@completion_id, @line_no, @item_id, @qty, @lot_no, @bin_code);
+INSERT INTO work_order_completion_lines (completion_id, line_no, item_id, qty, lot_no, bin_code, from_wip)
+VALUES (@completion_id, @line_no, @item_id, @qty, @lot_no, @bin_code, @from_wip);
 
 -- name: LockCompletion :one
 SELECT * FROM work_order_completions WHERE id = @id AND work_order_id = @work_order_id AND company_id = @company_id FOR UPDATE;

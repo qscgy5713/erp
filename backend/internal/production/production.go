@@ -49,6 +49,11 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.POST("/work-orders/:id/completions", auth.Require(permission.WorkOrderPost), m.createCompletion)
 	g.POST("/work-orders/:id/completions/:cid/void", auth.Require(permission.WorkOrderPost), m.voidCompletion)
 	g.POST("/work-orders/:id/close", auth.Require(permission.WorkOrderPost), m.closeOrder)
+	// 在製品(D101):完工前分批領料 / 退料
+	g.GET("/wip", orderRead, m.wipReport)
+	g.POST("/work-orders/:id/wip-issue", auth.Require(permission.WorkOrderPost), m.postWip(kindIssue))
+	g.POST("/work-orders/:id/wip-return", auth.Require(permission.WorkOrderPost), m.postWip(kindReturn))
+	g.POST("/work-orders/:id/wip-txns/:tid/void", auth.Require(permission.WorkOrderPost), m.voidWipTxn)
 
 	// 委外加工(D100)
 	scRead := auth.Require(permission.SubcontractRead, permission.SubcontractWrite, permission.SubcontractPost)

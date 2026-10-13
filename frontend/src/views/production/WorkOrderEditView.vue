@@ -7,6 +7,7 @@ import {
   productionApi,
   type ExplodeLine,
   type Completion,
+  type WipTxn,
   type WorkOrder,
   type WorkOrderLine,
 } from '@/api/production'
@@ -23,6 +24,7 @@ import ItemPicker from '@/components/ItemPicker.vue'
 import LotCell from '@/components/LotCell.vue'
 import BinCell from '@/components/BinCell.vue'
 import WorkOrderCompletionDialog from '@/components/WorkOrderCompletionDialog.vue'
+import WorkOrderWipDialog from '@/components/WorkOrderWipDialog.vue'
 import { useBinStore } from '@/composables/useBinStore'
 
 const route = useRoute()
@@ -274,7 +276,8 @@ function canDo(action: DocAction): boolean {
 }
 
 // 分批完工的工單(有完工回報)只能用完工回報 / 結案,不顯示一次完工、反完工、取消核准、作廢
-const hasCompletions = computed(() => (doc.value?.completions.length ?? 0) > 0)
+const hasWipTxns = computed(() => doc.value?.wip.txns.some((t) => t.status === 'posted') ?? false)
+const hasCompletions = computed(() => (doc.value?.completions.length ?? 0) > 0 || hasWipTxns.value)
 const actions = computed(() =>
   doc.value
     ? allowedActions(doc.value.status)
@@ -346,6 +349,38 @@ async function voidCompletion(c: Completion) {
     completing.value = false
   }
 }
+// ---- 在製品:完工前領料 / 退料(D101) ----
+const wipDialog = ref(false)
+const wipMode = ref<'issue' | 'return'>('issue')
+const showWip = computed(() => canComplete.value || (doc.value?.wip.txns.length ?? 0) > 0)
+
+function openWip(mode: 'issue' | 'return') {
+  wipMode.value = mode
+  wipDialog.value = true
+}
+
+async function voidWipTxn(t: WipTxn) {
+  if (!doc.value) return
+  try {
+    await ElMessageBox.confirm(
+      `作廢${t.kind === 'issue' ? '領料' : '退料'} ${t.doc_no} 會沖銷這筆材料轉移(材料已被完工耗用時會失敗),確定?`,
+      '作廢',
+      { type: 'warning', confirmButtonText: '作廢', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  completing.value = true
+  try {
+    applyDoc(await productionApi.voidWipTxn(doc.value.id, t.id))
+    ElMessage.success('已作廢')
+  } catch (e) {
+    handle(e)
+  } finally {
+    completing.value = false
+  }
+}
+
 const acting = ref<DocAction | null>(null)
 
 const labels: Partial<Record<DocAction, string>> = { post: '完工', unpost: '反完工' }
@@ -650,6 +685,62 @@ autoClear(form)
       <el-button v-if="editable" class="addline" @click="addLine">新增材料</el-button>
     </el-card>
 
+    <el-card v-if="doc && showWip" shadow="never" class="mb">
+      <template #header>
+        <div class="card-head">
+          在製品(完工前先領料)
+          <el-button v-if="canComplete" size="small" @click="openWip('issue')">領料</el-button>
+          <el-button
+            v-if="canComplete && doc.wip.held.length"
+            size="small"
+            @click="openWip('return')"
+            >退料</el-button
+          >
+        </div>
+      </template>
+      <div class="muted wipheld">
+        目前在在製品倉:
+        <span v-if="!doc.wip.held.length">無</span>
+        <span v-for="h in doc.wip.held" :key="h.item_id" class="wipitem"
+          >{{ h.item_code }} × {{ h.qty }} {{ h.unit_name }}</span
+        >
+      </div>
+      <el-table :data="doc.wip.txns" border size="small" empty-text="還沒有領料 / 退料紀錄">
+        <el-table-column prop="doc_no" label="單號" width="150" />
+        <el-table-column label="類型" width="80">
+          <template #default="{ row }">{{ row.kind === 'issue' ? '領料' : '退料' }}</template>
+        </el-table-column>
+        <el-table-column prop="doc_date" label="日期" width="110" />
+        <el-table-column label="內容" min-width="240">
+          <template #default="{ row }">
+            <div v-for="l in row.lines" :key="l.line_no">
+              {{ l.item_code }} × {{ l.qty }}
+              <span v-if="l.lot_no" class="muted">〔{{ l.lot_no }}〕</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="狀態" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'posted' ? 'success' : 'info'">{{
+              row.status === 'posted' ? '已過帳' : '已作廢'
+            }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.can('production.order.post')" label="操作" width="90">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.status === 'posted'"
+              link
+              type="danger"
+              :loading="completing"
+              @click="voidWipTxn(row)"
+              >作廢</el-button
+            >
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-card v-if="doc && showCompletions" shadow="never" class="mb">
       <template #header>
         <div class="card-head">
@@ -708,6 +799,13 @@ autoClear(form)
         </el-table-column>
       </el-table>
     </el-card>
+    <WorkOrderWipDialog
+      v-if="doc"
+      v-model="wipDialog"
+      :doc="doc"
+      :mode="wipMode"
+      @done="applyDoc"
+    />
     <WorkOrderCompletionDialog v-if="doc" v-model="completeDialog" :doc="doc" @done="onCompleted" />
 
     <el-descriptions v-if="doc" :column="3" size="small" border>
@@ -764,5 +862,11 @@ autoClear(form)
 }
 .addline {
   margin-top: 8px;
+}
+.wipheld {
+  margin-bottom: 8px;
+}
+.wipitem {
+  margin-right: 12px;
 }
 </style>

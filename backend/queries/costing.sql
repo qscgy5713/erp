@@ -39,7 +39,7 @@ SELECT t.item_id,
        COALESCE(SUM(t.qty) FILTER (WHERE t.source_type NOT IN ('goods_receipt', 'purchase_return', 'delivery',
                                    'sales_return', 'stock_adjustment', 'stock_count', 'stock_transfer', 'opening_stock',
                                    'work_order_issue', 'work_order_receipt', 'wo_completion_issue', 'wo_completion_receipt',
-                                   'sc_issue', 'sc_return', 'sc_receive_issue', 'sc_receive_receipt')), 0)::numeric AS other_qty
+                                   'sc_issue', 'sc_return', 'sc_receive_issue', 'sc_receive_receipt', 'wo_wip_issue', 'wo_wip_return')), 0)::numeric AS other_qty
 FROM inventory_transactions t
 WHERE t.company_id = @company_id AND t.doc_date BETWEEN sqlc.arg(start_date)::date AND sqlc.arg(end_date)::date
 GROUP BY t.item_id
