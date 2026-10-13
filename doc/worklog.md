@@ -5,7 +5,7 @@
 - migration 000045:`subcontract_orders` 狀態加 `draft` / `pending`、`submitted_at` / `approved_by` / `approved_at`,`approval_rules.doc_type` 加 `subcontract_order`。
 - 後端:`approval.Required` 判斷是否適用規則;開單 / 修改走 `routeApproval`(適用 → pending,否則 open);新增 `POST /subcontracts/:id/approve|reject`(權限 `production.subcontract.approve`);待核准 / 草稿可作廢;簽核收件匣與資料範圍查詢加入委外單。
 - 前端:委外單頁加簽核進度、核准 / 退回按鈕與提示,狀態標籤加草稿與待核准,收件匣可連到委外單。
-- 測試 `TestSubcontractApproval`:無規則直接進行中、低於門檻不簽核、兩層核准(同一人不可簽兩層)、待核准不能發料、退回 → 草稿 → 修改重送 → 改小直接進行中、待核准作廢。尚未做瀏覽器實測。
+- 測試 `TestSubcontractApproval`:無規則直接進行中、低於門檻不簽核、兩層核准(同一人不可簽兩層)、待核准不能發料、退回 → 草稿 → 修改重送 → 改小直接進行中、待核准作廢。瀏覽器實測:待核准單據顯示兩層簽核流程、提示與核准 / 退回按鈕;第 1 層核准後進度即時更新、同一人不再顯示核准鈕,第 2 層核准後變進行中。實測發現核准後進度沒有重新載入(漏了 `progressRef.reload()`),已修正並顯示「已完成本層核准,等待下一層核准」;測試資料(規則、單據)已清除。
 
 ## 2026-10-13 成本差異入帳評估(D104)
 

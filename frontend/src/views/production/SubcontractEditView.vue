@@ -210,8 +210,12 @@ async function confirmAnd(
   }
   acting.value = true
   try {
-    applyDoc(await run())
-    ElMessage.success(ok)
+    const next = await run()
+    applyDoc(next)
+    ElMessage.success(
+      ok === '已核准' && next.status === 'pending' ? '已完成本層核准,等待下一層核准' : ok,
+    )
+    progressRef.value?.reload()
   } catch (e) {
     handle(e)
   } finally {
@@ -229,6 +233,7 @@ const closeOrder = () =>
   )
 
 const approvalInfo = ref<ApprovalProgressData | null>(null)
+const progressRef = ref<InstanceType<typeof ApprovalProgress> | null>(null)
 const canApprove = computed(
   () =>
     doc.value?.status === 'pending' &&
@@ -328,6 +333,7 @@ autoClear(form)
     </div>
 
     <ApprovalProgress
+      ref="progressRef"
       doc-type="subcontract_order"
       :doc-id="doc?.id"
       :status="doc?.status"
