@@ -1,5 +1,10 @@
 # 工作日誌
 
+## 2026-10-13 在製品會計科目與委外加工費進項稅(D102、D103)
+
+- D102:migration 000043(`cost_closings.wip_value`、科目 1142「在製品」、拋轉規則 `cost.wip`);月結多拋一張在製品傳票(本月底與上次月結底的差額,借 1142 貸存貨),`WipQtyAsOf` 取在製品倉截至月底的數量;對帳檢查新增「在製品」並把存貨比對改為扣除在製品。測試 `TestWipAccount`(7 月領料 → 1142 = 2000、1141 = 4000;8 月退料 → 1142 歸零、對帳全 ok)。
+- D103:migration 000044(`subcontract_txns` 加稅別 / 稅額 / 發票欄位);`scTax` 算稅與檢查發票、`postScFee` 含稅應付與進項稅額分錄;`VatPurchaseDocs` UNION 併入委外加工費,401 / 媒體申報檔自動涵蓋。前端收回對話框加稅別與發票欄位、單據明細顯示稅額。測試 `TestSubcontractVat`(應付 525、401 進項稅 25 / 費用 500、作廢後撤出、無稅別填發票被擋)。
+
 ## 2026-10-13 在製品(WIP,D101)
 
 - migration 000042:`warehouses.kind` 加 `wip`(每公司唯一)、`work_order_wip_txns/_lines`、`work_order_completion_lines.from_wip`、單號 WI / WT。

@@ -251,3 +251,56 @@ func TestSubcontractPermissions(t *testing.T) {
 	expect(t, v.do(http.MethodGet, prodSC, nil), http.StatusForbidden, "SYS-403")
 	expect(t, v.do(http.MethodPost, prodSC, map[string]any{}), http.StatusForbidden, "SYS-403")
 }
+
+// 委外加工費的進項稅額與發票:併入營業稅 401,應付含稅,作廢後撤出
+func TestSubcontractVat(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, fg := p.item, e.seedItem("FG1", "goods")
+	recvWH := e.seedWarehouse("B", false)
+	p.receiveOn("2026-08-10", "5", "1200")
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(raw1, "2"))), http.StatusCreated, "")
+	sc := decode[scDoc](t, c.do(http.MethodPost, prodSC, map[string]any{"doc_date": "2026-09-10", "supplier_id": p.sup, "item_id": fg,
+		"plan_qty": "10", "unit_fee": "50", "issue_warehouse_id": p.wh, "receive_warehouse_id": recvWH}).Data)
+	expect(t, c.do(http.MethodPost, prodSC+"/"+itoa(sc.ID)+"/issue", map[string]any{"doc_date": "2026-09-11", "lines": scLines(raw1, "20")}), http.StatusCreated, "")
+	recv := func(extra map[string]any) apiResp {
+		b := map[string]any{"doc_date": "2026-09-15", "qty": "10"}
+		for k, v := range extra {
+			b[k] = v
+		}
+		return c.do(http.MethodPost, prodSC+"/"+itoa(sc.ID)+"/receive", b)
+	}
+	// 沒選稅別卻填發票、發票字軌格式錯誤都擋下
+	expect(t, recv(map[string]any{"invoice_kind": "triplicate", "invoice_no": "AB12345678", "invoice_date": "2026-09-14"}), http.StatusUnprocessableEntity, "SYS-422")
+	tax := e.idByCode("tax_types", "TX5")
+	expect(t, recv(map[string]any{"tax_type_id": tax, "invoice_kind": "triplicate", "invoice_no": "12345", "invoice_date": "2026-09-14"}), http.StatusUnprocessableEntity, "SYS-422")
+	expect(t, recv(map[string]any{"tax_type_id": tax, "invoice_kind": "triplicate", "invoice_no": "AB12345678", "invoice_date": "2026-09-14"}), http.StatusCreated, "")
+
+	// 加工費 10 × 50 = 500(未稅),稅 25,應付 525;傳票:借 費用 500 + 進項稅額 25,貸 應付 525
+	var amt decimal.Decimal
+	if err := e.pool.QueryRow(context.Background(), "SELECT amount FROM accounts_payable WHERE source_type = 'subcontract_receive'").Scan(&amt); err != nil || !amt.Equal(decimal.NewFromInt(525)) {
+		t.Fatalf("應付 = %s err=%v", amt, err)
+	}
+	v, res := c.vat("year=2026&period=5")
+	expect(t, res, http.StatusOK, "")
+	if v.Summary["deductible_expense"] != "500" || v.Summary["input_tax"] != "25" {
+		t.Fatalf("401 進項 = %v", v.Summary)
+	}
+	if len(v.Purchases) == 0 {
+		t.Fatalf("明細沒有委外加工費")
+	}
+
+	// 作廢收回 → 401 撤出、應付移除
+	sc = c.scGet(sc.ID)
+	var tid int64
+	for _, x := range sc.Txns {
+		if x.Kind == "receive" {
+			tid = x.ID
+		}
+	}
+	expect(t, c.do(http.MethodPost, prodSC+"/"+itoa(sc.ID)+"/txns/"+itoa(tid)+"/void", nil), http.StatusOK, "")
+	v, _ = c.vat("year=2026&period=5")
+	if v.Summary["input_tax"] != "0" || v.Summary["deductible_expense"] != "0" {
+		t.Fatalf("作廢後 401 進項 = %v", v.Summary)
+	}
+}

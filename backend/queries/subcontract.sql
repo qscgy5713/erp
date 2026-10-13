@@ -96,9 +96,10 @@ SELECT COALESCE(SUM(qty), 0)::numeric FROM subcontract_txns WHERE order_id = @or
 SELECT count(*) FROM subcontract_txns WHERE order_id = @order_id AND status = 'posted';
 
 -- name: CreateSubcontractTxn :one
-INSERT INTO subcontract_txns (company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry,
-                              output_bin_code, note, created_by)
-VALUES (@company_id, @order_id, @kind, @doc_no, @doc_date, @qty, @processing_fee, @output_lot_no, sqlc.narg(output_expiry),
+INSERT INTO subcontract_txns (company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, tax_type_id, tax_amount,
+                              invoice_no, invoice_date, invoice_kind, output_lot_no, output_expiry, output_bin_code, note, created_by)
+VALUES (@company_id, @order_id, @kind, @doc_no, @doc_date, @qty, @processing_fee, sqlc.narg(tax_type_id), @tax_amount,
+        @invoice_no, sqlc.narg(invoice_date), @invoice_kind, @output_lot_no, sqlc.narg(output_expiry),
         @output_bin_code, @note, @actor_id)
 RETURNING *;
 

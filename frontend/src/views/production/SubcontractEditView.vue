@@ -465,7 +465,8 @@ autoClear(form)
         <el-table-column label="內容" min-width="260">
           <template #default="{ row }">
             <template v-if="row.kind === 'receive'">
-              收回 {{ row.qty }} {{ doc.unit_name }},加工費 {{ row.processing_fee }}
+              收回 {{ row.qty }} {{ doc.unit_name }},加工費 {{ row.processing_fee
+              }}<template v-if="Number(row.tax_amount) > 0">(稅 {{ row.tax_amount }})</template>
               <span v-for="u in row.output_lots" :key="u.lot_no" class="muted"
                 >〔{{ u.lot_no }}(效期 {{ u.expiry_date ?? '—' }})〕</span
               >

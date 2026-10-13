@@ -129,7 +129,7 @@ func TestMonthlyCostClosing(t *testing.T) {
 	expect(t, c.act(&late, "post"), http.StatusConflict, "INV-008")
 	expect(t, c.actPur(deliveries, &dn, "unpost"), http.StatusConflict, "INV-008")
 
-	// 對帳檢查:存貨(容許 1 元四捨五入)、應收、應付、現有量、傳票皆通過
+	// 對帳檢查:存貨(容許 1 元四捨五入)、在製品、應收、應付、現有量、傳票皆通過
 	rec := decode[struct {
 		OK     bool `json:"ok"`
 		Checks []struct {
@@ -138,7 +138,7 @@ func TestMonthlyCostClosing(t *testing.T) {
 			Diff   string `json:"diff"`
 		} `json:"checks"`
 	}](t, c.do(http.MethodGet, "/costing/reconcile", nil).Data)
-	if !rec.OK || len(rec.Checks) != 9 {
+	if !rec.OK || len(rec.Checks) != 10 {
 		t.Fatalf("reconcile = %+v", rec)
 	}
 	for _, ch := range rec.Checks {

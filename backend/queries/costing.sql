@@ -62,8 +62,8 @@ WHERE ic.closing_id = @closing_id
 SELECT * FROM item_costs WHERE closing_id = @closing_id;
 
 -- name: InsertCostClosing :one
-INSERT INTO cost_closings (company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by)
-VALUES (@company_id, @period::char(7), @item_count, @cogs_amount, @adjust_amount, @inventory_value, @closed_by)
+INSERT INTO cost_closings (company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, wip_value, closed_by)
+VALUES (@company_id, @period::char(7), @item_count, @cogs_amount, @adjust_amount, @inventory_value, @wip_value, @closed_by)
 RETURNING *;
 
 -- name: InsertItemCost :exec
@@ -258,3 +258,11 @@ ORDER BY x.output_item_id, mi.code;
 SELECT DISTINCT ON (item_id) item_id, standard_cost FROM item_standard_costs
 WHERE company_id = @company_id AND item_id = ANY(@item_ids::bigint[]) AND effective_from <= @as_of::date
 ORDER BY item_id, effective_from DESC;
+
+-- name: WipQtyAsOf :many
+-- 截至指定日在製品倉各料品的數量(基本單位);月結用來把在製品價值轉到在製品科目
+SELECT t.item_id, SUM(t.qty)::numeric AS qty
+FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id
+WHERE t.company_id = @company_id AND w.kind = 'wip' AND t.doc_date <= @as_of::date
+GROUP BY t.item_id HAVING SUM(t.qty) <> 0
+ORDER BY t.item_id;

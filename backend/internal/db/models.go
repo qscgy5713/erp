@@ -218,6 +218,7 @@ type CostClosing struct {
 	InventoryValue decimal.Decimal
 	ClosedBy       *int64
 	ClosedAt       time.Time
+	WipValue       decimal.Decimal
 }
 
 type Currency struct {
@@ -924,6 +925,11 @@ type SubcontractTxn struct {
 	CreatedAt     time.Time
 	VoidedBy      *int64
 	VoidedAt      *time.Time
+	TaxTypeID     *int64
+	TaxAmount     decimal.Decimal
+	InvoiceNo     string
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 }
 
 type SubcontractTxnLine struct {

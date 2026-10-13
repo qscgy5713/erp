@@ -167,11 +167,12 @@ func (q *Queries) CreateSubcontractOrder(ctx context.Context, arg CreateSubcontr
 }
 
 const createSubcontractTxn = `-- name: CreateSubcontractTxn :one
-INSERT INTO subcontract_txns (company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry,
-                              output_bin_code, note, created_by)
+INSERT INTO subcontract_txns (company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, tax_type_id, tax_amount,
+                              invoice_no, invoice_date, invoice_kind, output_lot_no, output_expiry, output_bin_code, note, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12)
-RETURNING id, company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at
+        $10, $11, $12, $13, $14,
+        $15, $16, $17)
+RETURNING id, company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at, tax_type_id, tax_amount, invoice_no, invoice_date, invoice_kind
 `
 
 type CreateSubcontractTxnParams struct {
@@ -182,6 +183,11 @@ type CreateSubcontractTxnParams struct {
 	DocDate       time.Time
 	Qty           decimal.Decimal
 	ProcessingFee decimal.Decimal
+	TaxTypeID     *int64
+	TaxAmount     decimal.Decimal
+	InvoiceNo     string
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 	OutputLotNo   string
 	OutputExpiry  *time.Time
 	OutputBinCode string
@@ -198,6 +204,11 @@ func (q *Queries) CreateSubcontractTxn(ctx context.Context, arg CreateSubcontrac
 		arg.DocDate,
 		arg.Qty,
 		arg.ProcessingFee,
+		arg.TaxTypeID,
+		arg.TaxAmount,
+		arg.InvoiceNo,
+		arg.InvoiceDate,
+		arg.InvoiceKind,
 		arg.OutputLotNo,
 		arg.OutputExpiry,
 		arg.OutputBinCode,
@@ -223,6 +234,11 @@ func (q *Queries) CreateSubcontractTxn(ctx context.Context, arg CreateSubcontrac
 		&i.CreatedAt,
 		&i.VoidedBy,
 		&i.VoidedAt,
+		&i.TaxTypeID,
+		&i.TaxAmount,
+		&i.InvoiceNo,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }
@@ -600,7 +616,7 @@ func (q *Queries) ListSubcontractTxnLots(ctx context.Context, txnID int64) ([]Li
 }
 
 const listSubcontractTxns = `-- name: ListSubcontractTxns :many
-SELECT t.id, t.company_id, t.order_id, t.kind, t.doc_no, t.doc_date, t.qty, t.processing_fee, t.output_lot_no, t.output_expiry, t.output_bin_code, t.note, t.status, t.created_by, t.created_at, t.voided_by, t.voided_at, cu.name AS created_by_name, vu.name AS voided_by_name
+SELECT t.id, t.company_id, t.order_id, t.kind, t.doc_no, t.doc_date, t.qty, t.processing_fee, t.output_lot_no, t.output_expiry, t.output_bin_code, t.note, t.status, t.created_by, t.created_at, t.voided_by, t.voided_at, t.tax_type_id, t.tax_amount, t.invoice_no, t.invoice_date, t.invoice_kind, cu.name AS created_by_name, vu.name AS voided_by_name
 FROM subcontract_txns t LEFT JOIN users cu ON cu.id = t.created_by LEFT JOIN users vu ON vu.id = t.voided_by
 WHERE t.order_id = $1 ORDER BY t.id
 `
@@ -623,6 +639,11 @@ type ListSubcontractTxnsRow struct {
 	CreatedAt     time.Time
 	VoidedBy      *int64
 	VoidedAt      *time.Time
+	TaxTypeID     *int64
+	TaxAmount     decimal.Decimal
+	InvoiceNo     string
+	InvoiceDate   *time.Time
+	InvoiceKind   string
 	CreatedByName *string
 	VoidedByName  *string
 }
@@ -654,6 +675,11 @@ func (q *Queries) ListSubcontractTxns(ctx context.Context, orderID int64) ([]Lis
 			&i.CreatedAt,
 			&i.VoidedBy,
 			&i.VoidedAt,
+			&i.TaxTypeID,
+			&i.TaxAmount,
+			&i.InvoiceNo,
+			&i.InvoiceDate,
+			&i.InvoiceKind,
 			&i.CreatedByName,
 			&i.VoidedByName,
 		); err != nil {
@@ -704,7 +730,7 @@ func (q *Queries) LockSubcontractOrder(ctx context.Context, arg LockSubcontractO
 }
 
 const lockSubcontractTxn = `-- name: LockSubcontractTxn :one
-SELECT id, company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at FROM subcontract_txns WHERE id = $1 AND order_id = $2 AND company_id = $3 FOR UPDATE
+SELECT id, company_id, order_id, kind, doc_no, doc_date, qty, processing_fee, output_lot_no, output_expiry, output_bin_code, note, status, created_by, created_at, voided_by, voided_at, tax_type_id, tax_amount, invoice_no, invoice_date, invoice_kind FROM subcontract_txns WHERE id = $1 AND order_id = $2 AND company_id = $3 FOR UPDATE
 `
 
 type LockSubcontractTxnParams struct {
@@ -734,6 +760,11 @@ func (q *Queries) LockSubcontractTxn(ctx context.Context, arg LockSubcontractTxn
 		&i.CreatedAt,
 		&i.VoidedBy,
 		&i.VoidedAt,
+		&i.TaxTypeID,
+		&i.TaxAmount,
+		&i.InvoiceNo,
+		&i.InvoiceDate,
+		&i.InvoiceKind,
 	)
 	return i, err
 }

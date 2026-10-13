@@ -198,7 +198,7 @@ func (q *Queries) GLBalanceAsOf(ctx context.Context, arg GLBalanceAsOfParams) (d
 }
 
 const getCostClosing = `-- name: GetCostClosing :one
-SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at FROM cost_closings WHERE company_id = $1 AND period = $2::char(7)
+SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at, wip_value FROM cost_closings WHERE company_id = $1 AND period = $2::char(7)
 `
 
 type GetCostClosingParams struct {
@@ -219,14 +219,15 @@ func (q *Queries) GetCostClosing(ctx context.Context, arg GetCostClosingParams) 
 		&i.InventoryValue,
 		&i.ClosedBy,
 		&i.ClosedAt,
+		&i.WipValue,
 	)
 	return i, err
 }
 
 const insertCostClosing = `-- name: InsertCostClosing :one
-INSERT INTO cost_closings (company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by)
-VALUES ($1, $2::char(7), $3, $4, $5, $6, $7)
-RETURNING id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at
+INSERT INTO cost_closings (company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, wip_value, closed_by)
+VALUES ($1, $2::char(7), $3, $4, $5, $6, $7, $8)
+RETURNING id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at, wip_value
 `
 
 type InsertCostClosingParams struct {
@@ -236,6 +237,7 @@ type InsertCostClosingParams struct {
 	CogsAmount     decimal.Decimal
 	AdjustAmount   decimal.Decimal
 	InventoryValue decimal.Decimal
+	WipValue       decimal.Decimal
 	ClosedBy       *int64
 }
 
@@ -247,6 +249,7 @@ func (q *Queries) InsertCostClosing(ctx context.Context, arg InsertCostClosingPa
 		arg.CogsAmount,
 		arg.AdjustAmount,
 		arg.InventoryValue,
+		arg.WipValue,
 		arg.ClosedBy,
 	)
 	var i CostClosing
@@ -260,6 +263,7 @@ func (q *Queries) InsertCostClosing(ctx context.Context, arg InsertCostClosingPa
 		&i.InventoryValue,
 		&i.ClosedBy,
 		&i.ClosedAt,
+		&i.WipValue,
 	)
 	return i, err
 }
@@ -331,7 +335,7 @@ func (q *Queries) InventoryBalanceMismatches(ctx context.Context, companyID int6
 }
 
 const latestCostClosing = `-- name: LatestCostClosing :one
-SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at FROM cost_closings WHERE company_id = $1 ORDER BY period DESC LIMIT 1
+SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at, wip_value FROM cost_closings WHERE company_id = $1 ORDER BY period DESC LIMIT 1
 `
 
 func (q *Queries) LatestCostClosing(ctx context.Context, companyID int64) (CostClosing, error) {
@@ -347,12 +351,13 @@ func (q *Queries) LatestCostClosing(ctx context.Context, companyID int64) (CostC
 		&i.InventoryValue,
 		&i.ClosedBy,
 		&i.ClosedAt,
+		&i.WipValue,
 	)
 	return i, err
 }
 
 const latestCostClosingBefore = `-- name: LatestCostClosingBefore :one
-SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at FROM cost_closings WHERE company_id = $1 AND period < $2::char(7)
+SELECT id, company_id, period, item_count, cogs_amount, adjust_amount, inventory_value, closed_by, closed_at, wip_value FROM cost_closings WHERE company_id = $1 AND period < $2::char(7)
 ORDER BY period DESC LIMIT 1
 `
 
@@ -374,13 +379,14 @@ func (q *Queries) LatestCostClosingBefore(ctx context.Context, arg LatestCostClo
 		&i.InventoryValue,
 		&i.ClosedBy,
 		&i.ClosedAt,
+		&i.WipValue,
 	)
 	return i, err
 }
 
 const listCostClosings = `-- name: ListCostClosings :many
 
-SELECT c.id, c.company_id, c.period, c.item_count, c.cogs_amount, c.adjust_amount, c.inventory_value, c.closed_by, c.closed_at, u.name AS closed_by_name FROM cost_closings c LEFT JOIN users u ON u.id = c.closed_by
+SELECT c.id, c.company_id, c.period, c.item_count, c.cogs_amount, c.adjust_amount, c.inventory_value, c.closed_by, c.closed_at, c.wip_value, u.name AS closed_by_name FROM cost_closings c LEFT JOIN users u ON u.id = c.closed_by
 WHERE c.company_id = $1 ORDER BY c.period DESC
 `
 
@@ -394,6 +400,7 @@ type ListCostClosingsRow struct {
 	InventoryValue decimal.Decimal
 	ClosedBy       *int64
 	ClosedAt       time.Time
+	WipValue       decimal.Decimal
 	ClosedByName   *string
 }
 
@@ -417,6 +424,7 @@ func (q *Queries) ListCostClosings(ctx context.Context, companyID int64) ([]List
 			&i.InventoryValue,
 			&i.ClosedBy,
 			&i.ClosedAt,
+			&i.WipValue,
 			&i.ClosedByName,
 		); err != nil {
 			return nil, err
@@ -1055,6 +1063,45 @@ func (q *Queries) VarianceBomLines(ctx context.Context, arg VarianceBomLinesPara
 			&i.MaterialName,
 			&i.UnitName,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const wipQtyAsOf = `-- name: WipQtyAsOf :many
+SELECT t.item_id, SUM(t.qty)::numeric AS qty
+FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id
+WHERE t.company_id = $1 AND w.kind = 'wip' AND t.doc_date <= $2::date
+GROUP BY t.item_id HAVING SUM(t.qty) <> 0
+ORDER BY t.item_id
+`
+
+type WipQtyAsOfParams struct {
+	CompanyID int64
+	AsOf      time.Time
+}
+
+type WipQtyAsOfRow struct {
+	ItemID int64
+	Qty    decimal.Decimal
+}
+
+// 截至指定日在製品倉各料品的數量(基本單位);月結用來把在製品價值轉到在製品科目
+func (q *Queries) WipQtyAsOf(ctx context.Context, arg WipQtyAsOfParams) ([]WipQtyAsOfRow, error) {
+	rows, err := q.db.Query(ctx, wipQtyAsOf, arg.CompanyID, arg.AsOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WipQtyAsOfRow{}
+	for rows.Next() {
+		var i WipQtyAsOfRow
+		if err := rows.Scan(&i.ItemID, &i.Qty); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

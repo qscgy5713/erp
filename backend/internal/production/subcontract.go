@@ -3,6 +3,7 @@ package production
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,7 @@ import (
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
 	"erp/internal/shared/apperr"
+	"erp/internal/shared/money"
 	"erp/internal/shared/page"
 	"erp/internal/shared/response"
 	"erp/internal/system/audit"
@@ -93,7 +95,12 @@ type scTxnDTO struct {
 	DocNo         string          `json:"doc_no"`
 	DocDate       string          `json:"doc_date"`
 	Qty           decimal.Decimal `json:"qty"`
-	ProcessingFee decimal.Decimal `json:"processing_fee"`
+	ProcessingFee decimal.Decimal `json:"processing_fee"` // 未稅
+	TaxTypeID     *int64          `json:"tax_type_id"`
+	TaxAmount     decimal.Decimal `json:"tax_amount"`
+	InvoiceNo     string          `json:"invoice_no"`
+	InvoiceDate   *string         `json:"invoice_date"`
+	InvoiceKind   string          `json:"invoice_kind"`
 	OutputLotNo   string          `json:"output_lot_no"`
 	OutputExpiry  *string         `json:"output_expiry_date"`
 	OutputBinCode string          `json:"output_bin_code"`
@@ -194,7 +201,8 @@ func loadScOrder(ctx context.Context, q *db.Queries, companyID, id int64) (scOrd
 	}
 	for _, t := range txns {
 		d := scTxnDTO{ID: t.ID, Kind: t.Kind, DocNo: t.DocNo, DocDate: t.DocDate.Format(time.DateOnly), Qty: t.Qty,
-			ProcessingFee: t.ProcessingFee, OutputLotNo: t.OutputLotNo, OutputExpiry: dateStr(t.OutputExpiry),
+			ProcessingFee: t.ProcessingFee, TaxTypeID: t.TaxTypeID, TaxAmount: t.TaxAmount, InvoiceNo: t.InvoiceNo,
+			InvoiceDate: dateStr(t.InvoiceDate), InvoiceKind: t.InvoiceKind, OutputLotNo: t.OutputLotNo, OutputExpiry: dateStr(t.OutputExpiry),
 			OutputBinCode: t.OutputBinCode, Note: t.Note, Status: t.Status, CreatedByName: t.CreatedByName, CreatedAt: t.CreatedAt,
 			VoidedByName: t.VoidedByName, VoidedAt: t.VoidedAt, Lines: []scTxnLineDTO{}, OutputLots: []lotUsedDTO{}}
 		tl, err := q.ListSubcontractTxnLines(ctx, t.ID)
@@ -930,12 +938,17 @@ func (m *Module) subcontractReceivePreview(c *gin.Context) {
 type scReceiveInput struct {
 	DocDate       string           `json:"doc_date" binding:"required"`
 	Qty           decimal.Decimal  `json:"qty"`
-	ProcessingFee *decimal.Decimal `json:"processing_fee"` // 空白 = 預計單價 × 本次數量
-	OutputLotNo   string           `json:"output_lot_no"`
-	OutputBinCode string           `json:"output_bin_code"`
-	OutputExpiry  *string          `json:"output_expiry_date"`
-	Note          string           `json:"note" binding:"max=255"`
-	Lines         []woLineInput    `json:"lines" binding:"dive"` // 實際耗料;空白 = 依預計用量比例
+	ProcessingFee *decimal.Decimal `json:"processing_fee"` // 未稅;空白 = 預計單價 × 本次數量
+	// 選了稅別就依稅率計算進項稅額,並併入營業稅 401 申報;發票欄位規則同進貨單
+	TaxTypeID     *int64        `json:"tax_type_id"`
+	InvoiceNo     string        `json:"invoice_no" binding:"max=20"`
+	InvoiceDate   *string       `json:"invoice_date"`
+	InvoiceKind   string        `json:"invoice_kind" binding:"omitempty,oneof=triplicate register2 register3"`
+	OutputLotNo   string        `json:"output_lot_no"`
+	OutputBinCode string        `json:"output_bin_code"`
+	OutputExpiry  *string       `json:"output_expiry_date"`
+	Note          string        `json:"note" binding:"max=255"`
+	Lines         []woLineInput `json:"lines" binding:"dive"` // 實際耗料;空白 = 依預計用量比例
 }
 
 func (m *Module) receiveSubcontract(c *gin.Context) {
@@ -992,6 +1005,10 @@ func (m *Module) receiveSubcontract(c *gin.Context) {
 		if !feeOK(fee) {
 			return fieldErr("processing_fee", "加工費須為 0 以上,最多 2 位小數")
 		}
+		tax, invDate, err := scTax(ctx, q, a.CompanyID, fee, &in)
+		if err != nil {
+			return err
+		}
 		lines := in.Lines
 		if len(lines) == 0 {
 			planned, err := q.ListSubcontractOrderLines(ctx, id)
@@ -1031,7 +1048,8 @@ func (m *Module) receiveSubcontract(c *gin.Context) {
 			return err
 		}
 		txn, err := q.CreateSubcontractTxn(ctx, db.CreateSubcontractTxnParams{CompanyID: a.CompanyID, OrderID: id, Kind: kindReceive,
-			DocNo: no, DocDate: date, Qty: in.Qty, ProcessingFee: fee, OutputLotNo: oc.lotNo, OutputExpiry: oc.expiry,
+			DocNo: no, DocDate: date, Qty: in.Qty, ProcessingFee: fee, TaxTypeID: in.TaxTypeID, TaxAmount: tax, InvoiceNo: in.InvoiceNo,
+			InvoiceDate: invDate, InvoiceKind: in.InvoiceKind, OutputLotNo: oc.lotNo, OutputExpiry: oc.expiry,
 			OutputBinCode: oc.bin, Note: in.Note, ActorID: &a.UserID})
 		if err != nil {
 			return err
@@ -1072,11 +1090,45 @@ func (m *Module) receiveSubcontract(c *gin.Context) {
 	response.Created(c, out)
 }
 
-// postScFee 加工費轉應付與傳票:借 費用(月結時由「加工費轉出」轉入成品存貨)貸 應付帳款。以本位幣、含稅金額記帳。
+var scInvoiceNoRe = regexp.MustCompile(`^[A-Z]{2}[0-9]{8}$`)
+
+// scTax 依稅別算進項稅額並檢查發票欄位(規則同進貨單:選了憑證種類就要有字軌號碼與發票日期);沒選稅別時稅額為 0,
+// 此時填發票欄位沒有意義,直接拒絕,避免以為有申報。
+func scTax(ctx context.Context, q *db.Queries, companyID int64, fee decimal.Decimal, in *scReceiveInput) (decimal.Decimal, *time.Time, error) {
+	in.InvoiceNo = strings.ToUpper(strings.TrimSpace(in.InvoiceNo))
+	invDate, err := trade.OptionalInputDate("invoice_date", in.InvoiceDate)
+	if err != nil {
+		return decimal.Zero, nil, err
+	}
+	if in.TaxTypeID == nil {
+		if in.InvoiceKind != "" || invDate != nil {
+			return decimal.Zero, nil, fieldErr("tax_type_id", "要申報進項稅額請先選擇稅別")
+		}
+		return decimal.Zero, nil, nil
+	}
+	if in.InvoiceKind != "" {
+		if !scInvoiceNoRe.MatchString(in.InvoiceNo) {
+			return decimal.Zero, nil, fieldErr("invoice_no", "發票號碼須為 2 碼英文字軌加 8 碼數字,例如 AB12345678")
+		}
+		if invDate == nil {
+			return decimal.Zero, nil, fieldErr("invoice_date", "請輸入發票日期")
+		}
+	}
+	tt, err := q.TaxTypeForDoc(ctx, db.TaxTypeForDocParams{ID: *in.TaxTypeID, CompanyID: companyID})
+	if database.IsNoRows(err) || (err == nil && !tt.IsActive) {
+		return decimal.Zero, nil, fieldErr("tax_type_id", "稅別不存在或已停用")
+	} else if err != nil {
+		return decimal.Zero, nil, err
+	}
+	return money.Amount(fee.Mul(tt.Rate)), invDate, nil
+}
+
+// postScFee 加工費轉應付與傳票:借 費用(未稅,月結時由「加工費轉出」轉入成品存貨)與進項稅額,貸 應付帳款(含稅)。以本位幣記帳。
 func postScFee(ctx context.Context, q *db.Queries, companyID, actorID int64, o db.SubcontractOrder, t db.SubcontractTxn) error {
 	if !t.ProcessingFee.IsPositive() {
 		return nil
 	}
+	total := t.ProcessingFee.Add(t.TaxAmount)
 	sup, err := q.GetSupplier(ctx, db.GetSupplierParams{ID: o.SupplierID, CompanyID: companyID})
 	if err != nil {
 		return err
@@ -1087,14 +1139,15 @@ func postScFee(ctx context.Context, q *db.Queries, companyID, actorID int64, o d
 	}
 	if err := finance.CreatePayable(ctx, q, db.InsertPayableParams{CompanyID: companyID, SupplierID: o.SupplierID, SourceType: srcScFee,
 		SourceID: t.ID, SourceNo: t.DocNo, DocDate: t.DocDate, DueDate: due, Currency: masterdata.BaseCurrency,
-		ExchangeRate: decimal.NewFromInt(1), Amount: t.ProcessingFee, BaseAmount: t.ProcessingFee, CreatedBy: &actorID}); err != nil {
+		ExchangeRate: decimal.NewFromInt(1), Amount: total, BaseAmount: total, CreatedBy: &actorID}); err != nil {
 		return err
 	}
 	return gl.PostSource(ctx, q, gl.Options{CompanyID: companyID, ActorID: &actorID},
 		gl.Source{Type: srcScFee, ID: t.ID, No: t.DocNo, Date: t.DocDate, Desc: "委外加工費 " + t.DocNo},
 		[]gl.Entry{
 			{Key: "purchase.expense", Debit: t.ProcessingFee},
-			{Key: "purchase.payable", Credit: t.ProcessingFee, SupplierID: &o.SupplierID},
+			{Key: "purchase.input_tax", Debit: t.TaxAmount},
+			{Key: "purchase.payable", Credit: total, SupplierID: &o.SupplierID},
 		})
 }
 

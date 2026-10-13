@@ -364,6 +364,11 @@ export interface ScTxn {
   doc_date: string
   qty: Decimal
   processing_fee: Decimal
+  tax_type_id: number | null
+  tax_amount: Decimal
+  invoice_no: string
+  invoice_date: string | null
+  invoice_kind: string
   output_lot_no: string
   output_expiry_date: string | null
   output_bin_code: string
@@ -448,6 +453,10 @@ export interface ScReceiveInput {
   doc_date: string
   qty: Decimal
   processing_fee: Decimal
+  tax_type_id: number | null
+  invoice_kind: string
+  invoice_no: string
+  invoice_date: string | null
   output_lot_no: string
   output_bin_code: string
   output_expiry_date: string | null

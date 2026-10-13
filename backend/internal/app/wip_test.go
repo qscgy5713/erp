@@ -180,3 +180,50 @@ func TestWipReport(t *testing.T) {
 	expect(t, v.do(http.MethodGet, "/production/wip", nil), http.StatusForbidden, "SYS-403")
 	expect(t, v.do(http.MethodPost, prodWO+"/"+itoa(wo.ID)+"/wip-issue", map[string]any{}), http.StatusForbidden, "SYS-403")
 }
+
+// 月結把在製品倉的材料價值從存貨轉到在製品科目 1142;退回後下個月轉回
+func TestWipAccount(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, fg := p.item, e.seedItem("FG1", "goods")
+	p.receiveOn("2026-07-10", "5", "1200") // RAW1 60 個 @100
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(raw1, "2"))), http.StatusCreated, "")
+	wo := decode[woDoc](t, c.do(http.MethodPost, prodWO, woBody(fg, "10", p.wh, "0", map[string]any{"doc_date": "2026-07-05"})).Data)
+	for _, a := range []string{"submit", "approve"} {
+		expect(t, c.woAct(&wo, a), http.StatusOK, "")
+	}
+	wip := prodWO + "/" + itoa(wo.ID)
+	expect(t, c.do(http.MethodPost, wip+"/wip-issue", map[string]any{"doc_date": "2026-07-11", "lines": scLines(raw1, "20")}), http.StatusCreated, "")
+
+	expect(t, c.do(http.MethodPost, "/costing/closings/2026-07/run", nil), http.StatusOK, "")
+	// 7 月底:存貨總值 6000,其中 20 個 × 100 = 2000 在在製品科目
+	tb := c.trialRange("2026-07-01", "2026-07-31")
+	if r := tb["1142"]; r.Closing != "2000" {
+		t.Fatalf("1142 在製品 = %+v", r)
+	}
+	if r := tb["1141"]; r.Closing != "4000" {
+		t.Fatalf("1141 存貨 = %+v", r)
+	}
+
+	// 8 月退料 → 月結後在製品科目歸零
+	expect(t, c.do(http.MethodPost, wip+"/wip-return", map[string]any{"doc_date": "2026-08-05", "lines": scLines(raw1, "20")}), http.StatusCreated, "")
+	expect(t, c.do(http.MethodPost, "/costing/closings/2026-08/run", nil), http.StatusOK, "")
+	tb = c.trialRange("2026-08-01", "2026-08-31")
+	if r := tb["1142"]; r.Closing != "0" && r.Closing != "0.00" {
+		t.Fatalf("8 月 1142 在製品 = %+v", r)
+	}
+	if r := tb["1141"]; r.Closing != "6000" {
+		t.Fatalf("8 月 1141 存貨 = %+v", r)
+	}
+	rec := decode[struct {
+		Checks []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}](t, c.do(http.MethodGet, "/costing/reconcile", nil).Data)
+	for _, ch := range rec.Checks {
+		if ch.Status != "ok" {
+			t.Fatalf("對帳檢查 %s = %s", ch.Key, ch.Status)
+		}
+	}
+}

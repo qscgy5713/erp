@@ -95,7 +95,18 @@ LEFT JOIN items i ON i.id = l.item_id
 WHERE r.company_id = $1 AND r.status = 'posted'
   AND COALESCE(r.invoice_date, r.doc_date) BETWEEN $2::date AND $3::date
 GROUP BY r.id, t.kind, s.id
-ORDER BY eff_date, r.doc_no
+UNION ALL
+SELECT c.id, c.doc_no, 'receipt'::varchar AS doc_type, c.doc_date, COALESCE(c.invoice_date, c.doc_date)::date AS eff_date, c.invoice_no,
+       c.invoice_kind, c.processing_fee AS base_untaxed, c.tax_amount AS base_tax, t.kind AS tax_kind,
+       s.code AS partner_code, s.name AS partner_name, COALESCE(s.tax_id, '')::text AS partner_tax_id,
+       0::numeric AS goods_amount, c.processing_fee::numeric AS expense_amount
+FROM subcontract_txns c
+JOIN subcontract_orders o ON o.id = c.order_id
+JOIN suppliers s ON s.id = o.supplier_id
+JOIN tax_types t ON t.id = c.tax_type_id
+WHERE c.company_id = $1 AND c.kind = 'receive' AND c.status = 'posted'
+  AND COALESCE(c.invoice_date, c.doc_date) BETWEEN $2::date AND $3::date
+ORDER BY eff_date, doc_no
 `
 
 type VatPurchaseDocsParams struct {
@@ -123,6 +134,7 @@ type VatPurchaseDocsRow struct {
 }
 
 // 期間內已過帳的進貨 / 進貨退出;日期以發票日期為準(沒填則用單據日期);進貨(商品)與費用(服務)依料品類型拆分
+// 委外加工費(D103):有選稅別的收回,視為服務費用(進貨);作廢的不列入
 func (q *Queries) VatPurchaseDocs(ctx context.Context, arg VatPurchaseDocsParams) ([]VatPurchaseDocsRow, error) {
 	rows, err := q.db.Query(ctx, vatPurchaseDocs, arg.CompanyID, arg.FromDate, arg.ToDate)
 	if err != nil {

@@ -176,7 +176,9 @@ func (m *Module) run(c *gin.Context) {
 
 		// 期初:最近一次月結的期末
 		open := map[int64]opening{}
+		prevWip := decimal.Zero
 		if prev, err := q.LatestCostClosingBefore(ctx, db.LatestCostClosingBeforeParams{CompanyID: a.CompanyID, Period: period}); err == nil {
+			prevWip = prev.WipValue
 			items, err := q.ListItemCostsRaw(ctx, prev.ID)
 			if err != nil {
 				return err
@@ -264,9 +266,20 @@ func (m *Module) run(c *gin.Context) {
 			cogs, adjust, inv = cogs.Add(r.r.cogs), adjust.Add(r.r.adjust), inv.Add(r.r.closingV)
 		}
 
+		// 在製品倉的材料價值(數量 × 本月平均成本),月結時由存貨科目轉到在製品科目
+		wipQty, err := q.WipQtyAsOf(ctx, db.WipQtyAsOfParams{CompanyID: a.CompanyID, AsOf: end})
+		if err != nil {
+			return err
+		}
+		wip := decimal.Zero
+		for _, w := range wipQty {
+			wip = wip.Add(w.Qty.Mul(results[w.ItemID].avg))
+		}
+		wip = wip.Round(4)
+
 		cl, err := q.InsertCostClosing(ctx, db.InsertCostClosingParams{
 			CompanyID: a.CompanyID, Period: period, ItemCount: int32(len(rows)), CogsAmount: cogs,
-			AdjustAmount: adjust, InventoryValue: inv, ClosedBy: &a.UserID,
+			AdjustAmount: adjust, InventoryValue: inv, WipValue: wip, ClosedBy: &a.UserID,
 		})
 		if err != nil {
 			return err
@@ -311,6 +324,16 @@ func (m *Module) run(c *gin.Context) {
 		// 完工成品成本含加工費:加工費由「加工費轉出」轉入存貨(實際發生的人工與製造費用已另外入帳為費用)
 		src.Desc = "月結完工加工費轉入存貨 " + period
 		if err := gl.PostSource(ctx, q, opt, src, pair(absorb, "cost.inventory", "cost.absorb")); err != nil {
+			return err
+		}
+		// 在製品:科目餘額調整到本月底的在製品金額(與上次月結的差額;減少時借貸相反)
+		src.Desc = "月結在製品 " + period
+		if delta := wip.Sub(prevWip); delta.IsNegative() {
+			err = gl.PostSource(ctx, q, opt, src, pair(delta.Neg(), "cost.inventory", "cost.wip"))
+		} else {
+			err = gl.PostSource(ctx, q, opt, src, pair(delta, "cost.wip", "cost.inventory"))
+		}
+		if err != nil {
 			return err
 		}
 

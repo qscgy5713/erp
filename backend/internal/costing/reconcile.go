@@ -92,13 +92,36 @@ func (m *Module) reconcile(c *gin.Context) {
 			return
 		}
 		inv = amountCheck("inventory", fmt.Sprintf("存貨:%s 月結期末金額 vs 總帳存貨科目", latest.Period),
-			latest.InventoryValue, bal, decimal.NewFromInt(int64(max(latest.ItemCount, 1))),
+			latest.InventoryValue.Sub(latest.WipValue), bal, decimal.NewFromInt(int64(max(latest.ItemCount, 1))),
 			"差異超過四捨五入容許範圍。可能是月結前已過帳、沒有傳票的進貨單,或手動傳票直接調整了存貨科目")
 	} else if !database.IsNoRows(err) {
 		response.Error(c, err)
 		return
 	}
 	checks = append(checks, inv)
+
+	// 在製品:最近一次月結的在製品金額 vs 在製品科目
+	wipCheck := checkDTO{Key: "wip", Label: "在製品:月結在製品金額 vs 總帳在製品科目", Status: statusWarn, Message: "尚未月結過成本,無法核對"}
+	if latest, err := q.LatestCostClosing(ctx, companyID); err == nil {
+		acct, err := mappedAccount(ctx, q, companyID, "cost.wip")
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		_, end := monthRange(latest.Period)
+		bal, err := q.GLBalanceAsOf(ctx, db.GLBalanceAsOfParams{CompanyID: companyID, AccountID: acct, AsOf: end})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		wipCheck = amountCheck("wip", fmt.Sprintf("在製品:%s 月結在製品金額 vs 總帳在製品科目", latest.Period),
+			latest.WipValue, bal, decimal.NewFromInt(int64(max(latest.ItemCount, 1))),
+			"差異超過四捨五入容許範圍,可能是手動傳票直接調整了在製品科目")
+	} else if !database.IsNoRows(err) {
+		response.Error(c, err)
+		return
+	}
+	checks = append(checks, wipCheck)
 
 	// 應收、應付
 	for _, s := range []struct {

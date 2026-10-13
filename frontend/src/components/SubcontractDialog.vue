@@ -6,7 +6,7 @@
 import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { productionApi, type ScKind, type SubcontractOrder } from '@/api/production'
-import type { LotControl } from '@/api/masterdata'
+import { masterdataApi, type LotControl, type TaxType } from '@/api/masterdata'
 import { useApiError } from '@/composables/useApiError'
 import { useBinStore } from '@/composables/useBinStore'
 import { scKindLabels } from '@/utils/subcontract'
@@ -33,6 +33,7 @@ const { fieldErrors, handle, reset } = useApiError()
 const binStore = useBinStore()
 const saving = ref(false)
 const remaining = ref('0')
+const taxTypes = ref<TaxType[]>([])
 const today = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -42,6 +43,10 @@ const form = reactive({
   doc_date: today(),
   qty: '',
   processing_fee: '0',
+  tax_type_id: null as number | null,
+  invoice_kind: '',
+  invoice_no: '',
+  invoice_date: null as string | null,
   output_lot_no: '',
   output_expiry_date: null as string | null,
   output_bin_code: '',
@@ -119,13 +124,21 @@ watch(visible, async (v) => {
   Object.assign(form, {
     doc_date: today() < props.doc.doc_date ? props.doc.doc_date : today(),
     qty: '',
+    tax_type_id: null,
+    invoice_kind: '',
+    invoice_no: '',
+    invoice_date: null,
     output_lot_no: '',
     output_expiry_date: null,
     output_bin_code: '',
     note: '',
   })
-  if (props.mode === 'receive') await loadPreview()
-  else form.lines = defaults()
+  if (props.mode === 'receive') {
+    taxTypes.value = (await masterdataApi.taxTypes()).filter(
+      (t) => t.is_active && t.kind === 'taxable',
+    )
+    await loadPreview()
+  } else form.lines = defaults()
 })
 
 async function submit() {
@@ -147,6 +160,10 @@ async function submit() {
             doc_date: form.doc_date,
             qty: form.qty === '' ? '0' : form.qty,
             processing_fee: form.processing_fee === '' ? '0' : form.processing_fee,
+            tax_type_id: form.tax_type_id,
+            invoice_kind: form.tax_type_id ? form.invoice_kind : '',
+            invoice_no: form.tax_type_id ? form.invoice_no : '',
+            invoice_date: form.tax_type_id ? form.invoice_date : null,
             output_lot_no: props.doc.item_lot_control !== 'none' ? form.output_lot_no : '',
             output_bin_code: outputBin() ? form.output_bin_code : '',
             output_expiry_date:
@@ -210,9 +227,52 @@ async function submit() {
             </el-col>
             <el-col :xs="24" :sm="12">
               <el-form-item label="本次加工費" :error="fieldErrors.processing_fee">
-                <el-input v-model="form.processing_fee" />
+                <el-input v-model="form.processing_fee" placeholder="未稅" />
               </el-form-item>
             </el-col>
+            <el-col :xs="24" :sm="12">
+              <el-form-item label="稅別" :error="fieldErrors.tax_type_id">
+                <el-select
+                  v-model="form.tax_type_id"
+                  clearable
+                  placeholder="不申報進項稅額"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="t in taxTypes"
+                    :key="t.id"
+                    :label="`${t.name}(${Number(t.rate) * 100}%)`"
+                    :value="t.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <template v-if="form.tax_type_id">
+              <el-col :xs="24" :sm="12">
+                <el-form-item label="憑證種類" :error="fieldErrors.invoice_kind">
+                  <el-select v-model="form.invoice_kind" style="width: 100%">
+                    <el-option label="無 / 其他" value="" />
+                    <el-option label="三聯式 / 電子計算機發票" value="triplicate" />
+                    <el-option label="二聯式收銀機發票" value="register2" />
+                    <el-option label="三聯式收銀機 / 電子發票" value="register3" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="12">
+                <el-form-item label="發票號碼" :error="fieldErrors.invoice_no">
+                  <el-input v-model="form.invoice_no" maxlength="20" placeholder="AB12345678" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="12">
+                <el-form-item label="發票日期" :error="fieldErrors.invoice_date">
+                  <el-date-picker
+                    v-model="form.invoice_date"
+                    value-format="YYYY-MM-DD"
+                    style="width: 100%"
+                  />
+                </el-form-item>
+              </el-col>
+            </template>
             <el-col v-if="outputBin()" :xs="24" :sm="12">
               <el-form-item label="成品儲位" :error="fieldErrors.output_bin_code">
                 <BinCell
