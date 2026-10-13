@@ -1,5 +1,12 @@
 # 工作日誌
 
+## 2026-10-13 委外單簽核(D105)
+
+- migration 000045:`subcontract_orders` 狀態加 `draft` / `pending`、`submitted_at` / `approved_by` / `approved_at`,`approval_rules.doc_type` 加 `subcontract_order`。
+- 後端:`approval.Required` 判斷是否適用規則;開單 / 修改走 `routeApproval`(適用 → pending,否則 open);新增 `POST /subcontracts/:id/approve|reject`(權限 `production.subcontract.approve`);待核准 / 草稿可作廢;簽核收件匣與資料範圍查詢加入委外單。
+- 前端:委外單頁加簽核進度、核准 / 退回按鈕與提示,狀態標籤加草稿與待核准,收件匣可連到委外單。
+- 測試 `TestSubcontractApproval`:無規則直接進行中、低於門檻不簽核、兩層核准(同一人不可簽兩層)、待核准不能發料、退回 → 草稿 → 修改重送 → 改小直接進行中、待核准作廢。尚未做瀏覽器實測。
+
 ## 2026-10-13 成本差異入帳評估(D104)
 
 - 評估後決定不做,理由與日後做法寫在 plan D104;todo 標為不做。

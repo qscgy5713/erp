@@ -106,7 +106,7 @@ INSERT INTO subcontract_orders (company_id, doc_no, doc_date, supplier_id, item_
                                 receive_warehouse_id, sc_warehouse_id, due_date, note, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $13)
-RETURNING id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at
+RETURNING id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at, submitted_at, approved_by, approved_at
 `
 
 type CreateSubcontractOrderParams struct {
@@ -162,6 +162,9 @@ func (q *Queries) CreateSubcontractOrder(ctx context.Context, arg CreateSubcontr
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SubmittedAt,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
 	)
 	return i, err
 }
@@ -296,14 +299,14 @@ func (q *Queries) DeleteSubcontractOrderLines(ctx context.Context, orderID int64
 }
 
 const getSubcontractOrder = `-- name: GetSubcontractOrder :one
-SELECT o.id, o.company_id, o.doc_no, o.doc_date, o.supplier_id, o.item_id, o.plan_qty, o.unit_fee, o.issue_warehouse_id, o.receive_warehouse_id, o.sc_warehouse_id, o.due_date, o.status, o.note, o.created_by, o.updated_by, o.version, o.created_at, o.updated_at, s.code AS supplier_code, s.name AS supplier_name, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
+SELECT o.id, o.company_id, o.doc_no, o.doc_date, o.supplier_id, o.item_id, o.plan_qty, o.unit_fee, o.issue_warehouse_id, o.receive_warehouse_id, o.sc_warehouse_id, o.due_date, o.status, o.note, o.created_by, o.updated_by, o.version, o.created_at, o.updated_at, o.submitted_at, o.approved_by, o.approved_at, s.code AS supplier_code, s.name AS supplier_name, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        i.lot_control AS item_lot_control, iw.name AS issue_warehouse_name, rw.name AS receive_warehouse_name,
-       sw.name AS sc_warehouse_name, cu.name AS created_by_name
+       sw.name AS sc_warehouse_name, cu.name AS created_by_name, au.name AS approved_by_name
 FROM subcontract_orders o
 JOIN suppliers s ON s.id = o.supplier_id JOIN items i ON i.id = o.item_id JOIN units u ON u.id = i.base_unit_id
 JOIN warehouses iw ON iw.id = o.issue_warehouse_id JOIN warehouses rw ON rw.id = o.receive_warehouse_id
 JOIN warehouses sw ON sw.id = o.sc_warehouse_id
-LEFT JOIN users cu ON cu.id = o.created_by
+LEFT JOIN users cu ON cu.id = o.created_by LEFT JOIN users au ON au.id = o.approved_by
 WHERE o.id = $1 AND o.company_id = $2
 `
 
@@ -332,6 +335,9 @@ type GetSubcontractOrderRow struct {
 	Version              int32
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	SubmittedAt          *time.Time
+	ApprovedBy           *int64
+	ApprovedAt           *time.Time
 	SupplierCode         string
 	SupplierName         string
 	ItemCode             string
@@ -342,6 +348,7 @@ type GetSubcontractOrderRow struct {
 	ReceiveWarehouseName string
 	ScWarehouseName      string
 	CreatedByName        *string
+	ApprovedByName       *string
 }
 
 func (q *Queries) GetSubcontractOrder(ctx context.Context, arg GetSubcontractOrderParams) (GetSubcontractOrderRow, error) {
@@ -367,6 +374,9 @@ func (q *Queries) GetSubcontractOrder(ctx context.Context, arg GetSubcontractOrd
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SubmittedAt,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
 		&i.SupplierCode,
 		&i.SupplierName,
 		&i.ItemCode,
@@ -377,6 +387,7 @@ func (q *Queries) GetSubcontractOrder(ctx context.Context, arg GetSubcontractOrd
 		&i.ReceiveWarehouseName,
 		&i.ScWarehouseName,
 		&i.CreatedByName,
+		&i.ApprovedByName,
 	)
 	return i, err
 }
@@ -694,7 +705,7 @@ func (q *Queries) ListSubcontractTxns(ctx context.Context, orderID int64) ([]Lis
 }
 
 const lockSubcontractOrder = `-- name: LockSubcontractOrder :one
-SELECT id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at FROM subcontract_orders WHERE id = $1 AND company_id = $2 FOR UPDATE
+SELECT id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at, submitted_at, approved_by, approved_at FROM subcontract_orders WHERE id = $1 AND company_id = $2 FOR UPDATE
 `
 
 type LockSubcontractOrderParams struct {
@@ -725,6 +736,9 @@ func (q *Queries) LockSubcontractOrder(ctx context.Context, arg LockSubcontractO
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SubmittedAt,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
 	)
 	return i, err
 }
@@ -767,6 +781,26 @@ func (q *Queries) LockSubcontractTxn(ctx context.Context, arg LockSubcontractTxn
 		&i.InvoiceKind,
 	)
 	return i, err
+}
+
+const setSubcontractApprovalState = `-- name: SetSubcontractApprovalState :exec
+UPDATE subcontract_orders SET status = $1::varchar, version = version + 1, updated_by = $2::bigint,
+    submitted_at = CASE WHEN $1::varchar = 'pending' THEN now() ELSE submitted_at END,
+    approved_by = CASE WHEN $1::varchar = 'open' THEN $2::bigint WHEN $1::varchar IN ('draft', 'pending') THEN NULL ELSE approved_by END,
+    approved_at = CASE WHEN $1::varchar = 'open' THEN now() WHEN $1::varchar IN ('draft', 'pending') THEN NULL ELSE approved_at END
+WHERE id = $3
+`
+
+type SetSubcontractApprovalStateParams struct {
+	Status  string
+	ActorID int64
+	ID      int64
+}
+
+// 簽核狀態變更:送審記時間、核准記核准者與時間(退回 / 回到 open 以外的情況傳 NULL 清掉)
+func (q *Queries) SetSubcontractApprovalState(ctx context.Context, arg SetSubcontractApprovalStateParams) error {
+	_, err := q.db.Exec(ctx, setSubcontractApprovalState, arg.Status, arg.ActorID, arg.ID)
+	return err
 }
 
 const setSubcontractOrderStatus = `-- name: SetSubcontractOrderStatus :exec
@@ -866,8 +900,8 @@ const updateSubcontractOrderHeader = `-- name: UpdateSubcontractOrderHeader :one
 UPDATE subcontract_orders SET doc_date = $1, plan_qty = $2, unit_fee = $3,
     issue_warehouse_id = $4, receive_warehouse_id = $5,
     due_date = $6, note = $7, version = version + 1, updated_by = $8::bigint
-WHERE id = $9 AND company_id = $10 AND version = $11 AND status = 'open'
-RETURNING id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at
+WHERE id = $9 AND company_id = $10 AND version = $11 AND status IN ('open', 'draft', 'pending')
+RETURNING id, company_id, doc_no, doc_date, supplier_id, item_id, plan_qty, unit_fee, issue_warehouse_id, receive_warehouse_id, sc_warehouse_id, due_date, status, note, created_by, updated_by, version, created_at, updated_at, submitted_at, approved_by, approved_at
 `
 
 type UpdateSubcontractOrderHeaderParams struct {
@@ -919,6 +953,9 @@ func (q *Queries) UpdateSubcontractOrderHeader(ctx context.Context, arg UpdateSu
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SubmittedAt,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
 	)
 	return i, err
 }

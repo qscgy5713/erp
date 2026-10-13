@@ -326,7 +326,7 @@ export interface MrpParamInput {
 
 // ---- 委外加工(D100) ----
 
-export type ScStatus = 'open' | 'closed' | 'voided'
+export type ScStatus = 'draft' | 'pending' | 'open' | 'closed' | 'voided'
 export type ScKind = 'issue' | 'receive' | 'return'
 
 export interface ScLine {
@@ -387,6 +387,9 @@ export interface SubcontractOrder {
   doc_no: string
   doc_date: string
   status: ScStatus
+  submitted_at: string | null
+  approved_at: string | null
+  approved_by_name: string | null
   supplier_id: number
   supplier_code: string
   supplier_name: string
@@ -528,6 +531,10 @@ export const productionApi = {
     http.post<SubcontractOrder>(`/production/subcontracts/${id}/txns/${txnId}/void`),
   scClose: (id: number, version: number) =>
     http.post<SubcontractOrder>(`/production/subcontracts/${id}/close`, { version }),
+  scApprove: (id: number, version: number) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/approve`, { version }),
+  scReject: (id: number, version: number) =>
+    http.post<SubcontractOrder>(`/production/subcontracts/${id}/reject`, { version }),
   scVoid: (id: number, version: number) =>
     http.post<SubcontractOrder>(`/production/subcontracts/${id}/void`, { version }),
 }

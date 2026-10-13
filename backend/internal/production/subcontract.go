@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 
+	"erp/internal/approval"
 	"erp/internal/db"
 	"erp/internal/finance"
 	"erp/internal/gl"
@@ -19,6 +21,8 @@ import (
 	"erp/internal/platform/database"
 	"erp/internal/platform/httpx"
 	"erp/internal/shared/apperr"
+	"erp/internal/shared/authctx"
+	"erp/internal/shared/docstate"
 	"erp/internal/shared/money"
 	"erp/internal/shared/page"
 	"erp/internal/shared/response"
@@ -58,6 +62,7 @@ var (
 	errScHasTxns     = apperr.Conflict("SUB-003", "委外單已有發料 / 收回紀錄,請先作廢全部異動才能作廢整張單")
 	errScNothingBack = apperr.Conflict("SUB-004", "還沒有任何收回紀錄,不能結案;要整張作廢請用「作廢」")
 	errScHeldLeft    = apperr.Conflict("SUB-005", "還有材料在加工廠,請先退料(或收回耗用)再結案")
+	errScNotPending  = apperr.Conflict("SUB-007", "委外單不是「待核准」狀態")
 	errScHeldNeg     = apperr.Conflict("SUB-006", "作廢後加工廠的材料會變成負數(材料已被收回耗用或退料),請先作廢後續的收回 / 退料")
 )
 
@@ -142,6 +147,9 @@ type scOrderDTO struct {
 	Lines              []scLineDTO     `json:"lines"`
 	Txns               []scTxnDTO      `json:"txns"`
 	CanClose           bool            `json:"can_close"` // 有收回紀錄且材料都已退回或耗用
+	SubmittedAt        *time.Time      `json:"submitted_at"`
+	ApprovedAt         *time.Time      `json:"approved_at"`
+	ApprovedByName     *string         `json:"approved_by_name"`
 	Version            int32           `json:"version"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 }
@@ -165,7 +173,7 @@ func loadScOrder(ctx context.Context, q *db.Queries, companyID, id int64) (scOrd
 		IssueWarehouseID: o.IssueWarehouseID, IssueWarehouse: o.IssueWarehouseName, ReceiveWarehouseID: o.ReceiveWarehouseID,
 		ReceiveWarehouse: o.ReceiveWarehouseName, ScWarehouseID: o.ScWarehouseID, ScWarehouse: o.ScWarehouseName,
 		DueDate: dateStr(o.DueDate), Note: o.Note, CreatedByName: o.CreatedByName, Lines: []scLineDTO{}, Txns: []scTxnDTO{},
-		Version: o.Version, UpdatedAt: o.UpdatedAt,
+		Version: o.Version, UpdatedAt: o.UpdatedAt, SubmittedAt: o.SubmittedAt, ApprovedAt: o.ApprovedAt, ApprovedByName: o.ApprovedByName,
 	}
 	lines, err := q.ListSubcontractOrderLines(ctx, id)
 	if err != nil {
@@ -264,7 +272,7 @@ func (m *Module) listSubcontracts(c *gin.Context) {
 		return
 	}
 	status := httpx.QueryString(c, "status")
-	if status != nil && *status != "open" && *status != "closed" && *status != "voided" {
+	if status != nil && !slices.Contains([]string{"draft", "pending", "open", "closed", "voided"}, *status) {
 		response.Error(c, fieldErr("status", "狀態不正確"))
 		return
 	}
@@ -627,6 +635,9 @@ func (m *Module) createSubcontract(c *gin.Context) {
 		if err := saveScLines(ctx, q, o.ID, p.lines); err != nil {
 			return err
 		}
+		if _, err := routeApproval(ctx, q, a, o, in.PlanQty.Mul(in.UnitFee), true); err != nil {
+			return err
+		}
 		if out, err = loadScOrder(ctx, q, a.CompanyID, o.ID); err != nil {
 			return err
 		}
@@ -670,7 +681,7 @@ func (m *Module) updateSubcontract(c *gin.Context) {
 		if cur.Version != in.Version {
 			return apperr.ErrVersionConflict
 		}
-		if cur.Status != "open" {
+		if cur.Status != "open" && cur.Status != "draft" && cur.Status != "pending" {
 			return errScNotOpen
 		}
 		if in.SupplierID != cur.SupplierID {
@@ -722,6 +733,12 @@ func (m *Module) updateSubcontract(c *gin.Context) {
 		if err := saveScLines(ctx, q, id, p.lines); err != nil {
 			return err
 		}
+		// 已有發料 / 收回的進行中單據不再重新送審;其餘依新金額重新判斷是否需要簽核
+		if n == 0 || cur.Status != "open" {
+			if _, err := routeApproval(ctx, q, a, cur, in.PlanQty.Mul(in.UnitFee), false); err != nil {
+				return err
+			}
+		}
 		if out, err = loadScOrder(ctx, q, a.CompanyID, id); err != nil {
 			return err
 		}
@@ -733,6 +750,94 @@ func (m *Module) updateSubcontract(c *gin.Context) {
 		return
 	}
 	response.OK(c, out)
+}
+
+// routeApproval 依金額決定委外單要不要簽核:有適用規則 → 重新送審(待核准),否則直接進行中。
+// 只處理 open / draft / pending 的單據;回傳是否進入待核准。
+func routeApproval(ctx context.Context, q *db.Queries, a *authctx.Actor, o db.SubcontractOrder, amount decimal.Decimal, created bool) (bool, error) {
+	need, err := approval.Required(ctx, q, a, approval.Subcontract, amount)
+	if err != nil {
+		return false, err
+	}
+	if need {
+		if _, _, err := approval.Intercept(ctx, q, a, approval.Subcontract, o.ID, docstate.Submit, amount); err != nil {
+			return false, err
+		}
+		if created || o.Status != "pending" {
+			return true, q.SetSubcontractApprovalState(ctx, db.SetSubcontractApprovalStateParams{ID: o.ID, Status: "pending", ActorID: a.UserID})
+		}
+		return true, nil
+	}
+	if o.Status == "open" {
+		return false, nil
+	}
+	if _, _, err := approval.Intercept(ctx, q, a, approval.Subcontract, o.ID, docstate.Reject, amount); err != nil {
+		return false, err
+	}
+	return false, q.SetSubcontractApprovalState(ctx, db.SetSubcontractApprovalStateParams{ID: o.ID, Status: "open", ActorID: a.UserID})
+}
+
+// scApproval 核准 / 退回待核准的委外單。多層簽核時核准可能只完成一層,單據仍維持待核准。
+func (m *Module) scApproval(action docstate.Action) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := httpx.ParamID(c, "id")
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		var in scActionInput
+		if err := httpx.BindJSON(c, &in); err != nil {
+			response.Error(c, err)
+			return
+		}
+		a := actor(c)
+		ctx := c.Request.Context()
+		var out scOrderDTO
+		err = m.store.InTx(ctx, func(q *db.Queries) error {
+			cur, err := q.LockSubcontractOrder(ctx, db.LockSubcontractOrderParams{ID: id, CompanyID: a.CompanyID})
+			if database.IsNoRows(err) {
+				return apperr.ErrNotFound
+			}
+			if err != nil {
+				return err
+			}
+			if cur.Version != in.Version {
+				return apperr.ErrVersionConflict
+			}
+			if cur.Status != "pending" {
+				return errScNotPending
+			}
+			amount := cur.PlanQty.Mul(cur.UnitFee)
+			partial, msg, err := approval.Intercept(ctx, q, a, approval.Subcontract, id, action, amount)
+			if err != nil {
+				return err
+			}
+			label, next := "核准", "open"
+			if action == docstate.Reject {
+				label, next = "退回", "draft"
+			}
+			if partial {
+				if out, err = loadScOrder(ctx, q, a.CompanyID, id); err != nil {
+					return err
+				}
+				return audit.Record(ctx, q, audit.Entry{Action: "approve_step", EntityType: scOrderType, EntityID: &id,
+					Summary: msg + " 委外單 " + cur.DocNo})
+			}
+			if err := q.SetSubcontractApprovalState(ctx, db.SetSubcontractApprovalStateParams{ID: id, Status: next, ActorID: a.UserID}); err != nil {
+				return err
+			}
+			if out, err = loadScOrder(ctx, q, a.CompanyID, id); err != nil {
+				return err
+			}
+			return audit.Record(ctx, q, audit.Entry{Action: string(action), EntityType: scOrderType, EntityID: &id,
+				Summary: label + "委外單 " + cur.DocNo})
+		})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, out)
+	}
 }
 
 // heldByItem 委外單目前還在加工廠的材料量。
@@ -1281,8 +1386,14 @@ func (m *Module) scStatusChange(c *gin.Context, status string) {
 		if cur.Version != in.Version {
 			return apperr.ErrVersionConflict
 		}
-		if cur.Status != "open" {
+		draftVoid := status == "voided" && (cur.Status == "draft" || cur.Status == "pending")
+		if cur.Status != "open" && !draftVoid {
 			return errScNotOpen
+		}
+		if draftVoid {
+			if _, _, err := approval.Intercept(ctx, q, a, approval.Subcontract, id, docstate.Void, decimal.Zero); err != nil {
+				return err
+			}
 		}
 		label := "短交結案"
 		if status == "closed" {

@@ -76,6 +76,7 @@ SELECT (
   (@doc_type::text = 'purchase_order' AND EXISTS (SELECT 1 FROM purchase_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'goods_receipt' AND EXISTS (SELECT 1 FROM goods_receipts x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'stock_document' AND EXISTS (SELECT 1 FROM stock_documents x WHERE x.id = @doc_id AND x.company_id = @company_id))
+  OR (@doc_type::text = 'subcontract_order' AND EXISTS (SELECT 1 FROM subcontract_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'work_order' AND EXISTS (SELECT 1 FROM work_orders x WHERE x.id = @doc_id AND x.company_id = @company_id))
   OR (@doc_type::text = 'payment' AND EXISTS (SELECT 1 FROM settlements x WHERE x.id = @doc_id AND x.company_id = @company_id AND x.side = 'payment'))
   OR (@doc_type::text = 'sales_order' AND EXISTS (
@@ -133,6 +134,10 @@ SELECT doc_type, doc_id, doc_no, doc_date, partner_name, currency, amount, submi
     SELECT 'work_order', x.id, x.doc_no, x.doc_date, i.name, 'TWD', x.processing_cost, x.submitted_at
     FROM work_orders x JOIN items i ON i.id = x.item_id
     WHERE x.company_id = @company_id AND x.status = 'pending' AND 'work_order' = ANY(@types::text[])
+  UNION ALL
+    SELECT 'subcontract_order', x.id, x.doc_no, x.doc_date, s.name, 'TWD', (x.plan_qty * x.unit_fee)::numeric, x.submitted_at
+    FROM subcontract_orders x JOIN suppliers s ON s.id = x.supplier_id
+    WHERE x.company_id = @company_id AND x.status = 'pending' AND 'subcontract_order' = ANY(@types::text[])
   UNION ALL
     SELECT 'stock_document', x.id, x.doc_no, x.doc_date,
            CASE x.doc_type WHEN 'adjustment' THEN '庫存調整' WHEN 'transfer' THEN '庫存調撥' ELSE '庫存盤點' END,

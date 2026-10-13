@@ -9,6 +9,7 @@ import (
 	"erp/internal/platform/database"
 	"erp/internal/shared/apperr"
 	"erp/internal/shared/authctx"
+	"erp/internal/shared/docstate"
 	"erp/internal/system/permission"
 )
 
@@ -64,6 +65,8 @@ func (m *Module) Register(r *gin.RouterGroup) {
 	g.GET("/subcontracts/:id/receive-preview", scRead, m.subcontractReceivePreview)
 	g.POST("/subcontracts", scWrite, m.createSubcontract)
 	g.PUT("/subcontracts/:id", scWrite, m.updateSubcontract)
+	g.POST("/subcontracts/:id/approve", auth.Require(permission.SubcontractApprove), m.scApproval(docstate.Approve))
+	g.POST("/subcontracts/:id/reject", auth.Require(permission.SubcontractApprove), m.scApproval(docstate.Reject))
 	g.POST("/subcontracts/:id/close", scWrite, m.closeSubcontract)
 	g.POST("/subcontracts/:id/void", scWrite, m.voidSubcontract)
 	g.POST("/subcontracts/:id/issue", scPost, m.postScMaterial(kindIssue))

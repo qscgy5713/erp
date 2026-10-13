@@ -18,6 +18,8 @@ import { scKindLabels, scStatusLabels, scStatusTypes } from '@/utils/subcontract
 import ItemPicker from '@/components/ItemPicker.vue'
 import PartnerPicker from '@/components/PartnerPicker.vue'
 import SubcontractDialog from '@/components/SubcontractDialog.vue'
+import ApprovalProgress from '@/components/ApprovalProgress.vue'
+import type { ApprovalProgress as ApprovalProgressData } from '@/api/approval'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,7 +28,9 @@ const { fieldErrors, handle, reset, autoClear } = useApiError()
 
 const doc = ref<SubcontractOrder | null>(null)
 const isNew = computed(() => !doc.value)
-const isOpen = computed(() => isNew.value || doc.value?.status === 'open')
+const isOpen = computed(
+  () => isNew.value || ['open', 'draft', 'pending'].includes(doc.value?.status ?? ''),
+)
 const editable = computed(() => auth.can('production.subcontract.write') && isOpen.value)
 const canPost = computed(
   () => auth.can('production.subcontract.post') && doc.value?.status === 'open',
@@ -224,6 +228,32 @@ const closeOrder = () =>
     '已結案',
   )
 
+const approvalInfo = ref<ApprovalProgressData | null>(null)
+const canApprove = computed(
+  () =>
+    doc.value?.status === 'pending' &&
+    auth.can('production.subcontract.approve') &&
+    (!approvalInfo.value || approvalInfo.value.can_approve),
+)
+
+const approveOrder = () =>
+  doc.value &&
+  confirmAnd(
+    '確定核准這張委外加工單?',
+    '核准',
+    () => productionApi.scApprove(doc.value!.id, doc.value!.version),
+    '已核准',
+  )
+
+const rejectOrder = () =>
+  doc.value &&
+  confirmAnd(
+    '退回後單據變成草稿,需修改後重新送審,確定退回?',
+    '退回',
+    () => productionApi.scReject(doc.value!.id, doc.value!.version),
+    '已退回',
+  )
+
 const voidOrder = () =>
   doc.value &&
   confirmAnd(
@@ -277,6 +307,10 @@ autoClear(form)
           <el-button type="success" @click="openDialog('receive')">收回</el-button>
           <el-button @click="openDialog('return')">退料</el-button>
         </template>
+        <template v-if="doc && canApprove">
+          <el-button type="success" :loading="acting" @click="approveOrder">核准</el-button>
+          <el-button type="warning" :loading="acting" @click="rejectOrder">退回</el-button>
+        </template>
         <el-button
           v-if="doc && doc.can_close && auth.can('production.subcontract.write')"
           :loading="acting"
@@ -292,6 +326,22 @@ autoClear(form)
         >
       </div>
     </div>
+
+    <ApprovalProgress
+      doc-type="subcontract_order"
+      :doc-id="doc?.id"
+      :status="doc?.status"
+      :version="doc?.version"
+      @loaded="approvalInfo = $event"
+    />
+    <el-alert
+      v-if="doc?.status === 'pending'"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="這張單據適用簽核規則,核准後才能發料與收回"
+      class="mb"
+    />
 
     <el-card shadow="never" class="mb">
       <el-form label-width="110px" :disabled="!editable">

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/shopspring/decimal"
+
+	"erp/internal/system/permission"
 )
 
 type scDoc struct {
@@ -302,5 +304,94 @@ func TestSubcontractVat(t *testing.T) {
 	v, _ = c.vat("year=2026&period=5")
 	if v.Summary["input_tax"] != "0" || v.Summary["deductible_expense"] != "0" {
 		t.Fatalf("作廢後 401 進項 = %v", v.Summary)
+	}
+}
+
+// 委外單簽核:有適用規則的單據待核准,多層核准後才能發料;退回可修改再送審
+func TestSubcontractApproval(t *testing.T) {
+	p := newPurCtx(t)
+	e, c := p.e, p.c
+	raw1, fg := p.item, e.seedItem("FG1", "goods")
+	recvWH := e.seedWarehouse("B", false)
+	p.receiveOn("2026-08-10", "5", "1200")
+	expect(t, c.do(http.MethodPost, "/production/boms", bomBody(fg, "1", bl(raw1, "2"))), http.StatusCreated, "")
+	body := func(qty string) map[string]any {
+		return map[string]any{"doc_date": "2026-09-10", "supplier_id": p.sup, "item_id": fg, "plan_qty": qty, "unit_fee": "50",
+			"issue_warehouse_id": p.wh, "receive_warehouse_id": recvWH}
+	}
+	create := func(qty string) scDoc {
+		res := c.do(http.MethodPost, prodSC, body(qty))
+		expect(t, res, http.StatusCreated, "")
+		return decode[scDoc](t, res.Data)
+	}
+	issue := func(sc scDoc) apiResp {
+		return c.do(http.MethodPost, prodSC+"/"+itoa(sc.ID)+"/issue", map[string]any{"doc_date": "2026-09-11", "lines": scLines(raw1, "2")})
+	}
+	act := func(cl *client, sc scDoc, action string) apiResp {
+		return cl.do(http.MethodPost, prodSC+"/"+itoa(sc.ID)+"/"+action, map[string]any{"version": sc.Version})
+	}
+
+	// 還沒有規則:照舊直接進行中
+	if sc := create("2"); sc.Status != "open" {
+		t.Fatalf("沒有規則的單據狀態 = %s", sc.Status)
+	}
+
+	cfo := e.seedRole("cfo", "all", permission.SubcontractApprove)
+	e.seedUser("cfo", pw, false, false, cfo.ID)
+	boss := e.loggedIn("cfo", pw)
+	expect(t, c.do(http.MethodPost, "/approval/rules", map[string]any{"doc_type": "subcontract_order", "min_amount": "300", "role_ids": []int64{cfo.ID}}), http.StatusCreated, "")
+
+	small := create("2") // 100 元,低於門檻
+	if small.Status != "open" {
+		t.Fatalf("低於門檻 = %s", small.Status)
+	}
+	sc := create("10") // 500 元,需簽核
+	if sc.Status != "pending" {
+		t.Fatalf("需簽核的單據狀態 = %s", sc.Status)
+	}
+	expect(t, issue(sc), http.StatusConflict, "SUB-001")
+
+	// 第 1 層核准後仍待核准(第 2 層要 cfo);同一人不能簽兩層
+	expect(t, act(c, sc, "approve"), http.StatusOK, "")
+	sc = c.scGet(sc.ID)
+	if sc.Status != "pending" {
+		t.Fatalf("第 1 層後 = %s", sc.Status)
+	}
+	expect(t, act(c, sc, "approve"), http.StatusForbidden, "APR-002")
+	expect(t, act(boss, sc, "approve"), http.StatusOK, "")
+	sc = c.scGet(sc.ID)
+	if sc.Status != "open" {
+		t.Fatalf("全部核准後 = %s", sc.Status)
+	}
+	expect(t, issue(sc), http.StatusCreated, "")
+	expect(t, act(boss, sc, "approve"), http.StatusConflict, "SUB-007")
+
+	// 退回 → 草稿(不能發料)→ 修改後重新送審 → 又待核准
+	sc2 := create("10")
+	expect(t, act(c, sc2, "reject"), http.StatusOK, "")
+	sc2 = c.scGet(sc2.ID)
+	if sc2.Status != "draft" {
+		t.Fatalf("退回後 = %s", sc2.Status)
+	}
+	expect(t, issue(sc2), http.StatusConflict, "SUB-001")
+	upd := body("12")
+	upd["version"], upd["lines"] = sc2.Version, scLines(raw1, "24")
+	expect(t, c.do(http.MethodPut, prodSC+"/"+itoa(sc2.ID), upd), http.StatusOK, "")
+	if sc2 = c.scGet(sc2.ID); sc2.Status != "pending" {
+		t.Fatalf("修改重送後 = %s", sc2.Status)
+	}
+	// 改小到門檻以下 → 不再需要簽核,直接進行中
+	upd = body("2")
+	upd["version"], upd["lines"] = sc2.Version, scLines(raw1, "4")
+	expect(t, c.do(http.MethodPut, prodSC+"/"+itoa(sc2.ID), upd), http.StatusOK, "")
+	if sc2 = c.scGet(sc2.ID); sc2.Status != "open" {
+		t.Fatalf("改小後 = %s", sc2.Status)
+	}
+
+	// 待核准的單據可作廢
+	sc3 := create("10")
+	expect(t, act(c, sc3, "void"), http.StatusOK, "")
+	if sc3 = c.scGet(sc3.ID); sc3.Status != "voided" {
+		t.Fatalf("作廢後 = %s", sc3.Status)
 	}
 }

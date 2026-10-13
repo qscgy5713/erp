@@ -36,12 +36,12 @@ WHERE o.company_id = @company_id
 -- name: GetSubcontractOrder :one
 SELECT o.*, s.code AS supplier_code, s.name AS supplier_name, i.code AS item_code, i.name AS item_name, u.name AS unit_name,
        i.lot_control AS item_lot_control, iw.name AS issue_warehouse_name, rw.name AS receive_warehouse_name,
-       sw.name AS sc_warehouse_name, cu.name AS created_by_name
+       sw.name AS sc_warehouse_name, cu.name AS created_by_name, au.name AS approved_by_name
 FROM subcontract_orders o
 JOIN suppliers s ON s.id = o.supplier_id JOIN items i ON i.id = o.item_id JOIN units u ON u.id = i.base_unit_id
 JOIN warehouses iw ON iw.id = o.issue_warehouse_id JOIN warehouses rw ON rw.id = o.receive_warehouse_id
 JOIN warehouses sw ON sw.id = o.sc_warehouse_id
-LEFT JOIN users cu ON cu.id = o.created_by
+LEFT JOIN users cu ON cu.id = o.created_by LEFT JOIN users au ON au.id = o.approved_by
 WHERE o.id = @id AND o.company_id = @company_id;
 
 -- name: LockSubcontractOrder :one
@@ -58,8 +58,16 @@ RETURNING *;
 UPDATE subcontract_orders SET doc_date = @doc_date, plan_qty = @plan_qty, unit_fee = @unit_fee,
     issue_warehouse_id = @issue_warehouse_id, receive_warehouse_id = @receive_warehouse_id,
     due_date = sqlc.narg(due_date), note = @note, version = version + 1, updated_by = @actor_id::bigint
-WHERE id = @id AND company_id = @company_id AND version = @version AND status = 'open'
+WHERE id = @id AND company_id = @company_id AND version = @version AND status IN ('open', 'draft', 'pending')
 RETURNING *;
+
+-- name: SetSubcontractApprovalState :exec
+-- 簽核狀態變更:送審記時間、核准記核准者與時間(退回 / 回到 open 以外的情況傳 NULL 清掉)
+UPDATE subcontract_orders SET status = @status::varchar, version = version + 1, updated_by = @actor_id::bigint,
+    submitted_at = CASE WHEN @status::varchar = 'pending' THEN now() ELSE submitted_at END,
+    approved_by = CASE WHEN @status::varchar = 'open' THEN @actor_id::bigint WHEN @status::varchar IN ('draft', 'pending') THEN NULL ELSE approved_by END,
+    approved_at = CASE WHEN @status::varchar = 'open' THEN now() WHEN @status::varchar IN ('draft', 'pending') THEN NULL ELSE approved_at END
+WHERE id = @id;
 
 -- name: SetSubcontractOrderStatus :exec
 UPDATE subcontract_orders SET status = @status, version = version + 1, updated_by = @actor_id::bigint WHERE id = @id;

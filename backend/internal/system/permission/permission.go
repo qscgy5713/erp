@@ -63,9 +63,10 @@ const (
 	WorkOrderApprove = "production.order.approve" // 核准、退回、取消核准、作廢
 	WorkOrderPost    = "production.order.post"    // 完工(領料並成品入庫)、反完工
 	// 委外加工(D100)
-	SubcontractRead  = "production.subcontract.read"
-	SubcontractWrite = "production.subcontract.write" // 開單/修改、結案、作廢
-	SubcontractPost  = "production.subcontract.post"  // 發料、收回、退料與作廢
+	SubcontractRead    = "production.subcontract.read"
+	SubcontractWrite   = "production.subcontract.write"   // 開單/修改、結案、作廢
+	SubcontractPost    = "production.subcontract.post"    // 發料、收回、退料與作廢
+	SubcontractApprove = "production.subcontract.approve" // 核准 / 退回(有適用簽核規則的委外單)
 	// 月結成本與對帳
 	CostRead          = "costing.read"           // 月結結果、對帳檢查
 	CostClose         = "costing.close"          // 月結 / 取消月結
@@ -139,7 +140,7 @@ var Groups = []Group{
 		{WorkOrderRead, "檢視"}, {WorkOrderWrite, "開單/送審"}, {WorkOrderApprove, "核准/退回/作廢"}, {WorkOrderPost, "完工(領料入庫)/反完工"},
 	}},
 	{"生產", "委外加工", []Permission{
-		{SubcontractRead, "檢視"}, {SubcontractWrite, "開單/結案/作廢"}, {SubcontractPost, "發料/收回/退料"},
+		{SubcontractRead, "檢視"}, {SubcontractWrite, "開單/結案/作廢"}, {SubcontractPost, "發料/收回/退料"}, {SubcontractApprove, "核准/退回"},
 	}},
 	{"庫存", "月結成本與對帳檢查", []Permission{{CostRead, "檢視"}, {CostClose, "月結/取消月結"}, {CostStandardWrite, "維護標準成本"}}},
 	{"會計", "會計科目與拋轉規則", []Permission{{AccountRead, "檢視"}, {AccountWrite, "新增/修改"}}},

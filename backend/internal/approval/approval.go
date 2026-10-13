@@ -31,8 +31,9 @@ const (
 	Delivery      = "delivery"
 	Collection    = "collection"
 	Payment       = "payment"
-	WorkOrder     = "work_order"     // 金額為加工費(完工成本在月結才確定)
-	StockDocument = "stock_document" // 調整 / 調撥 / 盤點;沒有金額,一律以 0 比對規則
+	WorkOrder     = "work_order"        // 金額為加工費(完工成本在月結才確定)
+	Subcontract   = "subcontract_order" // 金額為預計數量 × 加工費單價
+	StockDocument = "stock_document"    // 調整 / 調撥 / 盤點;沒有金額,一律以 0 比對規則
 )
 
 type docInfo struct {
@@ -49,11 +50,12 @@ var docTypes = map[string]docInfo{
 	Collection:    {"收款單", permission.CollectionApprove, permission.CollectionRead},
 	Payment:       {"付款單", permission.PaymentApprove, permission.PaymentRead},
 	WorkOrder:     {"工單(以加工費計)", permission.WorkOrderApprove, permission.WorkOrderRead},
+	Subcontract:   {"委外加工單", permission.SubcontractApprove, permission.SubcontractRead},
 	StockDocument: {"庫存單據(調整 / 調撥 / 盤點)", permission.InventoryApprove, permission.InventoryRead},
 }
 
 // DocTypeOrder 固定的顯示順序。
-var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment, WorkOrder, StockDocument}
+var DocTypeOrder = []string{PurchaseOrder, GoodsReceipt, SalesOrder, Delivery, Collection, Payment, WorkOrder, Subcontract, StockDocument}
 
 func Label(docType string) string { return docTypes[docType].Label }
 
@@ -387,4 +389,13 @@ func notifyApprovers(ctx authCtx, q *db.Queries, a *authctx.Actor, docType strin
 	return notify.Enqueue(ctx, q, a.CompanyID, ids, "approval_pending",
 		"有「"+label+"」待你核准",
 		"有一張「"+label+"」送審,輪到你(或你代理的人)核准。\n\n請到系統「待我核准」查看:"+notify.Link("/approval/inbox")+"\n\n(此為系統自動通知)", "")
+}
+
+// Required 該金額、該送審者部門是否有適用的簽核規則;沒有就不需要簽核。
+func Required(ctx authCtx, q *db.Queries, a *authctx.Actor, docType string, amount decimal.Decimal) (bool, error) {
+	_, err := q.MatchApprovalRule(ctx, db.MatchApprovalRuleParams{CompanyID: a.CompanyID, DocType: docType, Amount: amount, DepartmentID: a.DepartmentID})
+	if database.IsNoRows(err) {
+		return false, nil
+	}
+	return err == nil, err
 }

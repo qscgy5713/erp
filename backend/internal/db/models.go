@@ -897,6 +897,9 @@ type SubcontractOrder struct {
 	Version            int32
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	SubmittedAt        *time.Time
+	ApprovedBy         *int64
+	ApprovedAt         *time.Time
 }
 
 type SubcontractOrderLine struct {

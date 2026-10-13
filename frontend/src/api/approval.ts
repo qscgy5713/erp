@@ -92,6 +92,7 @@ export const inboxRoutes: Record<string, string> = {
   collection: 'collection',
   payment: 'payment',
   work_order: 'work-order',
+  subcontract_order: 'subcontract',
   stock_document: 'inventory-document',
 }
 
